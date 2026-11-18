@@ -4787,8 +4787,37 @@ the rootless uid read the 755/644 scan dir; `image exists` finds the image by it
 (RepoDigests holds the index and the amd64 manifest digest). Found: gitleaks prints a name that is
 not UTF-8 with U+FFFD, so rel() missed it and the secret was dropped (ran). Fix: safe() gives such a
 component an ASCII scan name, _fleet_x<hex of its bytes> plus its extension (if ASCII); the
-collision check covers it. Not fixed (Max's call): the agent podman shim refuses a mount source
-under /tmp, /var/tmp or /dev/shm, so a repo there (a temp clone) has its scratch dir there and
-every run errors twice on security_scan and stops at gates (fail closed). A fix would put the scan
-dir in a uid-owned 0700 dir outside temp dirs.
+collision check covers it. The agent podman shim refuses a mount source under /tmp, /var/tmp or
+/dev/shm, so a repo there (a temp clone) had its scratch dir there and every run errored twice on
+security_scan and stopped at gates (fail closed). Fixed in G8 (below).
+```
+
+## 8.0.0 notes (G8)
+
+### The sec_scan scan dir (Max ruling 2026-11-18)
+
+```text
+The scan dir is a per-run dir $XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex> (~/.cache when unset;
+a relative value is a non-zero exit, as policy_init and held_out.py do). Order: the two skips
+(an unpinned image, no runtime) stay partial and come first; then the cache path is checked
+(relative, or its realpath under /tmp, /var/tmp or /dev/shm or their realpaths: a non-zero exit),
+all before the first runtime call (image exists). After the image and rule checks: fleet/ and
+fleet/sec-scan/ are made 0700 if missing; each must lstat as a dir (never a symlink) owned by
+this uid, else a non-zero exit; then chmod 0700 (an existing looser one is tightened; umask
+masks mkdir). The sweep removes entries named run-<16 hex> that lstat as a dir (a symlink is
+never followed) with an mtime over 86400 s old; any other name is kept. The per-run dir is made
+inside the try, so the finally removes it on success, on a tool error and at the deadline; a
+SIGTERM handler (sys.exit, as in mutants.py) unwinds through the finally too. Only a SIGKILL
+leaves one; the next run's sweep removes it a day later. Before the first run the realpaths of
+src and rules are checked again.
+Mapped uid: the per-run dir and its files stay 755/644 inside the 0700 parents. The runtime
+makes the bind mount as the user, so the parent mode does not matter to the container; the
+mapped uid only reads the mount itself. Live re-check (2026-11-18, podman 5.8.6 through the agent
+shim, the pinned image, a fixture repo under /tmp, XDG_CACHE_HOME unset): ran, with semgrep and
+grep shell=True, and gitleaks github-pat in pkg/keys.py and in a non-UTF-8 name (caf\xe9.txt);
+~/.cache/fleet and ~/.cache/fleet/sec-scan 0700, no per-run dir left.
+FLEET_SEC_SCAN_DEADLINE: a test knob like FLEET_MUTANTS_DEADLINE (an integer 1..9999, min(540, x));
+it can only lower the deadline, which is a non-zero exit (fail closed).
+Tests: a temp XDG_CACHE_HOME under ~/.cache (harness cacheHome(); the test repos stay under
+tmpdir()). v800_pathspec's runProg passes one too.
 ```

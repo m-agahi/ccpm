@@ -315,6 +315,20 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   U+FFFD, so a secret in such a file did not map back and was dropped (a fail-open, status `ran`
   for a non-language file). sec_scan now gives such a name an ASCII scan name (`_fleet_x<hex>`, the
   extension kept for semgrep's language pick) and maps the result back.
+- Car G8, the scan dir (Max ruling 2026-11-18): the agent podman shim refuses a mount source under
+  `/tmp`, `/var/tmp` or `/dev/shm`, so a repo cloned under `/tmp` errored twice on security_scan
+  and stopped at `gates`. `sec_scan.py` now builds its scan dir in a per-run dir
+  `$XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex>` (`~/.cache` when unset; a relative value is
+  refused, as policy_init does). The parents are the user's, mode 0700 (a symlink, a non-dir or
+  another owner is refused); the per-run dir stays 755/644 for the rootless mapped uid. It is
+  removed on every exit (success, a tool error, the deadline and TERM), and per-run dirs older
+  than a day are swept before each run (a symlink is never followed). A scan dir that resolves
+  under a temp dir is a non-zero exit before any runtime call; no runtime or an unpinned image
+  stays `partial`. Test knob `FLEET_SEC_SCAN_DEADLINE` lowers the deadline only. Live re-check
+  from a repo under `/tmp` with the real podman: `ran`, with the semgrep, grep and gitleaks
+  findings. Tests: `v800_security.test.mjs` (G8 block); the tests use a temp `XDG_CACHE_HOME`
+  under `~/.cache` (harness `cacheHome()`), so v800_pathspec's runner and the G7 argv and
+  leftover checks change on purpose. Dist size unchanged (program sha256 only).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

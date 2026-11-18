@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync } from "./harness.mjs";
+import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync, cacheHome } from "./harness.mjs";
 
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
 const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf8" }).stdout.trim();
@@ -78,9 +78,15 @@ function repo(opts = {}) {
   } else symlinkSync(GIT, join(bin, "git"));
   return { d, wt, bin, base, tree };
 }
+// G8: XDG_CACHE_HOME is a temp dir outside the temp roots (sec_scan.py refuses a scan dir under /tmp)
 function runProg(name, x, args, env) {
-  const r = spawnSync(PY, ["-I", prog(name)].concat(args), { encoding: "utf8", env: Object.assign({ PATH: x.bin, HOME: x.d }, env || {}) });
-  return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null };
+  const cache = cacheHome();
+  try {
+    const r = spawnSync(PY, ["-I", prog(name)].concat(args), { encoding: "utf8", env: Object.assign({ PATH: x.bin, HOME: x.d, XDG_CACHE_HOME: cache }, env || {}) });
+    return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null };
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
+  }
 }
 function digestOk(o, keys) {
   const x = { program: o.program };

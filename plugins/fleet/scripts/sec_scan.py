@@ -49,11 +49,23 @@ except Exception:
 # G7b: every git pathspec is literal (GIT_LITERAL_PATHSPECS), names round-trip as bytes (os.fsdecode)
 # and are shown with backslashreplace; a listed name with no diff section, or more than CAP non-secret
 # findings (a human reviews such a diff), is a non-zero exit.
-import hashlib, json, os, re, secrets, shutil, subprocess, sys, tempfile, time
+# G8 (Max, 2026-11-18): the agent podman shim refuses a mount source under a temp dir (TEMP), so the
+# scan dir is a per-run dir $XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex> (~/.cache when unset; a
+# relative value is refused, as policy_init does): the parents are this user's, mode 0700; the
+# per-run dir is 755/644 for the rootless mapped uid; it is removed on every exit (TERM included),
+# per-run dirs older than a day are swept first, and a source that resolves under TEMP is a non-zero
+# exit before any runtime call.
+import hashlib, json, os, re, secrets, shutil, signal, stat, subprocess, sys, time
 EXE = ('podman', 'docker', 'git')
+TEMP = ('/tmp', '/var/tmp', '/dev/shm')
+RUN = re.compile(r'^run-[0-9a-f]{16}$')
 RULES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(globals()['__file__']))), 'skills', 'build-task', 'sec-rules.yml')
 RULES_SHA256 = 'd342475a6e8afd3bcb31cdf74f8c4c88bb0c16a4e2630d88a29f029f46a22620'
-DEADLINE, CAP, BIG, LEAKS = 540, 200, 4 << 20, 99
+CAP, BIG, LEAKS = 200, 4 << 20, 99
+_dl = os.environ.get('FLEET_SEC_SCAN_DEADLINE') or ''
+# a test may lower the deadline, never raise it
+DEADLINE = min(540, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 540
+signal.signal(signal.SIGTERM, lambda *_: sys.exit('sec_scan.py: terminated'))
 # the attribute-safe diff of G2: no attributes file, no system attributes, text, no textconv or driver
 G = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'core.attributesFile=/dev/null']
 D = ['--text', '--no-textconv', '--no-ext-diff', '--no-renames', '--no-color']
@@ -181,6 +193,15 @@ if not re.match(r'^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$', image):
     skip('image digest not pinned')
 if rt is None:
     skip('no container runtime (podman or docker)')
+def in_temp(p):
+    r = os.path.realpath(p)
+    return any(r == t or r.startswith(t + '/') for x in TEMP for t in {x, os.path.realpath(x)})
+_x = os.environ.get('XDG_CACHE_HOME')
+if _x and not os.path.isabs(_x):
+    sys.exit('XDG_CACHE_HOME is relative; set it to an absolute path or unset it')
+cache = os.path.join(_x or os.path.expanduser('~/.cache'), 'fleet', 'sec-scan')
+if not os.path.isabs(cache) or in_temp(cache):
+    sys.exit('the scan dir resolves under a temp dir (%s), which the runtime refuses as a mount source: %s' % (', '.join(TEMP), cache))
 try:
     code = call([rt, 'image', 'exists' if rt == 'podman' else 'inspect', image], 30).returncode
 except subprocess.TimeoutExpired:
@@ -191,6 +212,26 @@ with open(RULES, 'rb') as fh:
     rules = fh.read()
 if hashlib.sha256(rules).hexdigest() != RULES_SHA256:
     sys.exit('the plugin rule file differs from RULES_SHA256: ' + RULES)
+def own(p):
+    # a parent of the scan dir: a real dir of this user, mode 0700
+    try:
+        os.mkdir(p, 0o700)
+    except FileExistsError:
+        pass
+    s = os.lstat(p)
+    if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid():
+        sys.exit('not a directory owned by this user: ' + p)
+    os.chmod(p, 0o700)
+os.makedirs(os.path.dirname(os.path.dirname(cache)), mode=0o700, exist_ok=True)
+own(os.path.dirname(cache))
+own(cache)
+# a run killed hard (SIGKILL) leaves its per-run dir: swept after a day (a run lasts under 540 s)
+for e in os.scandir(cache):
+    try:
+        if RUN.match(e.name) and e.is_dir(follow_symlinks=False) and time.time() - e.stat(follow_symlinks=False).st_mtime > 86400:
+            shutil.rmtree(e.path, ignore_errors=True)
+    except OSError:
+        pass
 if not added:
     result('ran', 'no added production line')
 def safe(c):
@@ -206,8 +247,7 @@ def safe(c):
 dst = {'/'.join(safe(c) for c in p.split('/')): p for p in added}
 if len(dst) != len(added):
     sys.exit('two changed paths map to one scan path')
-os.makedirs(scratch, exist_ok=True)
-tmp = tempfile.mkdtemp(prefix='sec-', dir=scratch)
+tmp = None
 name = 'fleet-sec-' + secrets.token_hex(6)
 def put(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -228,6 +268,8 @@ def scan(argv, ok):
         sys.exit('%s exit %d: %s' % (tool, r.returncode, r.stderr.decode('utf-8', 'replace')[-1000:]))
     return out
 try:
+    tmp = os.path.join(cache, 'run-' + secrets.token_hex(8))
+    os.mkdir(tmp, 0o700)
     src, rd = os.path.join(tmp, 'src'), os.path.join(tmp, 'rules')
     for d, p in dst.items():
         if '..' in p.split('/') or os.path.isabs(p):
@@ -249,6 +291,8 @@ try:
         os.chmod(r, 0o755)
         for n in ns:
             os.chmod(os.path.join(r, n), 0o644)
+    if any(in_temp(p) for p in (src, rd)):
+        sys.exit('the scan dir resolves under a temp dir: ' + tmp)
     pre = [rt, 'run', '--rm', '--pull=never', '--network', 'none', '--read-only', '--tmpfs', '/tmp', '--user', '%d:%d' % (os.getuid(), os.getgid()),
            '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL', '-e', 'HOME=/tmp', '-w', '/tmp', '--name', name, '-v', src + ':/src:ro', '-v', rd + ':/rules:ro']
     # semgrep: exit 0 with a results list (findings do not change the exit without --error); any other exit is an error
@@ -271,4 +315,5 @@ try:
     errs = sg.get('errors') or []
     result('partial' if errs or notes else 'ran', 'semgrep reported %d error(s)' % len(errs) if errs else None)
 finally:
-    shutil.rmtree(tmp, ignore_errors=True)
+    if tmp:
+        shutil.rmtree(tmp, ignore_errors=True)

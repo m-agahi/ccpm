@@ -17,11 +17,22 @@ export const PY_SPAWN_LIMITS = { timeout: 300000, maxBuffer: 16 << 20, killSigna
 export function spawnSync(cmd, args, opts) {
   return rawSpawnSync(cmd, args, cmd === "python3" ? Object.assign({}, PY_SPAWN_LIMITS, opts) : opts);
 }
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
+// 8.0.0 G8: the temp dirs sec_scan.py refuses as a mount source (the agent podman shim refuses them)
+export const TEMP_ROOTS = ["/tmp", "/var/tmp", "/dev/shm"];
+export const underTemp = (p) => TEMP_ROOTS.some((t) => [t, existsSync(t) ? realpathSync(t) : t].some((r) => p === r || p.startsWith(r + "/")));
+// a temp XDG_CACHE_HOME outside the temp roots (under ~/.cache); the caller removes it
+export function cacheHome() {
+  mkdirSync(join(homedir(), ".cache"), { recursive: true });
+  const d = realpathSync(mkdtempSync(join(homedir(), ".cache", "fleet-test-")));
+  assert.ok(!underTemp(d), "the test cache dir is under a temp dir: " + d);
+  return d;
+}
 // 6.3.1 (ledger 2129): SOURCE is the commented source (src/), which the
 // text-matching and fault-injection tests read; DIST is the shipped workflow
 // (scripts/build-workflow.mjs writes it), which the scenario runs execute.

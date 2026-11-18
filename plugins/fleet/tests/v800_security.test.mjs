@@ -23,11 +23,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync, statSync, lstatSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
-import { HERE, HAVE_PY, SOURCE, ARGS, FP_K2, HASHES, AUDIT_IMAGE, happy, run, runOne, inputsOf, call, sha256, canon, spawnSync, programSha, stateJsonOf, K } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, FP_K2, HASHES, AUDIT_IMAGE, happy, run, runOne, inputsOf, call, sha256, canon, spawnSync, programSha, stateJsonOf, K, cacheHome, underTemp } from "./harness.mjs";
 import { PROGRAM_COUNT } from "../scripts/gen.mjs";
 
 const PROG = join(HERE, "..", "scripts", "sec_scan.py");
@@ -52,7 +52,8 @@ const SHELL = "\n\ndef g(cmd):\n    return subprocess.run(cmd, shell=True)\n";
 
 // the stub runtime: a python script that logs its argv (calls.log, one JSON array per line), and
 // for `run` the files and modes of each -v source dir (mounts.log); it prints $STUB_<TOOL> (a file)
-// and exits $STUB_<TOOL>_RC; `image exists` / `image inspect` exit $STUB_EXISTS (default 0)
+// and exits $STUB_<TOOL>_RC; `image exists` / `image inspect` exit $STUB_EXISTS (default 0); a run
+// sleeps $STUB_SLEEP seconds after it logs its mounts (G8: the deadline and TERM cleanup tests)
 const STUB = (log) =>
   "#!" + PY + " -I\nimport json, os, sys\na = sys.argv[1:]\n" +
   "open(" + JSON.stringify(log) + ", 'a').write(json.dumps([os.path.basename(sys.argv[0])] + a) + '\\n')\n" +
@@ -63,6 +64,7 @@ const STUB = (log) =>
   "        fs = {}\n        for r, ds, ns in os.walk(s):\n            for n in ns:\n                p = os.path.join(r, n)\n" +
   "                fs[os.path.relpath(p, s)] = [oct(os.stat(p).st_mode & 0o777), open(p).read()]\n        m[d] = fs\n" +
   "open(" + JSON.stringify(log + ".mounts") + ", 'a').write(json.dumps(m) + '\\n')\n" +
+  "if os.environ.get('STUB_SLEEP'):\n    import time\n    time.sleep(float(os.environ['STUB_SLEEP']))\n" +
   "t = a[a.index('--entrypoint') + 1].upper()\n" +
   "if os.environ.get('STUB_' + t):\n    o = open(os.environ['STUB_' + t]).read()\n" +
   "    if '\"ALL\"' in o:\n        d = json.loads(o)\n        d['paths']['scanned'] = ['/src/' + k for k in m['/src']]\n        o = json.dumps(d)\n" +
@@ -72,9 +74,11 @@ const STUB = (log) =>
 const TRAPS = ["semgrep", "gitleaks", "trivy", "checkov", "python3", "sh", "bash", "curl", "pytest", "ruff", "bandit"];
 
 // a repo <d>/wt with a base commit and an uncommitted judged tree; <d>/bin is the only PATH dir
-// (git linked in, the stub runtime opts.rt, the traps)
+// (git linked in, the stub runtime opts.rt, the traps); <cache> is a temp XDG_CACHE_HOME outside the
+// temp dirs (G8: sec_scan.py refuses a scan dir under /tmp, /var/tmp or /dev/shm)
 function repo(opts = {}) {
   const d = realpathSync(mkdtempSync(join(tmpdir(), "fleet-g7-")));
+  const cache = cacheHome();
   const wt = join(d, "wt");
   const bin = join(d, "bin");
   mkdirSync(join(wt, "pkg"), { recursive: true });
@@ -110,18 +114,23 @@ function repo(opts = {}) {
     chmodSync(join(bin, n), 0o755);
   }
   const fp = () => [g(wt, "rev-parse", "HEAD"), g(wt, "status", "--porcelain"), g(wt, "worktree", "list", "--porcelain"), readFileSync(join(wt, "pkg", "mod.py"), "utf8")].join("\n");
-  return { d, wt, bin, base, tree, log, fp, before: fp() };
+  return { d, wt, bin, base, tree, log, cache, fp, before: fp() };
 }
-// run the program; opts.out: {semgrep, gitleaks} stdout texts; opts.rc: {semgrep, gitleaks, exists}
+// run the program; opts.out: {semgrep, gitleaks} stdout texts; opts.rc: {semgrep, gitleaks, exists};
+// opts.env: more env (XDG_CACHE_HOME: null unsets it); opts.spawn: more spawnSync options
 function prog(x, opts = {}) {
   const args = [x.wt, x.base, x.tree, JSON.stringify(opts.exclude || ["tests/test_mod.py"]), opts.est === undefined ? "40" : opts.est, opts.image || AUDIT_IMAGE];
-  const env = { PATH: x.bin, HOME: x.d };
+  const env = { PATH: x.bin, HOME: x.d, XDG_CACHE_HOME: x.cache };
+  for (const [k, v] of Object.entries(opts.env || {})) {
+    if (v === null) delete env[k];
+    else env[k] = v;
+  }
   for (const [t, v] of Object.entries(opts.out || {})) {
     writeFileSync(join(x.d, t + ".out"), v);
     env["STUB_" + t.toUpperCase()] = join(x.d, t + ".out");
   }
   for (const [t, v] of Object.entries(opts.rc || {})) env["STUB_" + t.toUpperCase() + (t === "exists" || t === "pull" ? "" : "_RC")] = String(v);
-  const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env });
+  const r = spawnSync(PY, ["-I", PROG].concat(args), Object.assign({ encoding: "utf8", env }, opts.spawn || {}));
   const lines = (f) => (existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   return {
     r,
@@ -130,7 +139,8 @@ function prog(x, opts = {}) {
     calls: lines(x.log),
     mounts: lines(x.log + ".mounts"),
     same: x.fp() === x.before,
-    leftovers: existsSync(join(x.d, "scratch")) ? readdirSync(join(x.d, "scratch")) : [],
+    leftovers: existsSync(join(x.cache, "fleet", "sec-scan")) ? readdirSync(join(x.cache, "fleet", "sec-scan")) : [],
+    scratch: existsSync(join(x.d, "scratch")),
   };
 }
 function once(opts, popts) {
@@ -139,6 +149,7 @@ function once(opts, popts) {
     return Object.assign(prog(x, popts), { x });
   } finally {
     rmSync(x.d, { recursive: true, force: true });
+    rmSync(x.cache, { recursive: true, force: true });
   }
 }
 function digestOk(o) {
@@ -257,8 +268,10 @@ test("8.0.0 G7: the scan argv: podman, network none, read-only, tmpfs, the host 
     assert.deepEqual(a.slice(0, pre.length), pre, s);
     const vs = a.map((x, i) => (a[i - 1] === "-v" ? x : null)).filter(Boolean);
     assert.equal(vs.length, 2, s);
-    assert.match(vs[0], /\/scratch\/sec-[^/:]+\/src:\/src:ro$/);
-    assert.match(vs[1], /\/scratch\/sec-[^/:]+\/rules:\/rules:ro$/);
+    // G8: the per-run dir is under $XDG_CACHE_HOME/fleet/sec-scan, never under the repo's scratch dir
+    assert.equal(vs[0], y.x.cache + "/fleet/sec-scan/" + vs[0].split("/").slice(-3)[0] + "/src:/src:ro");
+    assert.match(vs[0], /\/fleet\/sec-scan\/run-[0-9a-f]{16}\/src:\/src:ro$/);
+    assert.equal(vs[1], vs[0].replace(/\/src:\/src:ro$/, "/rules:/rules:ro"));
     assert.ok(a.includes(AUDIT_IMAGE), s);
     assert.ok(!/latest|\.sock|--privileged|--env-host|--env-file|--network=host|--network host|--volumes-from|--userns=host/.test(s), s);
     assert.equal(a.filter((x) => x === "-e").length, 1, "one explicit env value, never the host env");
@@ -268,6 +281,7 @@ test("8.0.0 G7: the scan argv: podman, network none, read-only, tmpfs, the host 
   assert.deepEqual(tail(rs[1]), ["--entrypoint", "gitleaks", AUDIT_IMAGE, "dir", "--no-banner", "--redact=100", "--exit-code", "99", "-f", "json", "-r", "-", "/src"]);
   assert.ok(y.same);
   assert.deepEqual(y.leftovers, [], "the scan dir is removed");
+  assert.equal(y.scratch, false, "no scan dir under the repo's scratch dir");
   const d = once({ rt: ["docker"] }, { out: CLEAN });
   assert.deepEqual(d.calls[0], ["docker", "image", "inspect", AUDIT_IMAGE]);
   assert.equal(runs(d)[0][0], "docker");
@@ -628,4 +642,164 @@ test("8.0.0 G7 review fix 4: a semgrep or gitleaks result counts when any line o
   assert.deepEqual(by["semgrep: fleet.python.eval-exec"], [6, 7]);
   assert.deepEqual(by["gitleaks: generic-api-key"], [6]);
   assert.ok(!("semgrep: fleet.python.pickle-load" in by) && !("gitleaks: base-key" in by), "a span on base lines only");
+});
+
+// ---------------------------------------------------------------- G8: the scan dir (Max ruling 2026-11-18)
+// The agent podman shim refuses a mount source under /tmp, /var/tmp or /dev/shm, so a repo cloned
+// under /tmp (its scratch dir there) errored twice and stopped at gates. sec_scan.py now builds its
+// scan dir in a per-run dir $XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex> (~/.cache when unset; a
+// relative value is refused, as policy_init does); the parents are the user's, mode 0700; the
+// per-run dir is 755/644 (the rootless mapped uid reads it); it is removed on every exit; stale
+// per-run dirs (over 1 day) are swept first; a mount source that resolves under a temp dir is
+// refused with a non-zero exit before any runtime call.
+
+const RUN_RE = /^run-[0-9a-f]{16}$/;
+const modeOf = (p) => statSync(p).mode & 0o777;
+
+test("8.0.0 G8: the scan dir is a per-run dir under $XDG_CACHE_HOME/fleet/sec-scan; the parents are the user's with mode 0700 (an existing looser one is tightened); the per-run dir is 755/644", { skip: !HAVE_PY }, () => {
+  const x = repo({ rt: ["podman"] });
+  try {
+    mkdirSync(join(x.cache, "fleet"), { mode: 0o755 });
+    chmodSync(join(x.cache, "fleet"), 0o755);
+    const y = prog(x, { out: CLEAN });
+    assert.equal(y.r.status, 0, y.r.stderr);
+    assert.equal(y.out.status, "ran", y.out.reason);
+    const vs = runs(y)[0].map((v, i, a) => (a[i - 1] === "-v" ? v : null)).filter(Boolean);
+    const run = vs[0].split("/").slice(-3)[0];
+    assert.match(run, RUN_RE);
+    assert.equal(vs[0], join(x.cache, "fleet", "sec-scan", run, "src") + ":/src:ro");
+    for (const p of [join(x.cache, "fleet"), join(x.cache, "fleet", "sec-scan")]) {
+      assert.equal(modeOf(p), 0o700, p);
+      assert.equal(statSync(p).uid, process.getuid(), p);
+    }
+    for (const [, [mode]] of Object.entries(y.mounts[0]["/src"]).concat(Object.entries(y.mounts[0]["/rules"]))) assert.equal(mode, "0o644");
+    assert.deepEqual(y.leftovers, [], "removed on success");
+    // XDG_CACHE_HOME unset: ~/.cache (HOME outside the temp dirs)
+    const z = prog(x, { out: CLEAN, env: { XDG_CACHE_HOME: null, HOME: x.cache } });
+    assert.equal(z.r.status, 0, z.r.stderr);
+    assert.match(runs(z).slice(-2)[0].join(" "), new RegExp(" " + x.cache + "/\\.cache/fleet/sec-scan/run-[0-9a-f]{16}/src:/src:ro "));
+    assert.equal(modeOf(join(x.cache, ".cache", "fleet", "sec-scan")), 0o700);
+  } finally {
+    rmSync(x.d, { recursive: true, force: true });
+    rmSync(x.cache, { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 G8: a scan dir that resolves under /tmp, /var/tmp or /dev/shm, or a relative XDG_CACHE_HOME, is a non-zero exit before any runtime call; no runtime or no pinned image stays partial", { skip: !HAVE_PY }, () => {
+  const t = realpathSync(mkdtempSync(join(tmpdir(), "fleet-g8-xdg-")));
+  const link = join(cacheHome(), "to-tmp");
+  try {
+    assert.ok(underTemp(t), "tmpdir() is a temp dir here: " + t);
+    symlinkSync(t, link);
+    const cases = [
+      [{ XDG_CACHE_HOME: "rel/cache" }, /XDG_CACHE_HOME is relative; set it to an absolute path or unset it/],
+      [{ XDG_CACHE_HOME: t }, /the scan dir resolves under a temp dir/],
+      [{ XDG_CACHE_HOME: link }, /the scan dir resolves under a temp dir/],
+      // unset: ~/.cache, and the test HOME is under the temp dir
+      [{ XDG_CACHE_HOME: null }, /the scan dir resolves under a temp dir/],
+    ];
+    for (const [env, re] of cases) {
+      const y = once({ rt: ["podman"] }, { out: CLEAN, env });
+      assert.notEqual(y.r.status, 0, JSON.stringify(env) + ": " + y.r.stdout);
+      assert.match(y.r.stderr, re, JSON.stringify(env));
+      assert.equal(y.r.stdout, "", "no result is printed");
+      assert.deepEqual(y.calls, [], "the runtime is never called: " + JSON.stringify(env));
+      assert.deepEqual(readdirSync(t), [], "nothing is made under the temp dir");
+    }
+    // the skips come first: no runtime, or an unpinned image, is partial whatever the cache dir
+    for (const [rt, image] of [[[], AUDIT_IMAGE], [["podman"], "openfantasy/audit-lab:latest"]]) {
+      const y = once({ rt }, { image, env: { XDG_CACHE_HOME: "rel" } });
+      assert.equal(y.r.status, 0, y.r.stderr);
+      assert.equal(y.out.status, "partial");
+      assert.deepEqual(y.calls, []);
+    }
+    const src = readFileSync(PROG, "utf8");
+    assert.match(src, /\nTEMP = \('\/tmp', '\/var\/tmp', '\/dev\/shm'\)\n/);
+    assert.ok(!/mkdtemp\([^)]*scratch/.test(src) && !/makedirs\(scratch/.test(src), "no scan dir under the scratch dir");
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+    rmSync(dirname(link), { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 G8: a symlink or a non-dir at a parent of the scan dir is refused before any runtime call", { skip: !HAVE_PY }, () => {
+  for (const make of [(c, o) => symlinkSync(o, join(c, "fleet")), (c) => writeFileSync(join(c, "fleet"), "x")]) {
+    const x = repo({ rt: ["podman"] });
+    const other = cacheHome();
+    try {
+      make(x.cache, other);
+      const y = prog(x, { out: CLEAN });
+      assert.notEqual(y.r.status, 0, y.r.stdout);
+      assert.match(y.r.stderr, /not a directory owned by this user/);
+      assert.deepEqual(y.calls.filter((c) => c[1] === "run"), []);
+      assert.deepEqual(readdirSync(other), [], "nothing is made through the link");
+    } finally {
+      for (const p of [x.d, x.cache, other]) rmSync(p, { recursive: true, force: true });
+    }
+  }
+});
+
+test("8.0.0 G8: the per-run dir is removed on success, on a tool error, at the deadline (FLEET_SEC_SCAN_DEADLINE lowers it only) and on TERM", { skip: !HAVE_PY }, () => {
+  const x = repo({ rt: ["podman"] });
+  try {
+    const made = (y) => y.mounts.length > 0 && y.mounts[0]["/src"]["pkg/mod.py"] !== undefined;
+    let y = prog(x, { out: CLEAN });
+    assert.equal(y.r.status, 0, y.r.stderr);
+    assert.ok(made(y));
+    assert.deepEqual(y.leftovers, [], "success");
+    rmSync(x.log, { force: true });
+    rmSync(x.log + ".mounts", { force: true });
+    y = prog(x, { out: CLEAN, rc: { semgrep: 2 } });
+    assert.notEqual(y.r.status, 0);
+    assert.match(y.r.stderr, /semgrep exit 2/);
+    assert.ok(made(y));
+    assert.deepEqual(y.leftovers, [], "a tool error");
+    rmSync(x.log, { force: true });
+    rmSync(x.log + ".mounts", { force: true });
+    y = prog(x, { out: CLEAN, env: { FLEET_SEC_SCAN_DEADLINE: "2", STUB_SLEEP: "30" } });
+    assert.notEqual(y.r.status, 0);
+    assert.match(y.r.stderr, /semgrep: the 2 s deadline was hit/);
+    assert.ok(made(y));
+    assert.ok(y.calls.some((c) => c[1] === "rm" && c[2] === "-f" && /^fleet-sec-[0-9a-f]{12}$/.test(c[3])), "the container is removed: " + JSON.stringify(y.calls));
+    assert.deepEqual(y.leftovers, [], "the deadline");
+    rmSync(x.log, { force: true });
+    rmSync(x.log + ".mounts", { force: true });
+    y = prog(x, { out: CLEAN, env: { STUB_SLEEP: "30" }, spawn: { timeout: 4000, killSignal: "SIGTERM" } });
+    assert.ok(made(y), "the scan dir was made before the TERM");
+    assert.notEqual(y.r.status, 0);
+    assert.deepEqual(y.leftovers, [], "TERM");
+    const src = readFileSync(PROG, "utf8");
+    assert.match(src, /\nDEADLINE = min\(540, int\(_dl\)\) if re\.match\(r'\^\[1-9\]\[0-9\]\{0,3\}\$', _dl\) else 540\n/, "a test may lower the deadline, never raise it");
+    assert.match(src, /\nsignal\.signal\(signal\.SIGTERM, lambda \*_: sys\.exit\('sec_scan\.py: terminated'\)\)\n/);
+  } finally {
+    rmSync(x.d, { recursive: true, force: true });
+    rmSync(x.cache, { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 G8: before each run, per-run dirs older than 1 day are swept; a young one, another name and a symlink (its target too) are kept", { skip: !HAVE_PY }, () => {
+  const x = repo({ rt: ["podman"] });
+  const outside = cacheHome();
+  try {
+    const root = join(x.cache, "fleet", "sec-scan");
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const old = Date.now() / 1000 - 2 * 86400;
+    const mk = (n, age) => {
+      mkdirSync(join(root, n, "src"), { recursive: true });
+      writeFileSync(join(root, n, "src", "f.py"), "x\n");
+      if (age) utimesSync(join(root, n), age, age);
+    };
+    mk("run-00000000000000aa", old);
+    mk("run-00000000000000bb", null);
+    mk("keep-me", old);
+    writeFileSync(join(outside, "target.txt"), "t\n");
+    symlinkSync(outside, join(root, "run-00000000000000cc"));
+    const y = prog(x, { out: CLEAN });
+    assert.equal(y.r.status, 0, y.r.stderr);
+    assert.deepEqual(y.leftovers.sort(), ["keep-me", "run-00000000000000bb", "run-00000000000000cc"]);
+    assert.ok(lstatSync(join(root, "run-00000000000000cc")).isSymbolicLink());
+    assert.equal(readFileSync(join(outside, "target.txt"), "utf8"), "t\n", "the link target is untouched");
+  } finally {
+    for (const p of [x.d, x.cache, outside]) rmSync(p, { recursive: true, force: true });
+  }
 });
