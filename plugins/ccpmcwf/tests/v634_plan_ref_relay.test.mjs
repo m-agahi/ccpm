@@ -224,7 +224,8 @@ test("6.3.4 2176: the shipped programs round-trip a 256 KiB plan ref (plan_ref_w
     writeFileSync(join(wt, "a.py"), "a\n");
     spawnSync("git", ["-C", wt, "add", "-A"], { env });
     spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
-    const big = { task_id: "y42", body: "x y — ü 🚀 ".repeat(24000) };
+    // 8.0.1 (#76): the message names the doc's sha256
+    const big = { plan_sha256: sha256("# plan\n"), task_id: "y42", body: "x y — ü 🚀 ".repeat(24000) };
     const msg = JSON.stringify(big) + "\n";
     assert.ok(Buffer.byteLength(msg, "utf8") >= 256 * 1024);
     const w = spawnSync("bash", ["-s"], { input: planRefWriteCmd(wt, "y42", JSON.stringify(big)), encoding: "utf8", env, maxBuffer: 1 << 26 });

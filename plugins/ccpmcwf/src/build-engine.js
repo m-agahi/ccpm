@@ -82,6 +82,8 @@ const INFRA_TIER = [
   ["infra:load-parked", "haiku"],
   // 7.3.0 (#43)
   ["infra:fleet-branch", "haiku"],
+  // 8.0.1 (#76)
+  ["infra:run-lock", "haiku"],
   // the plan's tier for S5's throwaway test DB steps
   ["infra:db-up", "haiku"],
   ["infra:db-down", "haiku"],
@@ -132,7 +134,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.0.0";
+const FLEET_VERSION = "8.0.1";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1700,13 +1702,13 @@ const PROGRAM_SHA256 = {
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
   "mutants": "2f2e06a3174586e7b26249032997bf722698212f15b47ea6774bf4ff157f1e41",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
+  "parked": "37138285a62f406863e2d0366fb6cf7bbfff9e118dc693ce048c3646e279a3ad",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
-  "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
+  "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
   "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "bf07be4e67cb6d56ca9a7c1b926f99579c0f5329633babbf2ce22eb3aef6f594",
-  "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
+  "plan_ref_write": "2b5b028ead902f1614cbff58e15c0e2bd07604ce3f4b6e606f8106676f4741a8",
   "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
   "pr_body_block": "399c9f1ec13ac3059d922b68e19220571ebfadea3cd944dea4ff0b007f053c1b",
   "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
@@ -1822,6 +1824,7 @@ const PROGRAM_SLOTS = [
   [/^infra:branch-scan$/, [[null, "branch_scan"], ["test_db", "test_db_decl"]]],
   [/^infra:load-parked(:|$)/, [[null, "parked"]]],
   [/^infra:fleet-branch/, [[null, "fleet_branch"]]],
+  [/^infra:run-lock/, [[null, "parked"]]],
   [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
   [/^infra:format-(tests|code):/, [[null, "format_files"]]],
@@ -1899,13 +1902,16 @@ const PROGRAM_KEYS = {
   "parked:park": ["target", "clean", "dirty", "args"],
   // 7.3.0 (#9)
   "parked:retire": ["moved", "args"],
+  // 8.0.1 (#76)
+  "parked:claim": ["claimed", "again", "stale", "held_by", "lock", "args"],
+  "parked:release": ["released", "absent", "held_by", "lock", "args"],
   "exclude_add": ["added", "exclude", "args"],
   "purge": ["purged", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
-  "plan_dsn": ["holds", "lines", "args"],
+  "plan_dsn": ["holds", "lines", "plan_sha256", "args"],
   "plan_ref": ["refs"],
   // 6.3.4 (2176): part mode replaced chunks mode
   "plan_ref:part": ["refs", "part", "chunks"],
@@ -2020,6 +2026,14 @@ const PROGRAM_OUT = {
     dirty: STRS,
     // 7.3.0 (#9): retire mode
     moved: BOOL,
+    // 8.0.1 (#76): claim and release modes
+    claimed: BOOL,
+    again: BOOL,
+    stale: { type: ["object", "null"], additionalProperties: STR_OR_NULL },
+    held_by: { type: ["object", "null"], additionalProperties: STR_OR_NULL },
+    lock: STR,
+    released: BOOL,
+    absent: BOOL,
     args: STRS,
     digest: STR,
   },
@@ -2031,7 +2045,7 @@ const PROGRAM_OUT = {
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, fix_timeout: BOOL, unknown_hooks: STRS, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
-  plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
+  plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, plan_sha256: STR_OR_NULL, args: STRS, digest: STR },
   plan_ref: {
     refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
     chunks: STRS,
@@ -3738,7 +3752,8 @@ function halt(status, msg, stopGate) {
   stop(status, msg);
 }
 function capped() {
-  return state.agents - state.pathChecks - state.buildResets - state.tail;
+  // 8.0.1 (#76): the run lock claim sits outside the cap too
+  return state.agents - state.pathChecks - state.buildResets - state.tail - !!state.lock;
 }
 // 2044, 2045, 2034: the PR tail sits outside the cap like path checks; CI-fix coder rounds still count
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
@@ -4523,6 +4538,35 @@ async function workspaceStep(repo, lay, wopt) {
   const slug = o !== null ? o : ws.remote_slug;
   if (o !== null) gate("workspace: GitHub command for " + slug + ": " + (ghFor(slug).gh_cmd || "none") + (ghFor(slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(slug));
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
+}
+// 8.0.1 (#76): the per-task run lock (parked.py claim|release <repo> <task id> <nonce> [mode])
+const lockStep = (m, a) => INFRA_STEP + m + " the run lock.\n" + inputsLine({ task_id: a[1] }) + RUN_EXACT + progCmd("parked", [m].concat(a)) + "\nIt prints one JSON object " + printsKeys("parked:" + m) + '. Return {status: "ok", reason, ' + returnKeys("parked:" + m) + "}" + COPY_DIGEST;
+const lockOk = (r, m, a) => relayDigestOk(r, progKeys("parked:" + m), "parked") && canonical(r.args) === canonical(a);
+async function lockClaim(repo, task, ph) {
+  if (state.lock) return;
+  const a = [repo, task, state.nonce, state.mode];
+  const r = await infra("infra:run-lock", lockStep("claim", a), ph);
+  requireProgram(r, "parked", "infra:run-lock");
+  // a relay that claimed is released (nonce-matched), even when it fails its check
+  if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
+  if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("failed", "infra:run-lock: relay off its digest or args");
+  const h = r.held_by || {};
+  if (!r.claimed) halt("needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); if its session is dead, delete " + r.lock);
+  gate("run lock " + r.lock + " claimed" + (r.stale ? ", stale one moved" : ""));
+}
+// main's finally: release a lock this run holds; never halts
+async function lockRelease() {
+  const l = state.lock;
+  state.lock = null;
+  if (!l) return;
+  const label = "infra:run-lock:release";
+  let r = null;
+  try {
+    state.agents++;
+    const ic = infraCall(label, lockStep("release", l.a), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+    r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  } catch (e) {}
+  gate((r && r.status === "ok" && lockOk(r, "release", l.a) && (r.released || r.absent) ? "" : "warning: not confirmed: ") + "run lock " + l.path + " released");
 }
 // 7.3.0 (#43): the slug of the one existing local branch fleet/<task id>-<slug> (an intake title varies per run)
 // review fix: only a slug the program proves this task's (the sealed plan ref names its branch and this source)
@@ -5689,7 +5733,7 @@ async function planAndAudit(ctx0) {
   gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
   const dc = fmt.dsn_check;
   requireProgram(dc, "plan_dsn", fmtLabel);
-  if (typeof dc.holds !== "boolean" || !Array.isArray(dc.lines) || !relayDigestOk(dc, progKeys("plan_dsn"), "plan_dsn"))
+  if (typeof dc.holds !== "boolean" || !Array.isArray(dc.lines) || !(dc.holds || SHA256_RE.test(dc.plan_sha256)) || !relayDigestOk(dc, progKeys("plan_dsn"), "plan_dsn"))
     halt("failed", fmtLabel + ": the relayed dsn_check does not match the program's digest", "contract");
   if (canonical(dc.args) !== canonical([ctx.common.worktree, planPath]))
     halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
@@ -5760,6 +5804,8 @@ async function planAndAudit(ctx0) {
     gate("planner fleet_estimate.criteria " + est.criteria + " != " + testable.length + " testable criteria");
   return {
     planPath,
+    // 8.0.1 (#76): the doc the approving audit read (format-plan's plan_dsn hash); stage-plan must match it
+    auditedSha: dc.plan_sha256,
     criteria,
     testable,
     planFacts,
@@ -5796,6 +5842,7 @@ async function commitPlanAndRef(ctx) {
   if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
     halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
+  if (stagedSha !== ctx.auditedSha) halt("needs_human", stLabel + ": plan doc changed after audit: " + stagedSha + ", audited " + ctx.auditedSha, "scope");
   // 8.0.0 (G3, ADR-1152): the held-out examples go to the store on this machine; the ref seals its sha256, or null
   const heldOut = await heldOutWrite(ctx, stagedSha);
   // + 2: the PATH re-check before the commit and the verify step; + the first-round chunk writers
@@ -6316,6 +6363,7 @@ async function planMode(input, date) {
   if (lp) halt("needs_human", "intake: " + lp);
   const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
+  await lockClaim(brief.repo, names.taskId, "Intake");
   if (!names.text) names.slug = await branchSlug(brief.repo, names);
   const lay = layout(names, brief.repo);
   state.branch = lay.branch;
@@ -6443,6 +6491,7 @@ async function planMode(input, date) {
       after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
       planBase: scan.head,
       expectHead: scan.head,
+      auditedSha: p.auditedSha,
       retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       // 8.0.0 (G3): the planner's top-level held-out list, for the store only
       heldOut: p[HELD_OUT_KEY] || [],
@@ -6784,6 +6833,7 @@ async function buildMode(input, date) {
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
   await preflightStep(repo);
+  await lockClaim(repo, PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1], "Preflight");
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
   if (ghNoPush(ws.remoteSlug)) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "role");
   if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("build start: push access to " + ws.remoteSlug + " not known (" + ghTried(ws.remoteSlug) + "); the PR step checks again");
@@ -8977,6 +9027,7 @@ async function replan(ctx) {
     onRefs: ctx.onPlanRefs,
     planBase: ref.plan_base,
     expectHead: ref.plan_commit,
+    auditedSha: p.auditedSha,
     fields: {
       branch: lay.branch,
       planPath: p.planPath,
@@ -9471,6 +9522,8 @@ async function main(input) {
   if (MODES.indexOf(mode) < 0)
     stop("needs_human", "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
+  // 8.0.1: meta.name is a literal; the first narrator line tells two live runs apart
+  log(mode + " " + String(input.input || (input.plan_ref || {}).plan_ref || input.repo).slice(0, 60));
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
     stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
   // 6.3.0 (ADR-1239)
@@ -9499,6 +9552,7 @@ async function main(input) {
     // the per-role build dirs (only when one was reset)
     await buildTeardown();
     await dbTeardown();
+    await lockRelease();
   }
 }
 

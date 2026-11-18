@@ -119,7 +119,8 @@ test("5.0.3 the format-plan step runs plan_dsn.py on the final plan bytes, and t
   // after the hooks: the program runs on the bytes the commit holds
   assert.ok(p.indexOf("pre-commit run --files") < p.indexOf("/plan_dsn.py"));
   assert.ok(PROGRAMS.some(([n]) => n === "plan_dsn"));
-  assert.deepEqual(K("plan_dsn"), ["holds", "lines", "args"]);
+  // 8.0.1 (#76): plan_sha256, the doc the audit reads
+  assert.deepEqual(K("plan_dsn"), ["holds", "lines", "plan_sha256", "args"]);
   assert.ok(PROGRAM_LABELS.some(([re, slots]) => re.test("infra:format-plan") && slots.some(([s, n]) => s === "dsn_check" && n === "plan_dsn")));
   assert.ok(!out.labels.some((l) => /audit-fix/.test(l)), "a clean plan gets no re-plan round");
 });

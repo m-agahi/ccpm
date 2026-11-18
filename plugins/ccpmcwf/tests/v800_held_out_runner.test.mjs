@@ -23,7 +23,7 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { HERE, SOURCE, ARGS, happy, run, runOne, inputsOf, call, sha256, canon, planRefFor, buildArgs, writerChunksOf, noUnscripted, ROLE_NAMES, FP_K1, FP_K2, HASHES } from "./harness.mjs";
+import { HERE, SOURCE, ARGS, happy, run, runOne, inputsOf, call, sha256, canon, planRefFor, buildArgs, writerChunksOf, noUnscripted, ROLE_NAMES, FP_K1, FP_K2, HASHES, lastBeforeRelease } from "./harness.mjs";
 import { ROLE_COUNT } from "../scripts/gen.mjs";
 
 const SENTINEL = "ZQX-HELDOUT-SENTINEL-7731";
@@ -294,6 +294,6 @@ test("8.0.0 G4 (security review): the held-out build dir is gone before any late
   for (const st of [{ status: "failed", reason: "x" }, () => ({ status: "ok", reason: "x", store: "mismatch", store_digest: null, results: null })]) {
     const out = await run(withExamples(SECRET, { [R1]: st }), ARGS);
     assert.notEqual(out.result.status, "ok");
-    assert.equal(out.build.labels[out.build.labels.length - 1], "infra:build-clean", out.build.labels.join(", "));
+    assert.equal(lastBeforeRelease(out.build.labels), "infra:build-clean", out.build.labels.join(", "));
   }
 });

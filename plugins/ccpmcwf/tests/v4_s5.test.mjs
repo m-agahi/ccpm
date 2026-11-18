@@ -10,7 +10,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { PB, mapView, ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
+import { PB, mapView, ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites, lastBeforeRelease } from "./harness.mjs";
 import {
   ARGS,
   PC,
@@ -369,8 +369,8 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.match(pushIn.hook_env.YADGAR_TEST_DSN, /^mysql:\/\/[^']+\/fleet_hooks$/);
   assert.match(pushIn.hook_env.CARGO_TARGET_DIR, /\/build\/[^/]+\/push\/cargo-target$/);
   // each run removes its own database at the end
-  assert.equal(out.plan.labels[out.plan.labels.length - 1], "infra:db-down");
-  assert.equal(out.build.labels[out.build.labels.length - 1], "infra:db-down");
+  assert.equal(lastBeforeRelease(out.plan.labels), "infra:db-down");
+  assert.equal(lastBeforeRelease(out.build.labels), "infra:db-down");
   assert.ok(out.result.gate_log.some((g) => /test database fleet-db-.* removed/.test(g)));
   // no prompt carries a root DSN; the root password is in no prompt (the program keeps it in the container)
   for (const c of out.calls) {
@@ -413,7 +413,7 @@ test("AC-1981-2: a coder halt still removes the database, and the halt reason st
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /coder stuck/);
-  assert.equal(out.build.labels[out.build.labels.length - 1], "infra:db-down");
+  assert.equal(lastBeforeRelease(out.build.labels), "infra:db-down");
   const d = inputsOf(call(out.build, "infra:db-down").prompt);
   assert.equal(d.name, inputsOf(call(out.build, "infra:db-up").prompt).name);
 });
@@ -474,7 +474,7 @@ test("AC-1981-7: a db-up that started nothing (no expiry mechanism) halts; nothi
   assert.match(out.result.reason, /no expiry mechanism/);
   assert.ok(!out.labels.includes("role:scope-and-plan"));
   // the teardown still runs on the name (db_down finds nothing: absent)
-  assert.equal(out.labels[out.labels.length - 1], "infra:db-down");
+  assert.equal(lastBeforeRelease(out.labels), "infra:db-down");
 });
 
 for (const [name, mut] of [
@@ -497,7 +497,7 @@ for (const [name, mut] of [
     assert.equal(out.result.stop_gate, "db");
     assert.ok(!out.labels.includes("role:scope-and-plan"));
     // a started container never outlives a relay stop
-    assert.equal(out.labels[out.labels.length - 1], "infra:db-down");
+    assert.equal(lastBeforeRelease(out.labels), "infra:db-down");
   });
 }
 
@@ -548,7 +548,7 @@ test("1981: an add relay that does not match the build's databases halts", async
   assert.equal(out.result.status, "failed");
   assert.equal(out.result.stop_gate, "db");
   assert.ok(!out.labels.some((l) => /^role:fleet-test-writer/.test(l)));
-  assert.equal(out.labels[out.labels.length - 1], "infra:db-down");
+  assert.equal(lastBeforeRelease(out.labels), "infra:db-down");
 });
 
 test("1981: a teardown agent that throws never replaces the result", async () => {

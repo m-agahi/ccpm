@@ -1136,6 +1136,56 @@ value: any other value (another privilege, a lower-case `process`, a duplicate, 
 refuses the whole declaration in all three checks. `[]` grants nothing. Without the key, the SQL
 and the `db_up.py` arguments are the same as before.
 
+### Run lock (8.0.1, yaadgaar #76)
+
+One run per task. Two runs on one task share a worktree, a plan path and the fixed scratch files,
+and one run's seal can take the other run's plan doc (daneel y41, 2026-11-18). Each run therefore
+claims a lock file for its task:
+
+- **Path:** `<git-common-dir>/fleet/locks/<task_id>.json`. It is outside every worktree and every
+  ref, so the hasher, the ownership gate and `git status` never see it. A claim from a linked
+  worktree lands in the main repo's common dir.
+- **Claim:** `parked.py claim <repo> <task_id> <nonce> <plan|build>` creates the file with
+  `O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600, and writes `{nonce, mode, started, pid, host}`. The pid
+  and host are for a human only. A claim with the same nonce holds the lock again, so
+  `confirm: "auto"` (plan, then build in one run) takes one claim.
+- **When:** plan mode claims after intake, before the branch slug (`infra:fleet-branch`) and the
+  workspace. Build mode claims after preflight, before its workspace step. Its task id comes from
+  the `plan_ref` name.
+- **Stale lock:** a lock older than 12 hours (by `started`, or by the file's mtime when the file
+  does not parse) moves to `<lock>.stale-<old nonce>-<new nonce>`, and the claim runs once more
+  with `O_EXCL`. A young lock that does not parse (a claim in progress) is held.
+- **Release:** main's `finally` runs `parked.py release <repo> <task_id> <nonce>` after the build
+  dir and database teardown, on ok, on a halt and on a throw. It unlinks the file only when the
+  file holds this run's nonce. A run whose claim was refused never releases. The release never
+  stops a run: a failed release is a `warning:` gate line.
+- **Cap:** the claim sits outside the 100-agent cap; `agents` in the result counts it.
+- A symlink at the lock, at `locks/` or at `fleet/` is refused.
+
+Stops:
+
+- `needs_human`: "task <id> is held by run <nonce> (<mode>, started <time>); if its session is
+  dead, delete <lock path>". Delete the file only when no session still runs that task.
+- `failed`: "infra:run-lock: relay off its digest or args" (the claim relay does not match the
+  program's digest or arguments). A relay that claimed is still released.
+
+Two seal checks back the lock:
+
+- **Seal 1:** `plan_ref_write.py` exits non-zero when the sha256 of the plan doc is not the sealed
+  message's `plan_sha256`. It checks before any write: no blob, no tag, no `update-ref`, no
+  `plan-<n>` rotation, and the doc stays in the worktree.
+- **Seal 2:** `infra:format-plan` runs `plan_dsn.py`, which prints the `plan_sha256` of the bytes
+  the plan-audit is about to read. `infra:stage-plan` must hash the same doc, or the run stops
+  `needs_human` "plan doc changed after audit" before the held-out write, the chunk writers and
+  the commit.
+
+The first narrator line of a run names its mode and task input (`plan #76`, `build
+refs/fleet/y41/plan`), so two live runs differ in the progress view. `meta.name` must be a pure
+literal, so it cannot carry the task.
+
+Threat model: the lock stops a second session by accident, not a hostile role. Any role with a
+shell can delete or rewrite the lock file.
+
 ### Gates (8.0.0, ADR-1315, ADR-1316)
 
 Four script gates check each code round before the code judge runs: coverage, held-out,
@@ -1260,6 +1310,8 @@ Not defended:
   task's namespace too. Roles are inside the trust boundary (ADR-1152), and no key can sit outside
   a role's read scope. The sealed `kind:ref` check blocks only accidental cross-task branch
   adoption;
+- the run lock (8.0.1, #76): it stops a second session on the same task by accident. A role with
+  a shell can delete or rewrite `<git-common-dir>/fleet/locks/<task_id>.json`;
 - held-out examples (8.0.0, ADR-1152): the store blocks casual reads only. Every role has a shell
   and can read `~/.config`, and the code under test sees the examples when the runner runs them,
   with no sandbox. The fleet itself never forwards an example (sentinel tests);

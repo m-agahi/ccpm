@@ -57,6 +57,8 @@ except OSError as e:
 if not stat.S_ISREG(st.st_mode):
     sys.exit('the plan doc is not a regular file (no symlink): ' + rel)
 lines = []
+# 8.0.1 (#76): the sha256 of the bytes read, the doc plan-audit is about to read (null over 8 MiB)
+sha = None
 if st.st_size > (8 << 20):
     holds = True
 else:
@@ -64,8 +66,9 @@ else:
     with os.fdopen(fd, 'rb') as fh:
         data = fh.read((8 << 20) + 1)
     holds = b'mysql://' in data.lower()
+    sha = hashlib.sha256(data).hexdigest() if len(data) <= (8 << 20) else None
     lines = [i + 1 for i, x in enumerate(data.split(b'\n')) if b'mysql://' in x.lower()]
-out = {'holds': holds, 'lines': lines, 'args': [wt, rel]}
+out = {'holds': holds, 'lines': lines, 'plan_sha256': sha, 'args': [wt, rel]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))
