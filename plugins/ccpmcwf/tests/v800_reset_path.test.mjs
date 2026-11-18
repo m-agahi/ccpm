@@ -128,7 +128,7 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
     assert.ok(i.token.includes(NONCE) && !i.token.startsWith("-"), site + ": " + i.token);
     assert.equal(siteOf(c), site);
     // the reset still deletes dirs: not the read-only judge agent; its tier is the reset's
-    assert.equal(c.opts.model, "haiku", site);
+    assert.equal(c.opts.model, "sonnet", site);
     assert.doesNotMatch(c.prompt, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i);
   }
   const tokens = checkCalls(out).map((c) => inputsOf(c.prompt).token);

@@ -47,16 +47,17 @@ const TIERS = ["fable", "opus", "sonnet", "haiku"];
 const INFRA_TIER = [
   // probe mode's role-read check (one sha256sum and one Read)
   ["infra:role-read:", "haiku"],
-  ["infra:path-check:", "haiku"],
-  // 6.2.2 (2104): the relay retry after a haiku relay dropped the hash lines
-  ["preflight:relay-retry", "sonnet"],
-  ["preflight", "haiku"],
+  ["infra:path-check:", "sonnet"],
+  // 6.2.2 (2104): the relay retry after a relay dropped the hash lines (8.2.1 #82: one tier up)
+  ["preflight:relay-retry", "opus"],
+  // 8.2.1 (#82): every relay checked against a program digest runs on sonnet first
+  ["preflight", "sonnet"],
   ["workspace", "sonnet"],
-  ["infra:branch-scan", "haiku"],
-  ["infra:stage-plan", "haiku"],
-  ["infra:verify-plan", "haiku"],
-  ["infra:read-state", "haiku"],
-  ["infra:policy", "haiku"],
+  ["infra:branch-scan", "sonnet"],
+  ["infra:stage-plan", "sonnet"],
+  ["infra:verify-plan", "sonnet"],
+  ["infra:read-state", "sonnet"],
+  ["infra:policy", "sonnet"],
   // 6.0.0 (2044): it edits the PR body
   ["infra:pr-stats", "sonnet"],
   // 7.1.0 (L2145): it edits the PR body
@@ -66,27 +67,27 @@ const INFRA_TIER = [
   ["infra:pr-merge", "sonnet"],
   ["infra:pr-update", "sonnet"],
   ["infra:ci-rerun", "sonnet"],
-  ["infra:ci-logs", "haiku"],
-  ["infra:pr-view", "haiku"],
+  ["infra:ci-logs", "sonnet"],
+  ["infra:pr-view", "sonnet"],
   ["infra:pr-fetch", "sonnet"],
   ["infra:fleet-cleanup", "sonnet"],
-  ["infra:orch-scan", "haiku"],
-  ["infra:ci-watch", "haiku"],
-  ["infra:callers", "haiku"],
-  ["infra:check-scripts", "haiku"],
+  ["infra:orch-scan", "sonnet"],
+  ["infra:ci-watch", "sonnet"],
+  ["infra:callers", "sonnet"],
+  ["infra:check-scripts", "sonnet"],
   ["infra:precommit-ids", "sonnet"],
-  ["infra:review-paths", "haiku"],
-  ["infra:remote-head", "haiku"],
+  ["infra:review-paths", "sonnet"],
+  ["infra:remote-head", "sonnet"],
   // 7.3.0 (#42): the parked draft parts (32000 code points each, as load-ref)
   ["infra:load-parked:p", "sonnet"],
-  ["infra:load-parked", "haiku"],
+  ["infra:load-parked", "sonnet"],
   // 7.3.0 (#43)
-  ["infra:fleet-branch", "haiku"],
+  ["infra:fleet-branch", "sonnet"],
   // 8.0.1 (#76)
-  ["infra:run-lock", "haiku"],
+  ["infra:run-lock", "sonnet"],
   // the plan's tier for S5's throwaway test DB steps
-  ["infra:db-up", "haiku"],
-  ["infra:db-down", "haiku"],
+  ["infra:db-up", "sonnet"],
+  ["infra:db-down", "sonnet"],
   ["infra:db-sweep", "haiku"],
   ["intake", "sonnet"],
   ["hasher:", "sonnet"],
@@ -123,9 +124,9 @@ const INFRA_TIER = [
   ["infra:freeze-ref", "sonnet"],
   ["infra:hash-diff:", "sonnet"],
   // the per-role build dirs (reset
-  ["infra:build-", "haiku"],
+  ["infra:build-", "sonnet"],
   // the GitHub command of a repo
-  ["infra:gh-identity:", "haiku"],
+  ["infra:gh-identity:", "sonnet"],
 ];
 // INFRA_TIER_END
 const RELAY_RETRY_MODEL = "sonnet";
@@ -134,7 +135,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.2.0";
+const FLEET_VERSION = "8.2.1";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -3559,7 +3560,7 @@ async function pathRecheckRetry(site, phaseName) {
   pathRecheckEnd(await pathRecheckOne(site, "infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL, phaseName));
 }
 async function pathRecheck(site, phaseName) {
-  // the check runs on haiku
+  // the check runs on sonnet (8.2.1 #82)
   const x = await pathRecheckOne(site, "infra:path-check:" + site, infraModel("infra:path-check:" + site), phaseName);
   if (x.r == null || x.r.status !== "ok" || pathRelayProblem(x.r, [state.repo, x.token])) {
     gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
@@ -4527,7 +4528,7 @@ async function workspaceStep(repo, lay, wopt) {
     halt("needs_human", "workspace: the digest-checked gh check read origin " + o + ", but the workspace relayed remote_slug " + ws.remote_slug + "; check the origin remote of " + repo);
   const slug = o !== null ? o : ws.remote_slug;
   if (o !== null) gate("workspace: GitHub command for " + slug + ": " + (ghFor(slug).gh_cmd || "none") + (ghFor(slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(slug));
-  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
+  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "", urlRead: urlOk };
 }
 // 8.0.1 (#76): the per-task run lock (parked.py claim|release <repo> <task id> <nonce> [mode])
 const lockStep = (m, a) => INFRA_STEP + m + " the run lock.\n" + inputsLine({ task_id: a[1] }) + RUN_EXACT + progCmd("parked", [m].concat(a)) + "\nIt prints one JSON object " + printsKeys("parked:" + m) + '. Return {status: "ok", reason, ' + returnKeys("parked:" + m) + "}" + COPY_DIGEST;
@@ -6054,6 +6055,14 @@ function buildCommitsOf(commits, taskId, refs) {
 }
 
 // ---------------------------------------------------------------- confirm "auto"
+// 8.2.1 (#81): network git uses only an https or git@host: origin URL sealed at plan time
+const ORIGIN_FIX = "the build cannot push; set a GitHub or https origin";
+function originHalt(ws) {
+  const u = ws.remoteUrl;
+  if (validRemoteUrl(u)) return null;
+  // no userinfo (a token) in a log line
+  return (!ws.urlRead ? "origin URL not read (no digest-checked remote_url_check)" : !u ? "origin has no URL" : "origin URL " + capPath(u.replace(/^([^:\/]*:\/\/)[^\/]*@/, "$1***@")) + " is not an https or git@host: URL") + "; " + ORIGIN_FIX;
+}
 function validRemoteUrl(u) {
   return typeof u === "string" && /^(https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[A-Za-z0-9._~\/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~\/-]+)$/.test(u);
 }
@@ -6364,6 +6373,8 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
+  const oh = originHalt(ws);
+  if (oh) halt("needs_human", oh, "iac");
   if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
   const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
@@ -7021,6 +7032,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const remoteSlug = ws.remoteSlug;
   // the origin URL sealed in the plan ref
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
+  // 8.2.1 (#81): before any role runs
+  if (!validRemoteUrl(remoteUrl)) halt("needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again", "iac");
   // 7.3.0 (#33): the plan's merge condition (an older plan_ref has none: the PR opens ready)
   const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
   const mainWt = lay.mainWt;
@@ -7229,7 +7242,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     : null;
   async function tfGate(label, scanDiff) {
     if (!validRemoteUrl(remoteUrl))
-      halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); re-run plan", "iac");
+      halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX, "iac");
     if (ws.remoteUrl !== remoteUrl)
       halt("needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
     const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "tf_gate", [mainWt, defaultBranch, approvedSha, remoteUrl]);

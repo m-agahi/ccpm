@@ -121,11 +121,12 @@ const SCENARIOS = {
 // 8.0.1 (#76): each plan and build run claims the task lock (infra:run-lock, parked.py claim) and releases it in main's finally (infra:run-lock:release): 2 more calls per run, 2 under confirm auto (one claim, one release); format-plan's plan_dsn prints plan_sha256 (its keys move); the parked, plan_dsn and plan_ref_write program pins move (probe unchanged)
 // 8.0.2 (#77): the preflight probe captures its stdout and stderr and prints probe_sha= last, and drops hash_lines= (the only change besides the version: checked with the probe command and FLEET_VERSION put back, every pin is 8.0.1's)
 // 8.1.0 (#75): the held-out runner role file (sandbox-run, store sandbox) and its schema enum move, the cover_diff, mutants and scratch_copy program pins move, the program table gains sandbox, and the version moves (probe unchanged)
+// 8.2.1 (#82): every relay checked against a program digest runs on sonnet first (the model is in the pin) and the version moves: all four pins move, no prompt text or call count changes
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "4e2ed676455d3b95d3a0719c030028415ac2a5bbb67fb9c8c9eeb273ff9a7172" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "be5ff6f4f86ce04293917ac287b179dc3a30d10cac535e03ff4b594770b0b3e3" },
-  "short path (one test writer)": { calls: 88, sha256: "822af4ff436be9c4db40b0988e308696b06b2de2fde5b70bd6e753eccd8b1384" },
-  "probe": { calls: 2, sha256: "bac3bb05ec0cd841c28e32cc5dfc99d48b27b846600995eca9d6e10eb2ca79c4" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "1d65fd0bbac50cc54aa4e480dae43501602e7255dcf9d0a0eb7b57dcb4633d96" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "971ff30c845710f6d4247f1c63947c831a6bc8bc35fb843a6060080238af1b28" },
+  "short path (one test writer)": { calls: 88, sha256: "d05e6dc74412fe63c5d55e073638b1540a7c387062592d3446a8da71877c6493" },
+  "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

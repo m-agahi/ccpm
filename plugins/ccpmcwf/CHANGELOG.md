@@ -1,5 +1,26 @@
 # Changelog
 
+## [8.2.1] - 2026-11-18
+
+ccpmcwf 8.2.1: yaadgaar #81 and #82, found in the smoke run wf_9e6c3325-fc0.
+
+### Fixed
+
+- #81: a plan whose origin URL is not an https or `git@host:` URL (a local path, `file://`, no
+  origin, or an unusable `remote_url_check` relay) halts `needs_human` in Workspace, right after
+  the workspace step: no push probe, no scope agent, no plan ref. The reason shows the URL through
+  the log-safe path helper (control characters replaced, 200 code points, userinfo hidden). A
+  build from a plan ref with no sealed origin URL halts at load-ref, before any role runs. The
+  push-time halt no longer says "re-run plan" (re-planning sealed null again); all three name the
+  fix: set a GitHub or https origin. Network git still uses only the sealed URL (74377f1).
+- #82: every infra relay whose output a program digest checks runs on sonnet first (was haiku):
+  preflight, the PATH checks, branch-scan, stage-plan, verify-plan, read-state, policy, ci-logs,
+  pr-view, orch-scan, ci-watch, callers, check-scripts, review-paths, remote-head, load-parked,
+  fleet-branch, run-lock, db-up, db-down, the build dirs and gh-identity. The single digest retry
+  stays and runs one tier up (opus; ADR-1290); the preflight relay retry is opus. The PATH re-check
+  retry stays on sonnet. The probe's role read (a role-file pin, not a program digest) stays on
+  haiku.
+
 ## [8.2.0] - 2026-11-18
 
 ccpmcwf 8.2.0: yaadgaar #80 (gate sandbox hardening) and #78 (documented, Max ruling: accept the

@@ -15,7 +15,7 @@ const modelOf = (out, l) => {
 };
 const FOO = [{ symbol: "foo", occurrences: [{ at: "src/a.py:1", criterion: "AC1", dont_care: null }, { at: "src/a.py:3", criterion: null, dont_care: "a test helper" }] }];
 
-test("7.3.0 #67 A1: a haiku callers relay that misses its digest is retried on sonnet; the gate line names sonnet", async () => {
+test("7.3.0 #67 A1: a callers relay that misses its digest is retried one tier up (8.2.1 #82: sonnet first, so opus); the gate line names it", async () => {
   const s = happy();
   s["role:scope-and-plan"].changed_symbols = FOO;
   callersDisk(s, "infra:callers", { foo: { hits: ["src/a.py:1", "src/a.py:3"] } });
@@ -23,9 +23,9 @@ test("7.3.0 #67 A1: a haiku callers relay that misses its digest is retried on s
   s["infra:callers:file"] = (p) => Object.assign(good(p), { digest: "f".repeat(64) });
   s["infra:callers:file:digest-retry"] = good;
   const out = await runOne(s, ARGS);
-  assert.deepEqual(modelOf(out, "infra:callers:file"), ["haiku"]);
-  assert.deepEqual(modelOf(out, "infra:callers:file:digest-retry"), ["sonnet"]);
-  const line = "dispatched once more to a fresh agent (infra:callers:file:digest-retry) on sonnet";
+  assert.deepEqual(modelOf(out, "infra:callers:file"), ["sonnet"]);
+  assert.deepEqual(modelOf(out, "infra:callers:file:digest-retry"), ["opus"]);
+  const line = "dispatched once more to a fresh agent (infra:callers:file:digest-retry) on opus";
   assert.ok(out.logs.some((l) => l.includes(line)), out.logs.join("\n"));
 });
 
