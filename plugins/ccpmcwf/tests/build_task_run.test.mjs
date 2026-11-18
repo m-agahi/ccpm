@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.2\.1 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6323,7 +6323,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.2\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.2\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7022,7 +7022,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.2\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.2\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.2\.1 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8734,7 +8734,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.2\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.2\.1/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -10297,13 +10297,16 @@ test("3.1.0 URL review: the plan seals origin's URL; no sealed URL, or a URL cha
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(seen.remote_url, "git@github.com:o/r.git");
   assert.ok(call(out, "infra:tf-gate:push").prompt.includes("'" + "git@github.com:o/r.git" + "'"));
-  // a URL that is not https or git@host: is never sealed
+  // a URL that is not https or git@host: is never sealed; 8.2.1 (#81): the plan halts in Workspace
   for (const bad of ["/srv/o.git", "github-personal:o/r.git", "ext::sh -c id"]) {
     s = happy();
     s.workspace = Object.assign({}, s.workspace, { remote_url: bad });
     out = await run(s, ARGS);
-    assert.equal(out.result.stop_gate, "iac", bad);
-    assert.match(out.result.reason, /no sealed origin URL/, bad);
+    assert.equal(out.result.stop_gate, null, bad);
+    assert.match(out.result.reason, /^origin URL .* is not an https or git@host: URL; the build cannot push; set a GitHub or https origin$/, bad);
+    assert.doesNotMatch(out.result.reason, /re-run plan/, bad);
+    assert.equal(out.build, null, bad);
+    assert.ok(!out.labels.includes("role:scope-and-plan"), bad);
     assert.ok(!pushed(out));
   }
   // the URL changed between the plan and the build
@@ -10887,7 +10890,7 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
   // 6.0.0 (ledger 2045): an IaC PR stops before ready
   assert.match(ok.result.reason, /^IaC PR: needs Max; the fleet watches no CI and merges nothing/);
   assert.equal(inputsOf(call(ok, "infra:remote-head:push").prompt).remote_url, "git@github.com:o/r.git");
-  // an unusable relay (bad digest, other args, a changed url, missing) seals no URL: an IaC diff stops at iac
+  // an unusable relay (bad digest, other args, a changed url, missing) seals no URL; 8.2.1 (#81): the plan halts in Workspace
   for (const bad of [
     Object.assign(remoteUrlOut("git@github.com:o/r.git", "/r"), { digest: "0".repeat(64) }),
     remoteUrlOut("git@github.com:o/r.git", "/other"),
@@ -10897,8 +10900,10 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
     const t = iacScript(() => happy(), "approved");
     t.workspace = Object.assign({}, t.workspace, { remote_url_check: bad });
     const o = await run(t, ARGS);
-    assert.equal(o.result.stop_gate, "iac", JSON.stringify(bad));
-    assert.match(o.result.reason, /no sealed origin URL/, JSON.stringify(bad));
+    assert.equal(o.result.stop_gate, null, JSON.stringify(bad));
+    assert.match(o.result.reason, /^origin URL not read \(no digest-checked remote_url_check\); the build cannot push/, JSON.stringify(bad));
+    assert.equal(o.build, null, JSON.stringify(bad));
+    assert.ok(!o.labels.includes("role:scope-and-plan"), JSON.stringify(bad));
     assert.ok(!pushed(o));
   }
   // at build time the program's URL is compared with the sealed one

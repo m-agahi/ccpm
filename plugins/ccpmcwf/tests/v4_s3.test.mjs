@@ -54,28 +54,29 @@ function tierOf(table, label) {
 // The tier each infra label must run on (the plan's table, with the brief's
 // overrides: park-plan on sonnet, load-parked on haiku; labels the plan does
 // not name stay on sonnet).
+// 8.2.1 (#82): every relay checked against a program digest runs on sonnet first (was haiku)
 const WANT = [
-  [/^infra:path-check:/, "haiku"],
-  // 6.2.2 (2104): the relay retry after a dropped hash relay runs on sonnet
-  [/^preflight:relay-retry/, "sonnet"],
-  [/^preflight/, "haiku"],
+  [/^infra:path-check:/, "sonnet"],
+  // 6.2.2 (2104): the relay retry after a dropped hash relay (8.2.1 #82: one tier up, opus)
+  [/^preflight:relay-retry/, "opus"],
+  [/^preflight/, "sonnet"],
   // 4.0.0 review (Max): workspace and precommit-ids moved to sonnet
   [/^workspace$/, "sonnet"],
-  [/^infra:branch-scan$/, "haiku"],
-  [/^infra:stage-plan/, "haiku"],
-  [/^infra:verify-plan/, "haiku"],
-  [/^infra:read-state$/, "haiku"],
-  [/^infra:callers/, "haiku"],
-  [/^infra:check-scripts/, "haiku"],
+  [/^infra:branch-scan$/, "sonnet"],
+  [/^infra:stage-plan/, "sonnet"],
+  [/^infra:verify-plan/, "sonnet"],
+  [/^infra:read-state$/, "sonnet"],
+  [/^infra:callers/, "sonnet"],
+  [/^infra:check-scripts/, "sonnet"],
   [/^infra:precommit-ids/, "sonnet"],
-  [/^infra:review-paths/, "haiku"],
-  [/^infra:remote-head/, "haiku"],
-  [/^infra:load-parked$/, "haiku"],
+  [/^infra:review-paths/, "sonnet"],
+  [/^infra:remote-head/, "sonnet"],
+  [/^infra:load-parked$/, "sonnet"],
   // 7.3.0 (#42, #43): the parked draft parts (as load-ref), the fleet-branch read
   [/^infra:load-parked:p/, "sonnet"],
-  [/^infra:fleet-branch$/, "haiku"],
+  [/^infra:fleet-branch$/, "sonnet"],
   // 8.0.1 (#76): the run lock claim and release
-  [/^infra:run-lock(:release)?$/, "haiku"],
+  [/^infra:run-lock(:release)?$/, "sonnet"],
   [/^intake/, "sonnet"],
   [/^hasher:/, "sonnet"],
   [/^infra:load-ref/, "sonnet"],
@@ -89,13 +90,13 @@ const WANT = [
   [/^infra:tf-gate/, "sonnet"],
   [/^infra:hook-surface/, "sonnet"],
   [/^infra:ruleset-surface/, "sonnet"],
-  [/^infra:policy(:plan)?$/, "haiku"],
+  [/^infra:policy(:plan)?$/, "sonnet"],
   [/^infra:pr-stats/, "sonnet"],
   // 7.1.0 (L2145)
   [/^infra:pr-tests/, "sonnet"],
   [/^infra:pr-ready/, "sonnet"],
   [/^infra:(pr-merge|pr-update|ci-rerun|fleet-cleanup)/, "sonnet"],
-  [/^infra:(orch-scan|ci-watch)/, "haiku"],
+  [/^infra:(orch-scan|ci-watch)/, "sonnet"],
   // 8.0.0 (#62 B2): the hook surface, ruleset, convention (haiku before) and changed-definition reads of one step
   [/^infra:surfaces:/, "sonnet"],
   // 8.0.0 (G2): a code round's gate programs
@@ -108,14 +109,14 @@ const WANT = [
   // 4.0.0 S5 (1987, 1981): writes with digest-checked relays
   [/^infra:freeze-ref/, "sonnet"],
   // 5.0.6 (ledger 2019): the build-dir program, mechanical
-  [/^infra:build-/, "haiku"],
+  [/^infra:build-/, "sonnet"],
 ];
 function wantTier(label) {
   const w = WANT.find(([re]) => re.test(label));
   return w ? w[1] : null;
 }
 
-test("4.0.0 1990 AC-1990-2: every infra agent runs on its INFRA_TIER model; every PATH check on haiku", async () => {
+test("4.0.0 1990 AC-1990-2: every infra agent runs on its INFRA_TIER model; every PATH check on sonnet (8.2.1 #82)", async () => {
   const out = await run(happy(), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -128,7 +129,7 @@ test("4.0.0 1990 AC-1990-2: every infra agent runs on its INFRA_TIER model; ever
     const w = wantTier(c.label);
     assert.ok(w, "no expected tier for " + c.label);
     assert.equal(c.opts.model, w, c.label);
-    // 8.0.0 (#62 B1): a build-dir reset runs the check too (haiku, the reset's tier)
+    // 8.0.0 (#62 B1): a build-dir reset runs the check too (the reset's tier)
     if (/^infra:path-check:/.test(c.label) || (/^infra:build-reset:/.test(c.label) && c.prompt.includes("path_check.py"))) checks++;
   }
   assert.ok(checks >= 10, "the happy run has its PATH checks");
@@ -139,7 +140,8 @@ test("4.0.0 1990: every agent label in the script resolves in INFRA_TIER, and th
   assert.ok(Array.isArray(table) && table.length > 10);
   for (const [p, t] of table) {
     assert.ok(typeof p === "string" && p.length > 3, "no empty or catch-all prefix: " + JSON.stringify(p));
-    assert.ok(t === "haiku" || t === "sonnet", p + " -> " + t);
+    // 8.2.1 (#82): opus for the preflight relay retry only
+    assert.ok(t === "haiku" || t === "sonnet" || (t === "opus" && p === "preflight:relay-retry"), p + " -> " + t);
   }
   const labels = new Set();
   for (const m of SOURCE.matchAll(/"((?:infra|hasher|intake|preflight|workspace)[a-z0-9:_-]*)"/g)) labels.add(m[1]);
@@ -171,13 +173,13 @@ test("4.0.0 1990: a label with no INFRA_TIER entry stops the run (no default tie
     throw e;
   };
   const infraModel = Function("halt", m[1] + "\n" + grab("infraModel") + "\nreturn infraModel;")(halt);
-  assert.equal(infraModel("infra:path-check:coder:r1"), "haiku");
+  assert.equal(infraModel("infra:path-check:coder:r1"), "sonnet");
   assert.equal(infraModel("infra:push"), "sonnet");
   for (const bad of ["infra:bogus", "role:fleet-coder", "", "Preflight"])
     assert.throws(() => infraModel(bad), (e) => e.status === "failed" && /no INFRA_TIER entry for agent label/.test(e.message), JSON.stringify(bad));
 });
 
-test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on sonnet; a real finding is not", async () => {
+test("4.0.0 1990: a PATH check whose relay is broken is retried once on sonnet (8.2.1: its first tier too); a real finding is not", async () => {
   // relay drift: the digest does not match the relayed values
   const s = happy();
   s["infra:path-check:plan-audit"] = (prompt) => {
@@ -190,7 +192,7 @@ test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on so
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const retry = call(out, "infra:path-check:plan-audit:relay-retry");
   assert.equal(retry.opts.model, "sonnet");
-  assert.equal(call(out, "infra:path-check:plan-audit").opts.model, "haiku");
+  assert.equal(call(out, "infra:path-check:plan-audit").opts.model, "sonnet");
   // the retry has its own token
   assert.notEqual(inputsOf(retry.prompt).token, inputsOf(call(out, "infra:path-check:plan-audit").prompt).token);
   // twice broken -> the iac stop, as before
@@ -553,7 +555,7 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
-    assert.equal(first.opts.model, "haiku");
+    assert.equal(first.opts.model, "sonnet");
     assert.match(first.prompt, /path_check\.py/);
     assert.match(first.prompt, /as one Bash call: bash -c '/, "the scripts directory probe runs in every run");
     assert.match(first.prompt, ROLE_PROBE, "the role files are hashed in every run");
@@ -574,7 +576,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.2.0");
+  assert.equal(p.fleet_version, "8.2.1");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/ccpmcwf/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -639,7 +641,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.2\.0/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.2\.1/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

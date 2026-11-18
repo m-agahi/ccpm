@@ -165,7 +165,8 @@ test("4.0.0 1980: test_args is refused on make, with <paths>, with a disallowed 
 });
 
 test("4.0.0 1980: build mode re-checks every sealed criterion's test_args at load", async () => {
-  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" };
+  // 8.2.1 (#81): a ref with no sealed origin URL halts at load-ref
+  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing", remote_url: "git@github.com:o/r.git" };
   const bad = await buildFrom(sealedRef({ plan_facts: facts, criteria: [Object.assign(criteria(1)[0], { test_args: "--config x" })] }));
   assert.equal(bad.result.status, "needs_human");
   assert.equal(bad.result.stop_gate, "commands");

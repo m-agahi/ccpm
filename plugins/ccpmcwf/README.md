@@ -1015,7 +1015,7 @@ from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROL
 `gen.mjs --check` fails when a file differs, is missing, or the roles dir (or `_shared`) holds
 any other entry. Nothing is cached; every run (plan, build, probe) checks the files again:
 
-1. `preflight` (haiku, the run's first agent) finds
+1. `preflight` (sonnet since 8.2.1, the run's first agent) finds
    `$HOME/.claude/plugins/cache/<marketplace>/ccpmcwf/<version>/scripts` and its sibling `roles`
    dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the twelve
    regular role files and one subdirectory, `_shared` (a real directory, no symlink), which holds
@@ -2057,13 +2057,17 @@ never on any other; the retry counts toward the agent cap. Every role dispatch l
 
 Infra agents (4.0.0, ledger 1990) run on the model that `INFRA_TIER` names for their label. The
 first matching label prefix wins, and a label with no entry stops the run (there is no default
-tier). `haiku` runs the read-only steps whose output a program digest checks: the PATH checks,
-preflight, branch-scan, stage-plan, verify, read-state, callers, check-scripts, review-paths,
-remote-head, load-parked and the test-DB steps. `sonnet` runs everything else: intake, the
-hasher, load-ref, commit-plan, the park, workspace (its `default_branch` and `base_ref` are not
-digest-checked), precommit-ids (it feeds G2), format, commit, push, the IaC gate, hook-surface,
-changed-defs, the re-plan, state, freeze-ref and write-back steps. A haiku PATH check whose relay
-is broken runs once more on sonnet.
+tier). Since 8.2.1 (#82) `sonnet` runs every read-only step whose output a program digest checks:
+the PATH checks, preflight, branch-scan, stage-plan, verify, read-state, policy, callers,
+check-scripts, review-paths, remote-head, load-parked, fleet-branch, run-lock, the CI and PR reads,
+the build dirs, the gh identity checks and the test-DB steps (haiku mangled exact program text:
+54 hash lines replaced by one sentence, empty strings encoded twice). `sonnet` also runs everything
+else: intake, the hasher, load-ref, commit-plan, the park, workspace (its `default_branch` and
+`base_ref` are not digest-checked), precommit-ids (it feeds G2), format, commit, push, the IaC
+gate, hook-surface, changed-defs, the re-plan, state, freeze-ref and write-back steps. Only the
+probe's role read (checked against a role-file pin, not a program digest) stays on `haiku`. A
+digest or args retry runs one tier up (sonnet to opus; the preflight relay retry is opus). A PATH
+check whose relay is broken runs once more on sonnet.
 
 ### Independent review
 

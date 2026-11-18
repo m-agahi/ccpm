@@ -39,38 +39,38 @@ const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // INFRA_TIER_BEGIN
 const INFRA_TIER = [
 ["infra:role-read:", "haiku"],
-["infra:path-check:", "haiku"],
-["preflight:relay-retry", "sonnet"],
-["preflight", "haiku"],
+["infra:path-check:", "sonnet"],
+["preflight:relay-retry", "opus"],
+["preflight", "sonnet"],
 ["workspace", "sonnet"],
-["infra:branch-scan", "haiku"],
-["infra:stage-plan", "haiku"],
-["infra:verify-plan", "haiku"],
-["infra:read-state", "haiku"],
-["infra:policy", "haiku"],
+["infra:branch-scan", "sonnet"],
+["infra:stage-plan", "sonnet"],
+["infra:verify-plan", "sonnet"],
+["infra:read-state", "sonnet"],
+["infra:policy", "sonnet"],
 ["infra:pr-stats", "sonnet"],
 ["infra:pr-tests", "sonnet"],
 ["infra:pr-ready", "sonnet"],
 ["infra:pr-merge", "sonnet"],
 ["infra:pr-update", "sonnet"],
 ["infra:ci-rerun", "sonnet"],
-["infra:ci-logs", "haiku"],
-["infra:pr-view", "haiku"],
+["infra:ci-logs", "sonnet"],
+["infra:pr-view", "sonnet"],
 ["infra:pr-fetch", "sonnet"],
 ["infra:fleet-cleanup", "sonnet"],
-["infra:orch-scan", "haiku"],
-["infra:ci-watch", "haiku"],
-["infra:callers", "haiku"],
-["infra:check-scripts", "haiku"],
+["infra:orch-scan", "sonnet"],
+["infra:ci-watch", "sonnet"],
+["infra:callers", "sonnet"],
+["infra:check-scripts", "sonnet"],
 ["infra:precommit-ids", "sonnet"],
-["infra:review-paths", "haiku"],
-["infra:remote-head", "haiku"],
+["infra:review-paths", "sonnet"],
+["infra:remote-head", "sonnet"],
 ["infra:load-parked:p", "sonnet"],
-["infra:load-parked", "haiku"],
-["infra:fleet-branch", "haiku"],
-["infra:run-lock", "haiku"],
-["infra:db-up", "haiku"],
-["infra:db-down", "haiku"],
+["infra:load-parked", "sonnet"],
+["infra:fleet-branch", "sonnet"],
+["infra:run-lock", "sonnet"],
+["infra:db-up", "sonnet"],
+["infra:db-down", "sonnet"],
 ["infra:db-sweep", "haiku"],
 ["intake", "sonnet"],
 ["hasher:", "sonnet"],
@@ -99,15 +99,15 @@ const INFRA_TIER = [
 ["infra:comments-", "sonnet"],
 ["infra:freeze-ref", "sonnet"],
 ["infra:hash-diff:", "sonnet"],
-["infra:build-", "haiku"],
-["infra:gh-identity:", "haiku"],
+["infra:build-", "sonnet"],
+["infra:gh-identity:", "sonnet"],
 ];
 // INFRA_TIER_END
 const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.0";
+const FLEET_VERSION = "8.2.1";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -4042,7 +4042,7 @@ if (o !== null && !sameSlug(o, ws.remote_slug))
 halt("needs_human", "workspace: the digest-checked gh check read origin " + o + ", but the workspace relayed remote_slug " + ws.remote_slug + "; check the origin remote of " + repo);
 const slug = o !== null ? o : ws.remote_slug;
 if (o !== null) gate("workspace: GitHub command for " + slug + ": " + (ghFor(slug).gh_cmd || "none") + (ghFor(slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(slug));
-return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
+return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "", urlRead: urlOk };
 }
 const lockStep = (m, a) => INFRA_STEP + m + " the run lock.\n" + inputsLine({ task_id: a[1] }) + RUN_EXACT + progCmd("parked", [m].concat(a)) + "\nIt prints one JSON object " + printsKeys("parked:" + m) + '. Return {status: "ok", reason, ' + returnKeys("parked:" + m) + "}" + COPY_DIGEST;
 const lockOk = (r, m, a) => relayDigestOk(r, progKeys("parked:" + m), "parked") && canonical(r.args) === canonical(a);
@@ -5427,6 +5427,12 @@ return false;
 function buildCommitsOf(commits, taskId, refs) {
 return commits.filter((c) => !isPlanCommit(c, taskId, refs));
 }
+const ORIGIN_FIX = "the build cannot push; set a GitHub or https origin";
+function originHalt(ws) {
+const u = ws.remoteUrl;
+if (validRemoteUrl(u)) return null;
+return (!ws.urlRead ? "origin URL not read (no digest-checked remote_url_check)" : !u ? "origin has no URL" : "origin URL " + capPath(u.replace(/^([^:\/]*:\/\/)[^\/]*@/, "$1***@")) + " is not an https or git@host: URL") + "; " + ORIGIN_FIX;
+}
 function validRemoteUrl(u) {
 return typeof u === "string" && /^(https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[A-Za-z0-9._~\/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~\/-]+)$/.test(u);
 }
@@ -5717,6 +5723,8 @@ gate(
 "intake: " + brief.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " -> branch " + lay.branch + ", worktree " + lay.mainWt,
 );
 const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
+const oh = originHalt(ws);
+if (oh) halt("needs_human", oh);
 if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
 await pushProbe(lay, ws);
 const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
@@ -6296,6 +6304,7 @@ if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-ru
 const defaultBranch = ws.defaultBranch;
 const remoteSlug = ws.remoteSlug;
 const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
+if (!validRemoteUrl(remoteUrl)) halt("needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again");
 const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
 const mainWt = lay.mainWt;
 const branch = lay.branch;
@@ -6480,7 +6489,7 @@ const intentForPr = intent
 : null;
 async function tfGate(label, scanDiff) {
 if (!validRemoteUrl(remoteUrl))
-halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); re-run plan", "iac");
+halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX, "iac");
 if (ws.remoteUrl !== remoteUrl)
 halt("needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
 const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "tf_gate", [mainWt, defaultBranch, approvedSha, remoteUrl]);

@@ -1,7 +1,7 @@
 // ccpmcwf 8.0.2 (yaadgaar #77): the preflight probe prints probe_sha=<sha256 of
 // its other lines>. scriptsProbeOf checks that digest first: a mismatch, a
 // missing or invalid probe_sha= line, or no single home= line is a relay drop
-// (one retry on sonnet, then "re-run", never the install advice). Once the
+// (one retry, on opus since 8.2.1 #82, then "re-run", never the install advice). Once the
 // digest holds, a changed or absent file is real and keeps the install advice
 // on the first relay.
 //
@@ -28,7 +28,8 @@ const noHome = () => FULL().filter((x) => !x.startsWith("home="));
 function assertRetriedThenPassed(out) {
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   assert.deepEqual(out.labels.slice(0, 2), ["preflight", "preflight:relay-retry"]);
-  assert.equal(call(out, "preflight:relay-retry").opts.model, "sonnet");
+  // 8.2.1 (#82): preflight runs on sonnet, its retry one tier up
+  assert.equal(call(out, "preflight:relay-retry").opts.model, "opus");
   assert.ok(out.result.gate_log.some((g) => /^preflight: the agent .*; retried once/.test(g)), out.result.gate_log.join("\n"));
 }
 function assertRelayHalt(out, re) {
@@ -41,7 +42,7 @@ function assertRelayHalt(out, re) {
   if (re) assert.match(out.result.reason, re);
 }
 
-test("8.0.2 #77 1: a relay that drops home= is retried once on sonnet; a good retry goes on", async () => {
+test("8.0.2 #77 1: a relay that drops home= is retried once (on opus since 8.2.1); a good retry goes on", async () => {
   assertRetriedThenPassed(await runOne(relays(noHome, FULL), ARGS));
 });
 
