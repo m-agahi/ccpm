@@ -1022,16 +1022,13 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
    exactly the shared files (no extra file, no other subdirectory, no symlink). The sha256sum
    lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
    the run (`stop_gate: contract`).
-   The probe prints `hash_lines=<n>`, its own count of sha256sum lines, before them (6.2.2,
-   ledger 2104). The workflow compares the sha256sum lines with its own tables (every shipped
-   program, role file and shared file), never with the relayed count alone. No sha256sum line,
-   fewer lines than the tables expect, no single `hash_lines=` line, or a count that differs from
-   the lines relayed is a relay drop: one retry (`preflight:relay-retry`, sonnet), then a stop
-   that says "preflight agent returned no hash lines" (no reinstall text) or "preflight agent
-   relayed <k> of <n> expected hash lines", which names the files with no line and adds the
-   reinstall hint for files absent on disk. One `hash_lines=` line that equals the lines relayed,
-   short of the tables, means the probe hashed what is on disk: no retry, and the stop says
-   "<file> is absent from the installed plugin" with the install text.
+   The probe prints `probe_sha=<sha256>` last, the sha256 of every other line it printed, stderr included (8.0.2,
+   yaadgaar #77). The workflow checks it first. A missing, doubled or invalid `probe_sha=` line,
+   lines that do not hash to it, or no single `home=` line is a relay drop: one retry
+   (`preflight:relay-retry`, sonnet), then a stop that says "re-run" (no reinstall text). Once the
+   digest holds, the workflow compares the sha256sum lines with its own tables (every shipped
+   program, role file and shared file): a changed file stops with the install text, and a file
+   with no line stops with "<file> is absent from the installed plugin", with no retry.
 2. Each role's tier comes from `ROLE_DISPATCH`.
 3. Each role prompt is a short wrapper with no role text. The role agent first runs
    `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool

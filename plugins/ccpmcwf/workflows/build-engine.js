@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.0.1";
+const FLEET_VERSION = "8.0.2";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -2080,10 +2080,15 @@ slots.map(([slot, name]) => "`" + name + ".py` -> " + (slot === null ? "the top 
 function relayAs(slot) {
 return "return it as " + slot + " with `file_sha256` added as a sibling of its `program` key (never inside `program`), every other value copied unchanged";
 }
-function scriptsProbeOf(probe, dir, retried) {
+function scriptsProbeOf(probe, dir) {
 const bad = (m) => ({ problem: m });
+const drop = (what) => ({ problem: "preflight agent " + what, relay: what });
 if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
-const lines = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
+const all = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
+const lines = all.filter((x) => !x.startsWith("probe_sha="));
+const shas = all.filter((x) => x.startsWith("probe_sha="));
+if (shas.length !== 1 || !/^probe_sha=[0-9a-f]{64}$/.test(shas[0])) return drop("relayed no single valid probe_sha= line");
+if (sha256Hex(lines.join("\n") + "\n") !== shas[0].slice(10)) return drop("relayed lines that do not hash to their probe_sha= line");
 const homes = lines.filter((x) => x.startsWith("home=")).map((x) => x.slice(5));
 const hits = lines.filter((x) => x.startsWith("hit=")).map((x) => x.slice(4));
 const reals = lines.filter((x) => x.startsWith("real=")).map((x) => x.slice(5));
@@ -2091,7 +2096,7 @@ const links = lines.filter((x) => x.startsWith("symlink=")).map((x) => x.slice(8
 const rreals = lines.filter((x) => x.startsWith("roles_real=")).map((x) => x.slice(11));
 const rlinks = lines.filter((x) => x.startsWith("roles_symlink=")).map((x) => x.slice(14));
 const rodd = lines.filter((x) => x.startsWith("roles_odd=")).map((x) => x.slice(10));
-if (homes.length !== 1) return bad("the scripts directory probe printed no single home= line");
+if (homes.length !== 1) return drop("relayed " + homes.length + " home= lines (the probe prints one)");
 const home = homes[0];
 if (!/^\/[A-Za-z0-9._\/-]+$/.test(home) || home.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
 return bad("HOME " + JSON.stringify(home) + " is not a plain absolute path");
@@ -2111,10 +2116,6 @@ if (rreals.length !== 1 || rreals[0] !== rolesDir)
 return bad("roles dir " + rolesDir + " resolves to " + JSON.stringify(rreals.length === 1 ? rreals[0] : null) + " (missing, or a symlink in its path)");
 if (rlinks.length !== 1 || rlinks[0] !== "no") return bad("roles dir " + rolesDir + " is a symlink");
 if (rodd.length) return bad("roles dir " + rolesDir + " holds entries that are not regular files: " + rodd.join(", "));
-const nHash = lines.filter((x) => /^[0-9a-f]{64} [ *]/.test(x)).length;
-const counts = lines.filter((x) => x.indexOf("hash_lines=") === 0);
-const drop = (what, absent) => ({ problem: "preflight agent " + what, relay: what, absent: absent || null, dir: hit });
-if (nHash === 0) return { problem: "preflight agent returned no hash lines", relay: "relayed no hash lines", absent: null, dir: hit };
 const sums = {};
 const rsums = {};
 for (const x of lines) {
@@ -2132,12 +2133,8 @@ sums[m[2].slice(hit.length + 1, -3)] = m[1];
 const want = Object.keys(programTable()).map((n) => n + ".py").filter((f) => !Object.prototype.hasOwnProperty.call(sums, f.slice(0, -3)));
 for (const n of Object.keys(ROLE_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, n + ".md")) want.push("roles/" + n + ".md");
 for (const n of Object.keys(SHARED_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, "_shared/" + n + ".md")) want.push("roles/_shared/" + n + ".md");
-const nWant = Object.keys(programTable()).length + Object.keys(ROLE_SHA256).length + Object.keys(SHARED_SHA256).length;
-if (retried && want.length && counts.length === 1 && counts[0] === "hash_lines=" + nHash)
+if (want.length)
 return bad(want.slice(0, 10).map((f) => f + " is absent from the installed plugin").join("; ") + (want.length > 10 ? " (" + (want.length - 10) + " more)" : ""));
-if (want.length) return drop("relayed " + nHash + " of " + nWant + " expected hash lines", want);
-if (counts.length !== 1) return drop("relayed " + counts.length + " hash_lines= lines (the probe prints one)");
-if (!/^hash_lines=[0-9]+$/.test(counts[0]) || Number(counts[0].slice(11)) !== nHash) return drop("relayed " + nHash + " hash lines, but the probe counted " + JSON.stringify(counts[0].slice(11)));
 const p = scriptsMapProblem(sums, hit) || rolesMapProblem(rsums, rolesDir);
 return p ? bad(p) : { dir: hit, rolesDir };
 }
@@ -2211,12 +2208,12 @@ return progCmd("plan_hash", [worktree, rev, planPath]);
 }
 const SCRIPTS_GLOB = '"$HOME"/.claude/plugins/cache/*/' + PLUGIN_NAME + "/" + FLEET_VERSION + "/scripts";
 const SCRIPTS_PROBE =
-"bash -c 'shopt -s nullglob dotglob; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
+"bash -c 'shopt -s nullglob dotglob; o=$(exec 2>&1; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
 "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; r=\"${d%/scripts}/roles\"; printf \"roles_real=%s\\n\" \"$(realpath -e -- \"$r\")\"; " +
 "if [ -L \"$r\" ]; then echo roles_symlink=yes; else echo roles_symlink=no; fi; for f in \"$r\"/*; do if [ \"${f##*/}\" = _shared ] && [ -d \"$f\" ] && [ ! -L \"$f\" ]; then " +
 "for g in \"$f\"/*; do if [ -L \"$g\" ] || [ ! -f \"$g\" ]; then printf \"roles_odd=_shared/%s\\n\" \"${g##*/}\"; fi; done; elif [ -L \"$f\" ] || [ ! -f \"$f\" ]; then printf \"roles_odd=%s\\n\" \"${f##*/}\"; fi; done; done; " +
-"h=$(for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; for f in \"${d%/scripts}/roles\"/* \"${d%/scripts}/roles\"/_shared/*; do if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then sha256sum -- \"$f\"; fi; done; done); " +
-"printf \"hash_lines=%s\\n\" \"$(printf \"%s\" \"$h\" | grep -c .)\"; printf \"%s\\n\" \"$h\"'";
+"for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; for f in \"${d%/scripts}/roles\"/* \"${d%/scripts}/roles\"/_shared/*; do if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then sha256sum -- \"$f\"; fi; done; done); " +
+"printf \"%s\\n\" \"$o\"; printf \"probe_sha=%s\\n\" \"$(printf \"%s\\n\" \"$o\" | sha256sum | cut -c1-64)\"'";
 const INFRA_STEP = "Infra step of the fleet build workflow: ";
 const RUN_EXACT = "Run this one command exactly as written, unmodified:\n";
 const RUN_ONLY = "Run this one command exactly as written, unmodified; run nothing else:\n";
@@ -3849,16 +3846,8 @@ let sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
 if (sp.relay) {
 gate("preflight: the agent " + sp.relay + "; retried once");
 pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
-sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir, true);
-if (sp.relay)
-halt(
-"needs_human",
-"preflight: " + sp.problem + " (after one retry)" +
-(sp.absent
-? "; no line for: " + sp.absent.slice(0, 10).join(", ") + (sp.absent.length > 10 ? " (" + (sp.absent.length - 10) + " more)" : "") + "; re-run /build-task; if those files are absent from " + sp.dir.slice(0, -"/scripts".length) + ", install " + PLUGIN_NAME + " " + FLEET_VERSION + " from the marketplace"
-: "; the scripts on disk were not checked, so re-run /build-task"),
-"contract",
-);
+sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+if (sp.relay) halt("needs_human", "preflight: " + sp.problem + " (after one retry); the scripts on disk were not checked, so re-run /build-task", "contract");
 }
 if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install " + PLUGIN_NAME + " " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
 state.scriptsDir = sp.dir;

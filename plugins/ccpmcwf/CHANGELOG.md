@@ -1,5 +1,26 @@
 # Changelog
 
+## [8.0.2] - 2026-11-18
+
+ccpmcwf 8.0.2: yaadgaar #77. A haiku preflight relay dropped the probe's `home=` line (and swapped
+one hash line), and the run stopped with "install ccpmcwf" instead of the relay retry (wf_bc8a2ad4-ae1).
+
+### Fixed
+
+- The scripts probe prints `probe_sha=<sha256>` last: the sha256 of every other line it printed
+  (stdout and stderr), each with a trailing newline. `scriptsProbeOf` checks it first. A missing, doubled or invalid
+  `probe_sha=` line, lines that do not hash to it, or no single `home=` line is a relay drop: one
+  retry (`preflight:relay-retry`, sonnet), then a stop that says "re-run", with no install text.
+- Once the digest holds, the lines are the probe's own: a changed file stops with "changed" and the
+  install text, and a file with no hash line stops with "is absent from the installed plugin" on the
+  first relay, with no retry.
+
+### Changed
+
+- The probe no longer prints `hash_lines=`. The digest covers the count check, the "no hash lines"
+  drop and the two-relay agreement for absent files, so those checks are removed.
+- Version 8.0.2. The preflight prompt (the probe command) moves the prompt snapshot pins.
+
 ## [8.0.1] - 2026-11-18
 
 ccpmcwf 8.0.1: yaadgaar #76. Two runs on one task shared a worktree and scratch, and a seal took

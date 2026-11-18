@@ -119,11 +119,12 @@ const SCENARIOS = {
 // 8.0.0 car R (#38): the plugin is ccpmcwf: the preflight globs cache/*/ccpmcwf/<V>/scripts and every judge-type call runs on agent ccpmcwf:judge (was fleet:judge). Checked: with those two names mapped back to fleet the 8.0.0 G8 pins match, so the change is the name only (all four pins move)
 // 8.0.0 car F (MEDIUM): infra:gates:r<n> runs security_scan first, then coverage, then mutation (A-M5; no new call); the gates have their own database (fleet_gates, A-M8); db_up asks for timeout 600000 ms (B-M3); the held-out runner's result schema allows store timeout and the scope-and-plan and held-out-runner role shas move (A-M6, B-M1); the program pins of cover_diff, mutants, scratch_copy, gate_tools and db_up move (probe unchanged)
 // 8.0.1 (#76): each plan and build run claims the task lock (infra:run-lock, parked.py claim) and releases it in main's finally (infra:run-lock:release): 2 more calls per run, 2 under confirm auto (one claim, one release); format-plan's plan_dsn prints plan_sha256 (its keys move); the parked, plan_dsn and plan_ref_write program pins move (probe unchanged)
+// 8.0.2 (#77): the preflight probe captures its stdout and stderr and prints probe_sha= last, and drops hash_lines= (the only change besides the version: checked with the probe command and FLEET_VERSION put back, every pin is 8.0.1's)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "926414506bbc57e2f7a7c8db2d2b3ab2d78e003dfb583a8f8707a092eef57a16" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "92558d0a0f07dc8feabdc9e0c59c883a040a082a9bfd057acfd8918538828c54" },
-  "short path (one test writer)": { calls: 88, sha256: "91d47547eec9bfbeb3b244cc13623a251a888b96bf93c34d38889a36fade57da" },
-  "probe": { calls: 2, sha256: "aab6fce7bd5df91bec804e23456a9286dec671acaed09b844d59bba45a911de2" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "574fe3a3f52ddae209e45a7aa4244c481118815bce7370397aacd404bac9d109" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "c8cb6e0aacc5dacf814a3afa85ee59c6dac4604ad411cbca0ba60e4ed59fdb68" },
+  "short path (one test writer)": { calls: 88, sha256: "d76cdffb9df00ebd93d8babe68a8a8ce0d4250c365e9d440768113de3c07ddaa" },
+  "probe": { calls: 2, sha256: "bac3bb05ec0cd841c28e32cc5dfc99d48b27b846600995eca9d6e10eb2ca79c4" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {
