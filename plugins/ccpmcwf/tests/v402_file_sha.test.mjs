@@ -43,6 +43,9 @@ const SAMPLES = [
   // 7.3.0 (#42, #43)
   "infra:load-parked:p1",
   "infra:fleet-branch",
+  // 8.0.1 (#76)
+  "infra:run-lock",
+  "infra:run-lock:release",
   // 7.3.0 (#9)
   "infra:purge-bytecode:code-r1",
   "infra:park-plan",

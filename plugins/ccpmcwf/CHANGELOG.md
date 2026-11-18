@@ -1,5 +1,39 @@
 # Changelog
 
+## [8.0.1] - 2026-11-18
+
+ccpmcwf 8.0.1: yaadgaar #76. Two runs on one task shared a worktree and scratch, and a seal took
+the other run's plan doc (daneel y41). A per-task run lock and two seal checks.
+
+### Added
+
+- Run lock: `parked.py claim <repo> <task_id> <nonce> <plan|build>` creates
+  `<git-common-dir>/fleet/locks/<task_id>.json` (O_CREAT|O_EXCL|O_NOFOLLOW, 0600) with nonce, mode,
+  started, pid and host. The same nonce holds it again (one claim under `confirm: "auto"`). A lock
+  over 12 h old moves to `.stale-<old>-<new>` and is claimed once more. `parked.py release` unlinks
+  only its own lock. A symlink on the lock path is refused.
+- Plan mode claims (`infra:run-lock`) after intake and before the branch slug; build mode claims
+  after preflight and before the workspace step. A held lock stops `needs_human` with the holder's
+  nonce, mode, start time and the lock path. A relay off its digest or args stops `failed`.
+- main's `finally` releases the lock (`infra:run-lock:release`) on ok, halt and throw, after the
+  build dir and database teardown, and only when this run holds it. A failed release is a warning.
+  The claim sits outside the agent cap.
+- The first narrator line names the mode and the task input (`plan #76`), so two live runs differ
+  in the progress view (`meta.name` must be a literal).
+
+### Fixed
+
+- Seal 1: `plan_ref_write.py` exits non-zero before any write (blob, tag, update-ref, plan-N
+  rotation, unlink) when sha256(doc) is not the message's `plan_sha256`.
+- Seal 2: `plan_dsn.py` prints `plan_sha256`, the doc plan-audit reads. `infra:stage-plan` must
+  hash the same doc, or the run stops `needs_human` "plan doc changed after audit" before the
+  held-out write and the commit.
+
+### Changed
+
+- Version 8.0.1. Each plan and build run makes 2 more calls (claim, release) and 1 more agent in
+  `agents` (the release runs after the result); capped counts are unchanged.
+
 ## [8.0.0] - 2026-11-18
 
 Fleet 8.0.0: one major release, built in cars on one branch. Car A: yaadgaar #74 and #71. The

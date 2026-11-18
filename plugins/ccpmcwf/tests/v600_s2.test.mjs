@@ -220,7 +220,14 @@ function chunkArgs(rp, dir, message) {
   const h = (t) => spawnSync("sh", ["-c", "printf %s \"$1\" | sha256sum", "-", t], { encoding: "utf8" }).stdout.slice(0, 64);
   return [d, "1", h(message), JSON.stringify([{ i: 0, sha256: h(b) }])];
 }
-const writeRef = (rp, base, planPath, message, dir) => prog(rp, "plan_ref_write", [rp.wt, "t1", base, planPath].concat(chunkArgs(rp, dir || "c1", message)));
+// 8.0.1 (#76): the message names the sha256 of the doc in the worktree (plan_ref_write refuses another doc)
+const withDocSha = (rp, planPath, message) => {
+  const f = join(rp.wt, planPath);
+  if (!existsSync(f)) return message;
+  const j = JSON.parse(message);
+  return JSON.stringify(Object.assign({ plan_sha256: sha256(readFileSync(f, "utf8")) }, j)) + "\n";
+};
+const writeRef = (rp, base, planPath, message, dir) => prog(rp, "plan_ref_write", [rp.wt, "t1", base, planPath].concat(chunkArgs(rp, dir || "c1", withDocSha(rp, planPath, message))));
 
 test("6.0.0 2042a: plan_ref_write.py writes a dangling plan commit on plan_base, tags it, moves the plan out of the worktree and leaves the branch where it was", () => {
   const rp = planRepo();

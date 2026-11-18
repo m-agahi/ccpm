@@ -4936,3 +4936,32 @@ post-tool-capture. Claude Code runs hooks for subagent tool calls (not checked l
 chunks) and the runner's show output can reach it. Documented in the threat model; nothing filed.
 B-L5: db_sweep 150 s total under RUN_180S; push probe: one dry run of 120 s, under RUN_180S.
 ```
+
+### 8.0.1 (yaadgaar #76): the run lock and the two seal checks
+
+```text
+Root cause (daneel y41, runs wf_2c6446c2-8c7 and wf_91d66fbc-31d): two plan runs on one task chose
+one branch and worktree. The reuse rule checks "branch matches + clean" only. B adopted A's
+worktree; the planners overwrote each other's plan doc; A's stage-plan hashed B's bytes; A's
+plan_ref_write committed B's later edit; verify-plan-commit ran after update-ref.
+lockClaim: infra:run-lock (default agent, haiku) runs parked.py claim. Plan mode: after intake (the
+task id) and before branchSlug, so a text input is locked too. Build mode: after preflightStep and
+before workspaceStep (the spec said "after load-ref", but load-ref runs inside buildFromRef, after
+the workspace step; the task id is PLAN_REF_NAME_RE on tiny.plan_ref, the same id the sealed ref
+names). state.lock is set when the relay says claimed, before its digest check, so a claimed but
+broken relay is still released (nonce-matched, harmless). confirm "auto": buildFromRef runs from
+planMode, so build takes no second claim.
+lockRelease: last in main's finally (after buildTeardown and dbTeardown, so a next run never sees
+the old run's teardown). agentT directly, as dbTeardown: no halt, no reserve; a failed release is a
+warning gate line. capped() subtracts !!state.lock: the claim sits outside the cap.
+Stale: > 12 h by started (or mtime when the file does not parse). The claimer renames the lock to
+.stale-<old>-<new> and lstat()s the renamed file: an inode other than the one it judged stale
+means another claimer won in between; that live lock is linked back (link fails when a third
+lock exists) and the claim reports held.
+Seal 1: plan_ref_write.py reads plan_sha256 from the decoded message (JSON) and compares it with
+sha256(doc) before hash-object -w. Exit 1 (sys.exit text), never 3 (3 means rewrite chunks).
+Seal 2: plan_dsn.py prints plan_sha256 of the bytes it read at infra:format-plan, the last step
+before the audit (the audit runs writeback=false). planAndAudit returns it as auditedSha from the
+approving round; commitPlanAndRef compares stagedSha with it at both call sites (plan and
+re-plan), before heldOutWrite.
+```

@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.0.0");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.0.1");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -116,7 +116,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 7.3.0 (#43): + infra:fleet-branch
   // 8.0.0 (#62 B2): - 2 (one surfaces step)
   // 8.0.0 (G3): + 1 (the held-out store write)
-  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
+  // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
+  assert.equal(out.plan.calls.length, 23, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
@@ -126,7 +127,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1)
-  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
+  // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
+  assert.equal(out.build.calls.length, 66, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -254,7 +256,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.0.0");
+  assert.equal(p.fleet_version, "8.0.1");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

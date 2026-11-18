@@ -36,8 +36,7 @@ import {
   BUILD_SCRATCH,
   buildEnvOf,
   roleTestEnv,
-  buildEnvSites,
-} from "./harness.mjs";
+  buildEnvSites, lastBeforeRelease } from "./harness.mjs";
 
 const PROG = join(SCRIPTS_SRC, "build_dir.py");
 const HASHER = join(SCRIPTS_SRC, "hasher.py");
@@ -196,17 +195,17 @@ test("5.0.6 2019: a reset that fails or relays other dirs stops the run; the bui
     assert.equal(out.result.status, "failed", out.result.reason);
     assert.match(out.result.reason, /infra:build-reset:coder:r1/);
     assert.ok(!out.labels.includes("role:fleet-coder:r1"), "the coder never runs");
-    assert.equal(out.build.labels[out.build.labels.length - 1], "infra:build-clean");
+    assert.equal(lastBeforeRelease(out.build.labels), "infra:build-clean");
   }
   const ok = await run(happy(), ARGS);
   assert.ok(!ok.plan.labels.some((l) => /^infra:build-/.test(l)), "plan mode has no build dir");
-  assert.equal(ok.build.labels[ok.build.labels.length - 1], "infra:build-clean");
+  assert.equal(lastBeforeRelease(ok.build.labels), "infra:build-clean");
   assert.deepEqual(inputsOf(call(ok.build, "infra:build-clean").prompt).args, ["clean", BUILD_SCRATCH]);
   assert.ok(ok.result.gate_log.some((l) => l === "build dirs " + BUILD_SCRATCH + "/build removed (0 bytes)"));
   // a halted build cleans up too
   const halt = await run(happy({ script: { "role:fleet-coder:r1": { status: "needs_human", reason: "coder stuck" } } }), ARGS);
   assert.equal(halt.result.status, "needs_human");
-  assert.equal(halt.build.labels[halt.build.labels.length - 1], "infra:build-clean");
+  assert.equal(lastBeforeRelease(halt.build.labels), "infra:build-clean");
 });
 
 test("5.0.6 2019: each role file that runs commands names test_env_prefix", () => {

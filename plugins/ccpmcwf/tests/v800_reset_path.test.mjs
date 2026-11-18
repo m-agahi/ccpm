@@ -111,11 +111,13 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
   assert.equal(out.result.status, "ok", out.result.reason);
   // 8.0.0 (#62 B2): - 2 plan calls (the surfaces step), - 1 build call (infra:surfaces:r1)
   // 8.0.0 (G3): + 1 plan call (infra:held-out:write)
-  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
+  // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
+  assert.equal(out.plan.calls.length, 23, out.plan.labels.join(", "));
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
-  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 63);
+  // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
+  assert.equal(out.build.calls.length, 66, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 64);
   for (const [site] of MERGED) {
     assert.ok(!out.build.labels.includes("infra:path-check:" + site), site + ": no standalone check");
     const c = call(out.build, "infra:build-reset:" + site);

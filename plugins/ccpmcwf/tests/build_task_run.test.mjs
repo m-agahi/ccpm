@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.0\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.0\.1 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1207,7 +1207,7 @@ test("a role agent that dies is retried once on its fallback tier", async () => 
   assert.equal(call(out, "role:fleet-test-writer:AC1:r1:fallback").opts.model, "opus");
   assert.ok(out.logs.some((l) => /fallback/.test(l) && /plan-audit/.test(l)));
   // caps reset per run: each run counts its own dispatches
-  assert.equal(out.planResult.agents, out.plan.calls.length, "retries count toward the agent cap");
+  assert.equal(out.planResult.agents, countedCalls(out.plan.calls).length, "retries count toward the agent cap");
   assert.equal(out.result.agents, countedCalls(out.build.calls).length, "retries count toward the agent cap");
 });
 
@@ -1791,6 +1791,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.deepEqual(out.labels, [
     "preflight",
     "intake",
+    // 8.0.1 (#76): the task's run lock, before the branch slug
+    "infra:run-lock",
     // 7.3.0 (#43)
     "infra:fleet-branch",
     "workspace",
@@ -1816,6 +1818,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:path-check:commit-plan",
     "infra:commit-plan",
     "infra:verify-plan-commit",
+    // 8.0.1 (#76): main's finally releases the lock
+    "infra:run-lock:release",
   ]);
   const cp = call(out, "infra:commit-plan").prompt;
   assert.match(cp, /LOCALLY/);
@@ -2081,7 +2085,7 @@ test("2.1.4 a missing plan ref stops after the load, before any role", async () 
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
 });
 
 test("2.1.4 a plan ref that targets another commit stops after the load, before any role", async () => {
@@ -2092,7 +2096,7 @@ test("2.1.4 a plan ref that targets another commit stops after the load, before 
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
   // a ref that is not an annotated tag (a plain commit ref) is refused too
   const t = happy();
   const tiny2 = await planRefFor(t);
@@ -2108,7 +2112,7 @@ test("a wrong ref_sha256 stops after the load, before any role", async () => {
   const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: "e".repeat(64) }));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
 });
 
 test("a tampered plan ref tag message stops before any role", async () => {
@@ -2126,7 +2130,7 @@ test("a tampered plan ref tag message stops before any role", async () => {
   out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[PC]) }));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*seal mismatch/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
 });
 
 test("a plan ref for another branch or repo stops before any role", async () => {
@@ -2136,7 +2140,7 @@ test("a plan ref for another branch or repo stops before any role", async () => 
     const out = await runOne(s, buildArgs({ ...tiny, ...over }));
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*does not match plan_ref/);
-    assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+    assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
   }
 });
 
@@ -2150,7 +2154,7 @@ test("a load step that copies the right sha256 but changed content stops", async
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
   // 7.3.0 (#47c): a part 0 with no part count is read once more before the stop
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref", "infra:load-ref:retry"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:load-ref:retry", "infra:run-lock:release"]);
 });
 
 test("a load step that returns content not matching its own sha256 stops", async () => {
@@ -2159,7 +2163,7 @@ test("a load step that returns content not matching its own sha256 stops", async
   s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/y42/plan", PC, s.__store[PC]), { sha256: "f".repeat(64) })] };
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:run-lock:release"]);
 });
 
 test("commit-plan: a plan hash that differs from the staged one fails", async () => {
@@ -2307,7 +2311,7 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 6), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "infra:policy"]);
+  assert.deepEqual(out.labels.slice(0, 7), ["preflight", "infra:run-lock", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "infra:policy"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -2491,7 +2495,8 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
         return Object.assign({}, x, { content: Array.isArray(ch) ? ch.join("") : null });
       });
     };
-    const ref1 = { task_id: "y42", note: "it's \"quoted\" — ünï", n: 1 };
+    // 8.0.1 (#76): each message names its doc's sha256 (plan_ref_write refuses another doc)
+    const ref1 = { plan_sha256: sha256("# plan\n"), task_id: "y42", note: "it's \"quoted\" — ünï", n: 1 };
     let r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref1))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const head = r.stdout.trim().split(" ")[0];
@@ -2515,7 +2520,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     assert.deepEqual(JSON.parse(e.content), ref1);
     // a re-plan: a new plan commit, a new plan ref; the old one is kept as plan-1
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan v2\n");
-    const ref2 = { task_id: "y42", n: 2 };
+    const ref2 = { plan_sha256: sha256("# plan v2\n"), task_id: "y42", n: 2 };
     r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref2))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const head2 = r.stdout.trim().split(" ")[0];
@@ -2534,7 +2539,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     assert.deepEqual(read().map((x) => x.name), ["refs/fleet/y42/plan", "refs/fleet/y42/plan-1"]);
     // same target, new message (an identical re-plan): the old value is kept as plan-2
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan v2\n");
-    const ref3 = { task_id: "y42", n: 3 };
+    const ref3 = { plan_sha256: sha256("# plan v2\n"), task_id: "y42", n: 3 };
     r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref3))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const by3 = Object.fromEntries(read().map((x) => [x.name, x]));
@@ -2700,6 +2705,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:replan-reset",
     // 5.0.6 (ledger 2019): the run's build dirs, at the end of every build run
     "infra:build-clean",
+    "infra:run-lock:release",
   ]);
   const rw = inputsOf(call(out, "infra:replan-worktree").prompt);
   assert.equal(rw.plan_commit, PC);
@@ -6317,7 +6323,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.0\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.0\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7016,7 +7022,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.0\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.0\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.0\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.0\.1 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8631,7 +8637,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = PROGRAM_BODIES;
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast", "base64", "secrets", "signal", "tokenize"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "calendar", "socket", "resource", "ast", "base64", "secrets", "signal", "tokenize"]);
   for (const [name, p] of progs) {
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
       for (const mod of m[1].split(",").map((x) => x.trim().split(" ")[0].split(".")[0]))
@@ -8728,7 +8734,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.0\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.0\.1/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

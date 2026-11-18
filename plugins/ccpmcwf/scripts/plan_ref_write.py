@@ -117,6 +117,13 @@ if not os.path.isfile(src):
     sys.exit('no plan doc at ' + src)
 with open(src, 'rb') as f:
     doc = f.read()
+# 8.0.1 (#76): the doc must be the one the sealed message names; nothing is written before this check
+try:
+    want = json.loads(msg.decode('utf-8')).get('plan_sha256')
+except (ValueError, AttributeError):
+    want = None
+if not isinstance(want, str) or hashlib.sha256(doc).hexdigest() != want:
+    sys.exit('the plan doc hashes ' + hashlib.sha256(doc).hexdigest() + ', not the message plan_sha256 ' + str(want)[:64] + '; nothing was sealed')
 # the bytes as they are (no filter), in a temporary index on plan_base
 blob = git('hash-object', '-w', '--no-filters', '--stdin', inp=doc)
 idx = os.path.join(scratch, 'plan-index-' + target)

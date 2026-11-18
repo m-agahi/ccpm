@@ -321,5 +321,118 @@ elif mode == 'retire' and len(sys.argv) == 4:
             os.rename(src, dest)
             moved = True
     emit({'moved': moved, 'args': [src, used]})
+elif mode in ('claim', 'release'):
+    # fleet 8.0.1 (#76): the per-task run lock <git-common-dir>/fleet/locks/<task id>.json.
+    # claim <repo> <task id> <nonce> <plan|build>: O_CREAT|O_EXCL|O_NOFOLLOW, 0600; the same nonce
+    # holds it again; a lock over 12 h old moves to .stale-<old>-<new> and is claimed once more.
+    # release <repo> <task id> <nonce>: unlinks the lock only when it holds this nonce.
+    # The pid and host are for a human only; no symlink is followed on the way.
+    import calendar, socket, subprocess, time
+    n_args = 6 if mode == 'claim' else 5
+    if len(sys.argv) != n_args:
+        sys.exit('usage: claim <repo> <task id> <nonce> <plan|build> | release <repo> <task id> <nonce>')
+    repo, task, nonce = sys.argv[2:5]
+    run_mode = sys.argv[5] if mode == 'claim' else None
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', task):
+        sys.exit('bad task id: ' + task)
+    if not re.fullmatch(r'[A-Za-z0-9_.:-]{6,64}', nonce):
+        sys.exit('bad nonce: ' + nonce)
+    if mode == 'claim' and run_mode not in ('plan', 'build'):
+        sys.exit('bad mode: ' + str(run_mode))
+    g = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', repo, 'rev-parse', '--git-common-dir'], capture_output=True)
+    if g.returncode != 0:
+        sys.exit('not a git repo: ' + repo + ': ' + g.stderr.decode('utf-8', 'replace')[-500:])
+    common = g.stdout.decode().strip()
+    common = common if os.path.isabs(common) else os.path.join(repo, common)
+    if os.path.islink(common) or not os.path.isdir(common):
+        sys.exit('refusing the git common dir ' + common)
+    d = common
+    for part in ('fleet', 'locks'):
+        d = os.path.join(d, part)
+        if os.path.islink(d):
+            sys.exit('refusing a symlink at ' + d)
+        if not os.path.lexists(d):
+            if mode == 'release':
+                break
+            try:
+                os.mkdir(d, 0o700)
+            except FileExistsError:
+                pass
+        if os.path.islink(d) or (os.path.lexists(d) and not os.path.isdir(d)):
+            sys.exit('refusing a symlink or file at ' + d)
+    lock = os.path.join(common, 'fleet', 'locks', task + '.json')
+    args = sys.argv[2:]
+    def holder():
+        # (fields or None, inode, age in seconds); a young unreadable lock is held (a claim mid-write)
+        try:
+            fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            sys.exit('refusing the lock ' + lock + ' (a symlink?): ' + str(e))
+        try:
+            st = os.fstat(fd)
+            data = os.read(fd, 4096) if st.st_size <= 4096 else b''
+        finally:
+            os.close(fd)
+        try:
+            j = json.loads(data.decode('utf-8'))
+            j = j if isinstance(j, dict) else None
+        except ValueError:
+            j = None
+        h = {k: (j.get(k) if j and isinstance(j.get(k), str) else None) for k in ('nonce', 'mode', 'started', 'pid', 'host')}
+        try:
+            t0 = calendar.timegm(time.strptime(h['started'], '%Y-%m-%dT%H:%M:%SZ'))
+        except (TypeError, ValueError):
+            t0 = st.st_mtime
+        return h, st.st_ino, time.time() - t0
+    if os.path.islink(lock):
+        sys.exit('refusing a symlink at ' + lock)
+    if mode == 'release':
+        h = holder()
+        out = {'released': False, 'absent': h is None, 'held_by': None, 'lock': lock, 'args': args}
+        if h and h[0]['nonce'] == nonce:
+            os.unlink(lock)
+            out['released'] = True
+        elif h:
+            out['held_by'] = h[0]
+        emit(out)
+        sys.exit(0)
+    def create():
+        try:
+            fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, 'w') as f:
+            json.dump({'nonce': nonce, 'mode': run_mode, 'started': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'pid': str(os.getpid()), 'host': socket.gethostname()}, f)
+        return True
+    out = {'claimed': False, 'again': False, 'stale': None, 'held_by': None, 'lock': lock, 'args': args}
+    if create():
+        out['claimed'] = True
+    else:
+        h = holder()
+        if h and h[0]['nonce'] == nonce:
+            out['claimed'] = out['again'] = True
+        elif h and h[2] > 12 * 3600:
+            moved = lock + '.stale-' + (h[0]['nonce'] if isinstance(h[0]['nonce'], str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', h[0]['nonce']) else 'unknown') + '-' + nonce
+            os.rename(lock, moved)
+            # another claimer may have renamed the stale lock first and created a live one: that one is moved back
+            if os.lstat(moved).st_ino != h[1]:
+                try:
+                    os.link(moved, lock)
+                    os.unlink(moved)
+                except FileExistsError:
+                    pass
+                out['held_by'] = (holder() or (None,))[0]
+            else:
+                out['stale'] = {'nonce': h[0]['nonce'], 'moved_to': moved}
+                out['claimed'] = create()
+                if not out['claimed']:
+                    out['held_by'] = (holder() or (None,))[0]
+        elif h:
+            out['held_by'] = h[0]
+        elif create():
+            out['claimed'] = True
+    emit(out)
 else:
-    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce>')

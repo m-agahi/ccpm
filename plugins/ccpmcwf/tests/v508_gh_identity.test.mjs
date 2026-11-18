@@ -272,7 +272,7 @@ test("5.0.8 review N6: no push for the build's repo stops the build at its start
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "role");
   assert.match(b.result.reason, /^build start: no GitHub command with push access to o\/r \(gh=false, gh-personal=false\)/);
-  assert.deepEqual(b.labels.filter((l) => !/^infra:(build-clean|db-down)/.test(l)), ["preflight", "workspace"]);
+  assert.deepEqual(b.labels.filter((l) => !/^infra:(build-clean|db-down|run-lock)/.test(l)), ["preflight", "workspace"]);
 });
 
 // workspace relays that the script cannot use: [name, mutation of gh_check, re-digest after it]
@@ -464,6 +464,6 @@ test("5.0.8 delta D1: a definite no-push (every installed candidate answered fal
     const b = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
     assert.equal(b.result.stop_gate, "role", JSON.stringify(tried));
     assert.match(b.result.reason, /^build start: no GitHub command with push access to o\/r/);
-    assert.deepEqual(b.labels.filter((l) => !/^infra:(build-clean|db-down)/.test(l)), ["preflight", "workspace"]);
+    assert.deepEqual(b.labels.filter((l) => !/^infra:(build-clean|db-down|run-lock)/.test(l)), ["preflight", "workspace"]);
   }
 });

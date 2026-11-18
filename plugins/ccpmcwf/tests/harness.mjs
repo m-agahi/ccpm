@@ -423,6 +423,8 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return parkedPartOut(PARKED_STORE.get(i.run) || "", i.part, [i.scratch, i.run, String(i.part)]);
     }
+    // 8.0.1 (#76): an unscripted run lock claim holds the lock; a release releases it
+    if (!(label in script) && /^infra:run-lock(:release)?$/.test(label)) return lockOut(prompt);
     // 7.3.0 (#43): unscripted fleet-branch reads find no fleet branch of the task
     if (!(label in script) && /^infra:fleet-branch$/.test(label)) {
       const i = inputsOf(prompt);
@@ -736,6 +738,7 @@ export async function runOne(script, args0) {
     src = GEN.withDispatchTable(GEN.withRoleTable(src, roleTable), disp);
   }
   CUR_ROLES.table = roleTable;
+  CUR_SCRIPT.s = script;
   const fn = compile(src);
   // a crashed run rethrows; its logs travel on the error (2.1.6)
   const crashed = (e) => {
@@ -962,8 +965,14 @@ export function roleTestEnv(key, extra) {
 }
 // the calls result.agents counts: the build-dir teardown runs after the
 // result is made (in main's finally, as the database teardown does)
+// 8.0.1 (#76): the last label before the run lock release (main's finally releases it last)
+export function lastBeforeRelease(labels) {
+  const l = labels.filter((x) => x !== "infra:run-lock:release");
+  return l[l.length - 1];
+}
 export function countedCalls(calls) {
-  return calls.filter((c) => c.label !== "infra:build-clean");
+  // 8.0.1 (#76): the run lock release runs after the result too
+  return calls.filter((c) => c.label !== "infra:build-clean" && c.label !== "infra:run-lock:release");
 }
 // 5.0.6 (ledger 2019): the emit-site check (v506_build_env and the
 // multi-round, auto and database scenarios run it).
@@ -1226,7 +1235,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.0.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.0.1/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1284,9 +1293,23 @@ function chunkWriteCmd(program, wt, target, json, outKey, extra = [], headKey = 
 // commit on HEAD, off the branch; it prints the plan commit and the tag object
 export function planRefWriteCmd(wt, taskId, json, planPath = "docs/plans/x.md") {
   const f = join(wt, planPath);
+  // 8.0.1 (#76): plan_ref_write seals only a doc that hashes to the message's plan_sha256. A reader
+  // fixture whose message names another sha (a stub PSHA, none) is written with plain git instead: the
+  // same plan commit on HEAD and tag object, no hook, no plan-N rotation; the doc leaves the worktree
+  let want = null;
+  try {
+    want = JSON.parse(json).plan_sha256;
+  } catch {}
+  const prep = "mkdir -p " + shq(dirname(f)) + " && { [ -f " + shq(f) + " ] || printf '# plan\\n' > " + shq(f) + "; } && base=$(git -C " + shq(wt) + " rev-parse HEAD) && ";
+  if (want === sha256(existsSync(f) ? readFileSync(f, "utf8") : "# plan\n")) return prep + chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha", ['"$base"', shq(planPath)], "plan_commit");
+  const g = "git -c core.hooksPath=/dev/null -C " + shq(wt) + " ";
+  const idx = join(dirname(wt), "raw-plan-index-" + process.pid + "-" + ++refWrites);
+  const ig = "GIT_INDEX_FILE=" + shq(idx) + " " + g;
+  const who = "GIT_AUTHOR_NAME=fleet GIT_AUTHOR_EMAIL=fleet@localhost GIT_COMMITTER_NAME=fleet GIT_COMMITTER_EMAIL=fleet@localhost ";
   return (
-    "mkdir -p " + shq(dirname(f)) + " && { [ -f " + shq(f) + " ] || printf '# plan\\n' > " + shq(f) + "; } && base=$(git -C " + shq(wt) + " rev-parse HEAD) && " +
-    chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha", ['"$base"', shq(planPath)], "plan_commit")
+    prep + "blob=$(" + g + "hash-object -w --no-filters " + shq(f) + ") && " + ig + "read-tree \"$base\" && " + ig + "update-index --add --cacheinfo \"100644,$blob," + planPath + "\" && tree=$(" + ig + "write-tree) && rm -f " + shq(idx) +
+    " && pc=$(" + who + g + "commit-tree \"$tree\" -p \"$base\" -m " + shq("plan(" + taskId + ")") + ") && tag=$(printf 'object %s\\ntype commit\\ntag fleet-plan\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n%s' \"$pc\" " + shq(json + "\n") + " | " + g + "mktag) && " +
+    g + "update-ref " + shq("refs/fleet/" + taskId + "/plan") + " \"$tag\" && rm -f " + shq(f) + " && echo \"$pc $tag\""
   );
 }
 export function stateWriteCmd(wt, stateRef, json) {
@@ -1404,6 +1427,9 @@ export const PROGRAM_LABELS = [
   // 7.3.0 (#42, #43): read lazily (the module imports while PROGRAM_KEYS lacks the entries)
   [/^infra:load-parked:p\d+/, [[null, "parked", PROGRAM_KEYS["parked:part"] || null]]],
   [/^infra:fleet-branch$/, [[null, "fleet_branch", PROGRAM_KEYS["fleet_branch"] || null]]],
+  // 8.0.1 (#76)
+  [/^infra:run-lock:release$/, [[null, "parked", PROGRAM_KEYS["parked:release"] || null]]],
+  [/^infra:run-lock$/, [[null, "parked", PROGRAM_KEYS["parked:claim"] || null]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],
@@ -1476,6 +1502,21 @@ function pick(o, keys) {
 // Gives each program output of a stub result its self-hash. A digest the stub
 // computed without one (a valid 3.x digest) is recomputed with it; a digest
 // that was wrong stays wrong; a missing one is computed.
+// 8.0.1 (#76): the run lock programs (parked.py claim|release) echo their args
+export function lockOut(prompt, over) {
+  const m = /parked\.py' '(claim|release)' '([^']*)' '([^']*)' '([^']*)'(?: '([^']*)')?/.exec(prompt);
+  const args = m[1] === "claim" ? [m[2], m[3], m[4], m[5]] : [m[2], m[3], m[4]];
+  const lock = m[2] + "/.git/fleet/locks/" + m[3] + ".json";
+  const base = m[1] === "claim" ? { claimed: true, again: false, stale: null, held_by: null, lock } : { released: true, absent: false, held_by: null, lock };
+  return Object.assign({ status: "ok", reason: m[1] === "claim" ? "claimed" : "released" }, base, over || {}, { args: (over && over.args) || args });
+}
+export const CUR_SCRIPT = { s: null };
+function stagedShaOf(label) {
+  const sfx = /^infra:format-plan(.*?)(:audit-fix(-[0-9]+)?)?$/.exec(label)[1];
+  const st = CUR_SCRIPT.s && CUR_SCRIPT.s["infra:stage-plan" + sfx];
+  const o = Array.isArray(st) ? st[0] : st;
+  return o && typeof o === "object" ? (o.plan_hash ? o.plan_hash.plan_sha256 : o.plan_sha256) : PSHA;
+}
 export function fillPrograms(label, r, prompt) {
   if (!r || typeof r !== "object") return r;
   const isPre = label === "preflight";
@@ -1501,6 +1542,8 @@ export function fillPrograms(label, r, prompt) {
     const i = inputsOf(prompt);
     r.dsn_check = { holds: false, lines: [], args: [i.worktree, i.plan_path] };
   }
+  // 8.0.1 (#76): plan_dsn hashes the doc the audit reads: the scenario's stage-plan sha (of the same suffix)
+  if (/^infra:format-plan/.test(label) && r.dsn_check && typeof r.dsn_check === "object" && !("plan_sha256" in r.dsn_check)) r.dsn_check.plan_sha256 = stagedShaOf(label);
   // 7.3.0 (#9): a format-plan stub with no format result: the plan-mode hooks passed with no change
   if (/^infra:format-plan/.test(label) && !("format" in r)) {
     const i = inputsOf(prompt);
