@@ -122,10 +122,11 @@ const SCENARIOS = {
 // 8.0.2 (#77): the preflight probe captures its stdout and stderr and prints probe_sha= last, and drops hash_lines= (the only change besides the version: checked with the probe command and FLEET_VERSION put back, every pin is 8.0.1's)
 // 8.1.0 (#75): the held-out runner role file (sandbox-run, store sandbox) and its schema enum move, the cover_diff, mutants and scratch_copy program pins move, the program table gains sandbox, and the version moves (probe unchanged)
 // 8.2.1 (#82): every relay checked against a program digest runs on sonnet first (the model is in the pin) and the version moves: all four pins move, no prompt text or call count changes
+// 8.2.3 (#85): format_files gains the digested key base_red (the format prompts name it, the program-output schema types it): the three build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "1d65fd0bbac50cc54aa4e480dae43501602e7255dcf9d0a0eb7b57dcb4633d96" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "971ff30c845710f6d4247f1c63947c831a6bc8bc35fb843a6060080238af1b28" },
-  "short path (one test writer)": { calls: 88, sha256: "d05e6dc74412fe63c5d55e073638b1540a7c387062592d3446a8da71877c6493" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "4174c2cadd5dec637ede7fa228b6dd4ef32f934dc7a64ddfb5a7f004663d1ec5" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "3c247764f17e13748e673da5d5bf8994348f9b85348772307a68c92af77b02e9" },
+  "short path (one test writer)": { calls: 88, sha256: "cdd68c3bbb067ea044f49494450b16a7ff571db738e163ae978172d3f8712cbf" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

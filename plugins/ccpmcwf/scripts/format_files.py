@@ -105,7 +105,7 @@ def done(**k):
     # hook_failures [[file, id]], a short printable head and the sha256 of their output
     # (no free text to copy), hook_timeout [id], unknown_hooks ['id: why']
     out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP],
-           'hook_failed': False, 'hook_failures': [], 'hook_head': '', 'hook_sha256': '', 'hook_timeout': [], 'fix_timeout': False, 'unknown_hooks': []}
+           'hook_failed': False, 'hook_failures': [], 'hook_head': '', 'hook_sha256': '', 'hook_timeout': [], 'fix_timeout': False, 'unknown_hooks': [], 'base_red': []}
     out.update(k)
     # 5.0.7: the changed paths that are frozen (the workflow stops on any)
     out['frozen_changed'] = sorted(set(out['changed']) & frozen)
@@ -126,6 +126,9 @@ LAST_FIX = []
 if not isinstance(CHECK, list) or any(not isinstance(x, str) or not x or x.startswith('-') for x in CHECK):
     sys.exit('select.check_hooks must be a list of hook ids')
 HOOK_IDS = {}
+WHOLE = {}
+# 8.2.3 (#85): plan mode: the whole-tree hook ids that fail at HEAD without the plan doc too
+BASE_RED = []
 # [(file, id)] of the listed hooks that failed (file '': the whole tree), their outputs,
 # [id] that timed out, ['id: why'] not runnable
 FAILED, OUTPUTS, TIMED_OUT, NOT_RUN = [], [], [], []
@@ -299,7 +302,7 @@ LOADER = (
     "            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):\n"
     "                sys.exit(7)\n"
     "            for x in a or []:\n                grow(len(x))\n"
-    "            out.append({'id': s(h, 'id'), 'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language'), 'stages': strs(h.get('stages'))})\n"
+    "            out.append({'id': s(h, 'id'), 'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language'), 'stages': strs(h.get('stages')), 'whole': h.get('pass_filenames') is False})\n"
     "print(json.dumps({'hooks': out, 'default_stages': strs(d.get('default_stages')) if isinstance(d, dict) else None}))\n"
 )
 LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings', 8: 'a stages or default_stages is not a list of strings'}
@@ -380,6 +383,9 @@ def hook_values():
                 if isinstance(h.get('id'), str):
                     # 6.2.2 review L1: the stages the hook runs at (its own, else default_stages; None: all)
                     HOOK_IDS.setdefault(h['id'], []).append(h.get('stages') if h.get('stages') is not None else ds)
+                    # 8.2.3 (#85): an id is whole-tree only when every hook of that id says pass_filenames: false
+                    # in the config (a remote hook's own manifest is not read: it counts as file-scoped)
+                    WHOLE[h['id']] = WHOLE.get(h['id'], True) and h.get('whole') is True
                 if isinstance(h.get('entry'), str):
                     vals.append(h['entry'])
                 for x in h.get('args') or []:
@@ -511,7 +517,7 @@ try:
         if rest < 1:
             return None
         try:
-            pr = subprocess.run(['pre-commit', 'run', hid, '--files'] + paths, cwd=cwd, capture_output=True, timeout=min(tmo, rest), env=cenv, preexec_fn=lift)
+            pr = subprocess.run(['pre-commit', 'run', hid] + (['--files'] + paths if paths is not None else ['--all-files']), cwd=cwd, capture_output=True, timeout=min(tmo, rest), env=cenv, preexec_fn=lift)
         except subprocess.TimeoutExpired:
             return None
         return pr.returncode, pr.stdout + pr.stderr
@@ -523,6 +529,10 @@ try:
         os.rmdir(iso)
         git(wt, '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', iso, 'HEAD')
         try:
+            # 8.2.3 (#85): f None: HEAD alone, the hook run with --all-files (a pass_filenames: false
+            # hook runs once with no file names when any file matches it; `--files` with no file skips it)
+            if f is None:
+                return check(hid, iso, None)
             dst = os.path.join(iso, f)
             if not os.path.realpath(dst).startswith(os.path.realpath(iso) + os.sep):
                 return 1, b''
@@ -534,9 +544,33 @@ try:
             shutil.rmtree(iso, ignore_errors=True)
     # fleet 7.3.0 (#9): plan mode (the plan doc before the plan commit): a last fixer run that
     # still exits non-zero on settled files is a failure of every hook in it (id '')
+    # 8.2.3 (#85): on the settled doc each pre-commit-stage hook id then runs alone. A failing
+    # file-scoped id is the doc's (named in hook_failures). A failing whole-tree id (pass_filenames:
+    # false) runs again at HEAD without the doc: red there too (exit codes only) is base_red, a
+    # warning; green there is the doc's. A timeout, a scratch change, or no failing id keeps the
+    # 7.3.0 failure of every hook (id ''). No hook is ever skipped.
     if PLAN_MODE and stable and LAST_FIX and LAST_FIX[0] != 0:
-        FAILED.extend([(f, '') for f in files])
-        OUTPUTS.append(LAST_FIX[1])
+        bad = []
+        for hid in sorted(i for i in HOOK_IDS if not why_not(i)):
+            res = check(hid, scratch, files)
+            if res is not None and res[0] == 0:
+                continue
+            base = isolated(hid, None) if res is not None and WHOLE.get(hid) else res
+            if base is None:
+                bad = None
+                break
+            if base is not res and base[0] != 0:
+                BASE_RED.append(hid)
+                continue
+            bad.append(hid)
+            OUTPUTS.append(b'[' + hid.encode() + b'] ' + res[1])
+        if bad is not None and delta() != prev:
+            bad, stable = None, False
+        if bad:
+            FAILED.extend([(f, h) for h in bad for f in files])
+        elif bad is None or not BASE_RED:
+            FAILED.extend([(f, '') for f in files])
+            OUTPUTS[:] = [LAST_FIX[1]]
     for hid in CHECK if stable else []:
         res = check(hid, scratch, files)
         if res is None:
@@ -584,4 +618,4 @@ allout = b'\n'.join(OUTPUTS) if FAILED else b''
 done(ran=not NOT_RUN, note=('pre-freeze hook id(s) cannot run: ' + '; '.join(NOT_RUN) if NOT_RUN else 'ran pre-commit run --files in a scratch checkout of HEAD') + (TIMING[0] if TIMED_OUT else ''),
      runs=runs, stable=stable, files=files, changed=changed,
      hook_failed=bool(FAILED), hook_failures=[[f, h] for f, h in FAILED], hook_head=head_text(allout), hook_sha256=hashlib.sha256(allout).hexdigest() if FAILED else '',
-     hook_timeout=sorted(set(TIMED_OUT)), fix_timeout=FIX_TIMEOUT[0], unknown_hooks=NOT_RUN)
+     hook_timeout=sorted(set(TIMED_OUT)), fix_timeout=FIX_TIMEOUT[0], unknown_hooks=NOT_RUN, base_red=BASE_RED)

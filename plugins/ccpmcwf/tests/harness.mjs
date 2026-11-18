@@ -632,7 +632,7 @@ export async function runOne(script, args0) {
     // frozen (a JSON list, or "@<files map>" read from the registry)
     if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed)) {
       // a stub digest over the 5.0.6 keys, or the 6.2.1 keys, covers the newer keys too
-      const HOOK_KEYS = ["hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"];
+      const HOOK_KEYS = ["hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks", "base_red"];
       const k621 = K("format_files").filter((k) => HOOK_KEYS.indexOf(k) < 0);
       const k6 = k621.filter((k) => k !== "frozen_changed" && k !== "frozen_map");
       const legacy = typeof r.digest === "string" && (r.digest === sha256(canon(pick(r, k6))) || r.digest === sha256(canon(pick(r, k621))));
@@ -645,7 +645,7 @@ export async function runOne(script, args0) {
       }
       // 6.2.2 (2107): a stub with no hook status passed every hook
       if (!("hook_failed" in r)) r.hook_failed = false;
-      for (const [k, v] of [["hook_failures", []], ["hook_head", ""], ["hook_sha256", ""], ["hook_timeout", []], ["fix_timeout", false]]) if (!(k in r)) r[k] = v;
+      for (const [k, v] of [["hook_failures", []], ["hook_head", ""], ["hook_sha256", ""], ["hook_timeout", []], ["fix_timeout", false], ["base_red", []]]) if (!(k in r)) r[k] = v;
       if (!("unknown_hooks" in r)) r.unknown_hooks = [];
       if (legacy) r.digest = sha256(canon(pick(r, K("format_files"))));
     }
@@ -1235,7 +1235,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.2.2/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.2.3/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1550,7 +1550,7 @@ export function fillPrograms(label, r, prompt) {
   // 7.3.0 (#9): a format-plan stub with no format result: the plan-mode hooks passed with no change
   if (/^infra:format-plan/.test(label) && !("format" in r)) {
     const i = inputsOf(prompt);
-    r.format = { ran: true, note: "ran pre-commit run --files in a scratch checkout of HEAD", runs: 1, stable: true, files: [i.plan_path], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: null, hook_failed: false, hook_failures: [], hook_head: "", hook_sha256: "", hook_timeout: [], fix_timeout: false, unknown_hooks: [] };
+    r.format = { ran: true, note: "ran pre-commit run --files in a scratch checkout of HEAD", runs: 1, stable: true, files: [i.plan_path], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: null, hook_failed: false, hook_failures: [], hook_head: "", hook_sha256: "", hook_timeout: [], fix_timeout: false, unknown_hooks: [], base_red: [] };
   }
   // 7.3.0 (#9): a workspace stub with no exclude relay added nothing; a commit-plan stub with a retire step moved the folder
   if (label === "workspace" && !("exclude" in r)) r.exclude = { added: [], exclude: "/r/.git/info/exclude", args: excludeArgsOf(prompt) };
