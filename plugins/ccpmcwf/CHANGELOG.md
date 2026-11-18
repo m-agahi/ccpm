@@ -1,5 +1,26 @@
 # Changelog
 
+## [8.2.3] - 2026-11-18
+
+ccpmcwf 8.2.3: yaadgaar #85, found in the smoke run wf_3d096689-009.
+
+### Fixed
+
+- #85: a whole-tree hook that is red at the plan base no longer stops the plan at `hooks`. The
+  smoke repo's `node --test` hook (`always_run`, `pass_filenames: false`) fails at HEAD on the
+  seeded bug the task fixes, and plan mode blamed the plan doc. When the last fixer run on the
+  settled plan doc still exits non-zero, `format_files.py` plan mode now runs each
+  pre-commit-stage hook id alone on the doc. A failing file-scoped id stops the plan as before,
+  and `hook_failures` now names it. A failing id whose config says `pass_filenames: false` runs
+  again in a clean HEAD checkout without the doc (`--all-files`): red there too (exit codes
+  only) goes into the new output field `base_red`, and the engine writes a warning gate line and
+  goes on; green there stops the plan. A timeout, a scratch change during the per-hook runs,
+  or a failure no single id explains keeps the 7.3.0 stop (every hook, id `''`). An unstable
+  fixer, a fixer timeout, refused paths and changes outside the doc stop as before. No hook is
+  skipped. `base_red` is a digested `format_files` key: a tampered or non-list relay is a
+  contract stop. A remote hook's own manifest is not read: unless the config sets
+  `pass_filenames: false`, the hook counts as file-scoped.
+
 ## [8.2.2] - 2026-11-18
 
 ccpmcwf 8.2.2: yaadgaar #83, found in the smoke run wf_cfc159c2-800.

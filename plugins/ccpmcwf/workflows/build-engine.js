@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.2";
+const FLEET_VERSION = "8.2.3";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1520,7 +1520,7 @@ const PROGRAM_SHA256 = {
 "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
 "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
 "fleet_scan": "2cd4e1171e82f47fa2c1356ba175398f33bc10ae65258720cf113b65cb78969f",
-"format_files": "a8a416d1d5566038a485428fcc82d792a90923578e1ba471f9c3a12a846324ba",
+"format_files": "bfb73fbc8a07e845c43d16e22c1e9de03f34d490a48c207572070068d7160576",
 "gate_tools": "328c31407cf9dff8099e1b5c60f3028db5a32d48b9eb344fa6b75c5dcd9a833c",
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
@@ -1710,7 +1710,7 @@ const PROGRAM_KEYS = {
 "exclude_add": ["added", "exclude", "args"],
 "purge": ["purged", "args"],
 "plan_hash": ["plan_sha256", "blob", "args"],
-"format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"],
+"format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks", "base_red"],
 "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
 "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
 "plan_dsn": ["holds", "lines", "plan_sha256", "args"],
@@ -1830,7 +1830,7 @@ plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
 fleet_branch: { slugs: STRS, owned: STRS, args: STRS, digest: STR },
 exclude_add: { added: STRS, exclude: STR, args: STRS, digest: STR },
 purge: { purged: INT, args: STRS, digest: STR },
-format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, fix_timeout: BOOL, unknown_hooks: STRS, digest: STR },
+format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, fix_timeout: BOOL, unknown_hooks: STRS, base_red: STRS, digest: STR },
 plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
 plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
 plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, plan_sha256: STR_OR_NULL, args: STRS, digest: STR },
@@ -5121,12 +5121,13 @@ const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktr
 if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
 const ff = fmt.format;
 requireProgram(ff, "format_files", fmtLabel);
-if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures))
+if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures) || !strsOf(ff.base_red))
 halt("failed", fmtLabel + ": the relayed format result does not match the program's digest", "contract");
 if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(ff.refused.join(", ")) + " (" + ff.note + ")", "hooks");
 if (ff.note === "pre-commit is not installed") halt("needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
 if (ff.fix_timeout || !ff.stable || ff.hook_failed)
 halt("needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
+if (ff.base_red.length) gate("warning: hooks red at the plan base, not caused by the plan doc: " + ff.base_red.join(", "));
 const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
 if (fmtOther.length)
 halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + logPath(fmtOther.join(", ")) + " (never committed; clean the worktree)", "scope");
