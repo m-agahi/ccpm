@@ -1,5 +1,20 @@
 # Changelog
 
+## [8.2.2] - 2026-11-18
+
+ccpmcwf 8.2.2: yaadgaar #83, found in the smoke run wf_cfc159c2-800.
+
+### Fixed
+
+- #83: a private repo on a free GitHub plan no longer stops every plan at `hooks`. Its
+  `rules/branches/<b>` read answers HTTP 403 "Upgrade to GitHub Pro ...": rulesets are off on
+  that plan, so none can exist. `ruleset_surface.py` now reports exactly that case (status 403
+  and the API `message` contains "Upgrade to GitHub Pro") in `unreadable`, keeps the local
+  floor, and leaves `error` null; the engine writes a warning gate line and adds `org-rulesets`
+  to `gates_not_run`, as for a repo with no GitHub host. The program decides from the real
+  status and body, and its digest covers the result. Every other 403, a 404, any other status
+  and the upgrade text anywhere else still set `error` (fail closed).
+
 ## [8.2.1] - 2026-11-18
 
 ccpmcwf 8.2.1: yaadgaar #81 and #82, found in the smoke run wf_9e6c3325-fc0.

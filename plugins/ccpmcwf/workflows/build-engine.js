@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.1";
+const FLEET_VERSION = "8.2.2";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1548,7 +1548,7 @@ const PROGRAM_SHA256 = {
 "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
-"ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
+"ruleset_surface": "571b48018e450c2044a65688a105395639793f6f1fd16da870e68e24e38ae103",
 "sandbox": "2975f754fd997782358d9d687136b6b3652f6b4b6a1263f43572f6dccfb6d16a",
 "scratch_copy": "7b2e4cdbec9ff611899cd195dea52455a62c4ce72e8daaed238770450b9bafdc",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
