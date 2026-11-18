@@ -1,0 +1,45 @@
+## Summary
+
+fleet 7.3.0: all workflow-reliability tasks in one release. Max ruled one PR, so he updates the plugin once. Plan: `docs/plans/fleet-reliability-batch-7.3.0-2026-11-17.md`. Full list in `plugins/fleet/CHANGELOG.md` (7.3.0).
+
+**Car 1, relay core**
+- #67, #59: a relay retry or a chunk rewrite round runs one model up (haiku → sonnet, sonnet → opus). ADR-1290.
+- #47: run-state and park writes over 8 chunks go to parallel writers. A load-ref relay failure on an intact ref says so. The part count is re-read in every path.
+
+**Car 2, intake, parked, workspace, resume**
+- #42: the parked draft is read in parts and gets a digest retry. #63: a gitignored, scratch or parked plan path is refused at intake.
+- #43: the branch slug is stable across plan runs. An existing branch is adopted only when this task's sealed plan ref names it. Long task ids are collision-free.
+- #39 part 1: in plan mode a reused branch with 0 own commits is fast-forwarded.
+- #53: under unattended, an unreadable parked prior is decided and logged. #52: a post-freeze resume accepts a dirty tree when the frozen maps still match. ADR-1292.
+
+**Car 3, ship and judge**
+- #50: judge guard type checks. #49: no silent review skip. #41: update-branch body routing. #32: an orch_scan error gets one retry, then a warning.
+- #33: PRs open ready. A draft is opened only with a plan `merge_after` or policy `pr_ready: false`. IaC and orchestrator PRs still never merge or rerun CI. ADR-1289.
+- Run-state steps after the PR opens are off the agent cap. ADR-1291.
+
+**Car 4, roles and shell forms**
+- #65: the intent judge files `bookkept`, and the script refuses any plan_diff entry that is neither a deviation nor bookkept.
+- #60 steps 1-2: gate-widening rules in the planner and plan-audit.
+- #54: `scratch_copy.py` (make/run/patch/remove).
+- #9: exclude, retire, purge and format-plan are now programs. Chunk files are written with the Write tool.
+- #40/#58: only call-shaped hits count toward the caller cap.
+
+**Review fixes:** two adversarial opus reviews, plus automated security reviews.
+- Judges no longer get Edit-tool instructions.
+- `scratch_copy` derives scratch itself and checks its copies, and the PATH shim leads the child PATH.
+- The scratch Write rule now covers only `scratch/chunks/*/*.b64`.
+- A draft orchestrator or IaC PR keeps the read-only CI watch. Warnings persist in the run-state.
+
+**Known limits**, filed or noted:
+- The sealed plan-ref seal is a self-hash, so a role with git write access could forge one. Filed as #69, HMAC seal.
+- The `scratch_copy run` argv denylist is bypassable (shell `+` options, value-taking options). It is defense in depth only. The primary guard is the agent PATH shim, placed first on the child PATH.
+
+**Tests:** 1804/1804 pass (`node --test 'plugins/fleet/tests/*.test.mjs'`). `build-workflow.mjs --check` and `gen.mjs --check` pass. The dist is 454,118 bytes of the 480,000 guard.
+
+**Split out, still open:** #61, #60 step 3, #39 part 2 (npm prefix), and #9 push redirect.
+
+## Closes
+
+yaadgaar (m-agahi/ccpm): #67, #59, #47, #42, #63, #43, #53, #52, #50, #49, #41, #32, #33, #65, #54, #40, #22 (covered by #42). #39, #60 and #9 are partly done.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

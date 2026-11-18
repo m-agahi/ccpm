@@ -1,0 +1,71 @@
+# fleet 8.0.0 (G7, ADR-1315): the pinned semgrep rule set of the security gate. sec_scan.py
+# carries this file's sha256 and refuses a copy that differs; it mounts the file read-only
+# into the audit-lab container. Offline only: no registry rule, no metrics.
+rules:
+  - id: fleet.python.shell-true
+    languages: [python]
+    severity: ERROR
+    message: a subprocess call with shell=True (command injection)
+    pattern: $F(..., shell=True, ...)
+  - id: fleet.python.eval-exec
+    languages: [python]
+    severity: ERROR
+    message: eval or exec runs code built at run time
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+  - id: fleet.python.yaml-load
+    languages: [python]
+    severity: ERROR
+    message: yaml.load without a safe loader builds arbitrary objects
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=CSafeLoader, ...)
+  - id: fleet.python.pickle-load
+    languages: [python]
+    severity: ERROR
+    message: unpickling data runs code
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: cPickle.loads(...)
+      - pattern: marshal.loads(...)
+      - pattern: dill.loads(...)
+  - id: fleet.python.sql-string
+    languages: [python]
+    severity: ERROR
+    message: SQL built from strings (use bound parameters)
+    patterns:
+      - pattern-either:
+          - pattern: $C.$M("..." % $X, ...)
+          - pattern: $C.$M("..." + $X, ...)
+          - pattern: $C.$M("...".format(...), ...)
+          - pattern: $C.$M(f"...", ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(execute|executemany|executescript|raw|query)$
+  - id: fleet.python.tls-off
+    languages: [python]
+    severity: ERROR
+    message: TLS certificate or host name checks are switched off
+    pattern-either:
+      - pattern: $F(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $X.check_hostname = False
+      - pattern: $X.verify_mode = ssl.CERT_NONE
+      - pattern: ssl.wrap_socket(..., cert_reqs=ssl.CERT_NONE, ...)
+  - id: fleet.js.eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: eval or new Function runs code built at run time
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: fleet.js.tls-off
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: TLS certificate checks are switched off
+    pattern: "{..., rejectUnauthorized: false, ...}"

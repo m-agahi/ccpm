@@ -1,0 +1,66 @@
+## Summary
+
+Fleet 7.1.0 (yaadgaar #37, L2145). The test counts in a fleet PR body now come only from a block that a script writes. Before, the pr-opener wrote its own counts. A fleet PR body said "147 passed" where the suite gave 133.
+
+**Manual fallback.** Workflow run wf_5a83f0a2-ea5 stopped. This PR builds the task by hand, tests first. It follows the newest planner draft (opus, 2026-11-16, fleet 7.0.1 base) and Max's rulings in task #37.
+
+- New program `plugins/fleet/scripts/pr_test_block.py` (labels `infra:pr-tests*`, sonnet). After every accepted pr-opener call, on every policy, it writes one block between `<!-- ccpm-fleet-tests -->` and `<!-- /ccpm-fleet-tests -->`. The block holds passed, failed, errors and total from the code judge's `suite_result`, and the plan's full-suite `test_cmd`. It never uses `suite_result.command`, because that text can carry a DSN. The first block is replaced and any other block is removed. An unpaired or forged marker stops with no edit.
+- The same program lists the test-count phrases in the rest of the body, the stats block included. Only the stats row form `<n> test rounds)` is dropped (ruling AC2). The list has no count cap. Past 16384 bytes it sets `claims_truncated`, and the run stops fail-closed with stop gate `role`, before the filter.
+- Supplied-text filter (ruling "Allow the filter"). A phrase found in text that the workflow gave the opener is ignored. That text is the tldr, the criterion text, `[manual]` examples, review notes, the intent reason and deviations, the unattended section and gates_not_run. Any other phrase gets one checked pr-opener rewrite (`role:fleet-pr-opener<sfx>:counts`, then `infra:pr-tests<sfx>:counts`). A phrase that stays stops the run `needs_human` (stop gate `role`) with the phrase quoted.
+- Ruling AC5 (a): a run that resumes at the review, write-back or stats step with a PR runs `infra:pr-tests:resume` once, before that step, with no rewrite.
+- Ruling AC4: the step passes digest id `pr_test_block` and its args to `infra()`, so `digestRetry` runs.
+- `JUDGE_SUITE` types `passed` as integer or null. In the `fleet-pr-opener` role, the opener writes no test counts, and "Test evidence" names only the test command.
+- Version 7.0.1 -> 7.1.0: `FLEET_VERSION`, marketplace.json, the root README, the CHANGELOG and the plugin README PR-tail section. Pins were regenerated with `gen.mjs` (41 programs) and the dist with `build-workflow.mjs` (426812 bytes).
+
+## Closes
+
+N/A — this is yaadgaar task #37 (migrated ledger L2145); there is no GitHub issue.
+
+## Test evidence
+
+- RED: before the implementation, `cd plugins/fleet && node --test tests/v710_*.test.mjs tests/v632_gh_rlimit.test.mjs` ran 104 tests: 15 pass, 89 fail. Every new test failed, including the new v632 `pr_test_block` rows.
+- GREEN: `cd plugins/fleet && node --test tests/*.test.mjs` ran 1631 tests: 1631 pass, 0 fail.
+- `node plugins/fleet/scripts/gen.mjs --check` passed (41 programs, 11 roles, 1 shared file). `python3 .github/scripts/check_versions.py` passed. In `.github/scripts`, `python3 -m unittest discover -s tests -t .` ran 143 tests, OK. Every pre-commit hook passed (prettier, the version, changelog and README hooks).
+
+### New tests (7 files, one test per plan example)
+
+- `v710_test_block_prog.test.mjs`: AC1 ex1-18 plus the property test.
+- `v710_test_claims_prog.test.mjs`: AC2 ex1-17 plus the property test. Covers the stats-region scan, the 16384-byte limit and `claims_truncated`.
+- `v710_block_text.test.mjs`: AC3 ex1-10 plus the property test.
+- `v710_block_flow.test.mjs`: AC4 ex1-15. Covers the digest-retry failure, the digest-retry success and the args retry.
+- `v710_claims_flow.test.mjs`: AC5 ex1-16. Covers the notes-path refusal of ruling AC5 (ex16) and the body_findings exclusion.
+- `v710_claims_resume.test.mjs`: AC5 ex17-21, the resume check.
+- `v710_opener_role.test.mjs`: AC6 ex1-3.
+
+### Edits to existing tests (re-pins only, plus the named exceptions)
+
+- `harness.mjs`: a default stub for unscripted `infra:pr-tests*`, a `PROGRAM_LABELS` row for `pr_test_block`, and `SCRIPTS_DIR` set to `fleet/7.1.0`.
+- `v507_digest_relays.test.mjs`: `WRITE_RETRY = ["format_files", "pr_test_block"]` and its comment (ruling "Allow pr_test_block"). The assertions are unchanged.
+- **Exception, outside the re-pin allowance:** `v632_gh_rlimit.test.mjs` gets a new `pr_test_block` row in `GH_PROGRAMS`. Plan AC1 ex19 calls for this row, and it is a new test case, not a re-pin.
+- Version pins 7.0.1 -> 7.1.0: `v4_s1`, `v4_s3`, `v5_roles`, `v600_s3`, `v403_schema_types`, `v622_fixes`, `build_task_run`.
+- Counts: `v4_s1` program count 40 -> 41 (two sites). `v4_s3` build calls 67 -> 68 (two sites) and agents 66 -> 67. `v5_roles` build calls 67 -> 68.
+- `v4_s3` `WANT` gets `[/^infra:pr-tests/, "sonnet"]`. `v402_file_sha` `SAMPLES` gets `"infra:pr-tests"`.
+- `v5010_prompt_snapshot`: 3 scenario pins (each +1 call, new digests). The probe pin is unchanged.
+- `v403_schema_types`: `READS` rows for `testsBlock`, `suppliedTexts`, `prTestsStep`, and for `state.testsResumed` and `state.review.nits` in `buildFromRef`.
+- `build_task_run`: an `ARRAY_SITES` row for `r.claims @ prTestsStep`.
+- `v633_judge_suite`: the expected `suite_result` properties gain `passed: INT_OR_NULL` (two sites).
+
+## Plan gaps vs the dispatch and rulings
+
+- Version 7.1.0 (dispatch), not the plan's 7.0.2. Because of that, the new test files are `v710_*`, not `v702_*`.
+- `prTestsStep` takes the block text as an extra argument: `prTestsStep(label, args, block, prUrl, supplied)`. The sha check then needs no base64 decode.
+- The plan names 5 module helpers. This PR adds 3 more: `testsHeaders`, `quoteClaims` and `stillClaims`.
+- Two `READS` rows the plan did not foresee: `state.testsResumed` and `state.review.nits` (OB2 re-pin).
+- The plan doc is not committed. It lives in the workflow's scratch dir.
+- `suppliedTexts` takes every string field of each review note, as the ruling says ("every string field"). That includes `id`, `category` and `severity`.
+
+## Risks (accepted)
+
+- **Laundering (accepted by Max, "Allow the filter").** A count phrase that the opener copies from a supplied string passes the check, even when it is false. For example, a review nit that itself says "147 passed". `body_findings` are kept out of the supplied strings for this reason.
+- The counts are only as true as the code judge's `suite_result`. No script parses the suite log (non-goal).
+- A PR template that holds a count phrase trips the check, and the one rewrite cannot remove it. The run then stops `needs_human`. No template in this repo does that.
+- P1/P2 miss some forms: "133 unit tests", "3 failures", "0 errors". They also flag some prose that is not a test count, such as "HTTP 502 failed". The one rewrite handles that prose.
+- A stop on the `:body-v<k>` or `:notes` path, or on the resume check, resumes at the review. The resume check then stops again until the counts are removed by hand.
+- The block shows the `test_cmd.env` values in the public PR body. This is by plan design, and the plan DSN precheck guards it.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
