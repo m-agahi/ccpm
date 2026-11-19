@@ -1,8 +1,10 @@
 // ccpmcwf (yaadgaar #95): the ruleset read collects the required checks of the
 // effective branch rules: each `workflows` rule entry (repo@ref:path and its
 // check names, "<workflow name> / <job name>", from the file the step already
-// reads) and each `required_status_checks` context. The planner gets them
-// before its first round; the plan ref seals them; the PR opener gets them.
+// reads) and each `required_status_checks` context. The read runs after the
+// planner's first round (8.3.2, yaadgaar #103: Max kept it there), so the checks
+// reach re-plan rounds, plan-audit and the PR opener, never the planner's first
+// round; the plan ref seals them.
 // No real GitHub API: a stub gh answers from a table.
 
 import { test } from "node:test";

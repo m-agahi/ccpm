@@ -1,5 +1,25 @@
 # Changelog
 
+## [8.3.2] - 2026-11-19
+
+ccpmcwf 8.3.2: follow-ups to 8.3.0 (yaadgaar `#101` and `#103`).
+
+### Fixed
+
+- yaadgaar `#101`: a re-plan round that relaxes round 0 (for example a criterion text shortened
+  with no finding naming it) is now a `warnings` entry in the run result (`gate`
+  `re-plan-relaxed`, the criterion, the round and the reason), not only a gate-log line. Under
+  confirm "ask" (and an unattended run that asks) the `confirm_reason` names it too. Max's
+  ruling: a warning, not a stop; every existing stop and the intent judge's check stay.
+- yaadgaar `#103`: the run lock's heartbeat is refreshed at each build-mode gate. Every
+  build-mode hasher step (one before and one after each judge) passes the lock's task id and
+  nonce to `hasher.py`, which runs the new `parked.py beat`. A beat rewrites only the heartbeat
+  of a lock that holds this nonce and never creates, moves or claims one. No agent is added.
+- yaadgaar `#103`: the header of `v830_ruleset_checks.test.mjs` no longer says the planner gets
+  the required checks before its first round; they reach re-plan rounds, plan-audit and the PR
+  opener (Max kept the ruleset read where it is).
+- The dist is 504246 bytes.
+
 ## [8.3.1] - 2026-11-19
 
 ccpmcwf 8.3.1: yaadgaar `#99` option (a), approved by Max on 2026-11-19.

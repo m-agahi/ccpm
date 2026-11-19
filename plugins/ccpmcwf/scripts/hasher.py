@@ -814,3 +814,11 @@ if len(text.encode('utf-8')) > RELAY_CAP:
     sys.exit('FLEET_HASHER_RELAY_CAP: the hasher output is over the %d-byte relay cap (%d bytes; largest: %s)' % (
         RELAY_CAP, len(text.encode('utf-8')), ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
 print(text)
+# 8.3.2 (yaadgaar #103): <task id> <nonce> after the scratch dir: the run lock's heartbeat at this
+# gate (parked.py beat; only a lock holding this nonce; best effort, the output above is unchanged)
+if len(sys.argv) > 6:
+    try:
+        subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parked.py'), 'beat', wt, sys.argv[5], sys.argv[6]],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        pass
