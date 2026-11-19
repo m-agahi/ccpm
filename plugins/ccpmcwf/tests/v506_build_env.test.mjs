@@ -320,7 +320,7 @@ test("5.0.6 2019: Rust: cargo in every writer, judge, the coder, the review and 
 
 test("5.0.6 2019: Rust, prefix dropped: a writer or a judge that builds in the worktree stops as in 5.0.5, and the text names the cause", async () => {
   for (const [who, gate, re] of [
-    ["role:fleet-test-writer:AC2:r1", "ownership", /^ignored path written: target\/debug\/log \(likely cause: a build or test command ran without the fleet build env, test_env_prefix, [^)]+\) in test round 1$/],
+    ["role:fleet-test-writer:AC2:r1", "ownership", /^ignored path written: target\/debug\/log \(likely cause: a build or test command ran without the fleet build env, test_env_prefix, [^)]+\) in test round 1; writers' output saved as refs\/fleet\/y42-add-thing\/stopped-n1-0000001-r1-tree, worktree reset to b0de1234567$/],
     ["role:fleet-test-judge:r1", "fingerprint", /^judge mutated worktree: fleet-test-judge \(role:fleet-test-judge:r1\) changed ignored path written: target\/debug\/log \(likely cause: [^)]+\); verdict discarded$/],
     ["role:fleet-code-judge:r1", "fingerprint", /changed ignored path written: target\/debug\/log \(likely cause: /],
   ]) {

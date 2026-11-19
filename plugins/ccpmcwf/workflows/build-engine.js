@@ -98,6 +98,7 @@ const INFRA_TIER = [
 ["infra:yaadgaar-", "sonnet"],
 ["infra:comments-", "sonnet"],
 ["infra:freeze-ref", "sonnet"],
+["infra:stop-save", "sonnet"],
 ["infra:hash-diff:", "sonnet"],
 ["infra:build-", "sonnet"],
 ["infra:gh-identity:", "sonnet"],
@@ -107,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.5";
+const FLEET_VERSION = "8.3.0";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1529,18 +1530,18 @@ const PROGRAM_SHA256 = {
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "mutants": "430e1bb6aa9de51d76b58bab9167a7ee6d8770ec75bf4573721456e233369b0c",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-"parked": "37138285a62f406863e2d0366fb6cf7bbfff9e118dc693ce048c3646e279a3ad",
+"parked": "2592cd86bc705f4ead3750c41ccc8cd28ffbc07e67d7c61172a6e760d8a34411",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
 "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
 "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
 "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
-"plan_ref": "bf07be4e67cb6d56ca9a7c1b926f99579c0f5329633babbf2ce22eb3aef6f594",
+"plan_ref": "283e77c031913136cc0ea9eeeea49db9d0897473dcc0e26721e638a8b2cb37a2",
 "plan_ref_write": "2b5b028ead902f1614cbff58e15c0e2bd07604ce3f4b6e606f8106676f4741a8",
 "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
-"pr_body_block": "399c9f1ec13ac3059d922b68e19220571ebfadea3cd944dea4ff0b007f053c1b",
+"pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
 "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
 "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
-"pr_test_block": "8d1f6242e056b00522afe1c83361d99168c623e4d34fcb7c8602e31982ea5888",
+"pr_test_block": "9f4047598d925a5d0fdfe19d465799aa1ae778165d94b6f3a688e22c908893ad",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
 "push": "c164956e3b5bf968f527688fb3125d7821d42b9a8843353186d9e8dfbc64166e",
@@ -1548,7 +1549,7 @@ const PROGRAM_SHA256 = {
 "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
-"ruleset_surface": "571b48018e450c2044a65688a105395639793f6f1fd16da870e68e24e38ae103",
+"ruleset_surface": "37fb467c0f9208ddd1b798cbba209cbf9732923bcd0bc25a407fbd2f3c46475b",
 "sandbox": "2975f754fd997782358d9d687136b6b3652f6b4b6a1263f43572f6dccfb6d16a",
 "scratch_copy": "7b2e4cdbec9ff611899cd195dea52455a62c4ce72e8daaed238770450b9bafdc",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
@@ -1570,13 +1571,13 @@ const ROLE_SHA256 = {
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
-"fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
+"fleet-pr-opener": "c5ae7c61bab867cd46006cdd1fe5601e798783f9e3d6579e58afcc37239d0b17",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
 "fleet-test-writer": "f5c1a19c1f324274aa40b26f7c06036c7cb9102286254b52c7388998d265835c",
 "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
-"plan-audit": "652f50e283b40d5d8e5ceac2c6d6112e5b9be43d9df5143254741fabd73ddca0",
+"plan-audit": "7a1073675c33fb7ecfe34793cefcf5f640279824753cbc31ae8a8cbb387fb17c",
 "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
-"scope-and-plan": "39b1707582cceae5e2e04024a52939eec49e2b5e6e44b8e110296856345fc59e"
+"scope-and-plan": "6088e8fd82b6c35bb1163b61c2362479d6eeebda3da113217d37fba26d5f21a9"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1611,7 +1612,7 @@ const got = p && typeof p.sha256 === "string" ? p.sha256 : null;
 const want = programSha(name);
 if (!p || p.name !== name || got !== want)
 return "did not run the shipped program " + name + " (got " + (p ? JSON.stringify(p.name === undefined ? null : p.name) + " " + (got || "no sha256") : "no program key") + ")";
-const fs = r.file_sha256;
+const fs = typeof r.file_sha256 === "string" ? r.file_sha256.replace(/^[\s"'\\]+|[\s"'\\]+$/g, "") : r.file_sha256;
 if (fs !== want) return "did not run the shipped program " + name + " (its file's sha256sum line reads " + JSON.stringify(fs === undefined ? null : fs) + ", not " + want + ")";
 return null;
 }
@@ -1730,7 +1731,7 @@ const PROGRAM_KEYS = {
 "push:push": ["push_result", "exit_code", "hook_tail", "tail", "attempts", "remote_head", "args"],
 "push:probe": ["access", "result", "exit_code", "auth_line", "args"],
 "hook_surface": ["surface", "make_paths", "error", "args"],
-"ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
+"ruleset_surface": ["surface", "sources", "read", "unreadable", "checks", "error", "args"],
 "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "now", "args"],
 "pr_state:ready": ["mode", "was_draft", "is_draft", "head", "state", "error", "args"],
 "pr_state:merge": ["mode", "merged", "auto_enabled", "method", "merge_sha", "blocked", "merge_state", "head", "branch_deleted", "error", "args"],
@@ -1900,6 +1901,7 @@ surface: STRS,
 sources: { type: "array", items: { type: "object", properties: { ruleset_id: { type: ["integer", "null"] }, name: STR_OR_NULL, source_type: STR_OR_NULL, path: STR, via: STR } } },
 read: STRS,
 unreadable: STRS,
+checks: { type: "array", items: { type: "object", properties: { type: STR, ruleset_id: { type: ["integer", "null"] }, workflow: STR_OR_NULL, check: STR_OR_NULL } } },
 error: STR_OR_NULL,
 args: STRS,
 digest: STR,
@@ -2179,7 +2181,7 @@ return out;
 }
 const CHUNK_CHARS = 4000;
 const MAX_REF_PARTS = 64;
-const REF_PART_CHARS = 32000;
+const REF_PART_CHARS = 8000;
 const MAX_CHUNK_RETRIES = 2;
 function chunked(message) {
 const b64 = base64Of(message);
@@ -2905,6 +2907,19 @@ inputsLine(inputs) +
 "Return {status, reason, ref_target}."
 );
 }
+function stopSavePrompt(i) {
+const g = "git -C " + shQuote(i.main_worktree) + " ";
+const gh = g + "-c core.hooksPath=/dev/null ";
+return (
+INFRA_STEP + "save the test writers' output under a ref, then clean the worktree. Only as written; never push, commit or delete.\n" +
+inputsLine(i) +
+"1. `" + g + "rev-parse HEAD` must print <expected_head> and this command must print <expected_tree>; else needs_human:\n" + treeCmd(i.main_worktree) + "\n" +
+"2. `" + gh + "update-ref " + i.ref + " " + i.expected_tree + " \"\"` (it fails if the ref exists: then needs_human). ref_target = `" + g + "rev-parse " + i.ref + "`.\n" +
+"3. Only if ref_target is <expected_tree>: `" + gh + "reset -q --hard HEAD`, then `" + g + "clean -fdq` (never -x).\n" +
+"4. clean = `" + g + "status --porcelain` prints nothing; head = `" + g + "rev-parse HEAD`.\n" +
+"Return {status, reason, ref_target, head, clean}."
+);
+}
 function replanResetPrompt(inputs) {
 return (
 INFRA_STEP + "move the fleet branch to the re-approved plan. This is the ONLY step that may reset a branch or clean the worktree, and only as written here. Never push, never delete a branch, never `git commit`.\n" +
@@ -2944,7 +2959,7 @@ const BUILD_ENV_ROWS = Object.freeze([
 ]);
 const BUILD_ENV_NOTE =
 "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
-") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run for the roles that write code, another for the gates). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there. Paste it literally, never in a shell variable (zsh: exit 127, not a red test).";
+") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run for the roles that write code, another for the gates). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it (a nested $(...) needs its own) writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there. Paste it literally, never in a shell variable (zsh: exit 127, not a red test).";
 function buildDirOf(key) {
 return state.buildScratch + "/build/" + safeName(state.nonce) + "/" + key;
 }
@@ -2958,7 +2973,15 @@ return "env " + hookEnvPrefix(env);
 }
 function roleEnv(consumer, key, x) {
 const e = Object.assign(testEnvFor(consumer, key), x);
+return Object.assign(uvTestCmd(consumer, e), envOf(e));
+}
+function envOf(e) {
 return { test_env: e, test_env_prefix: envPrefix(e), test_env_note: testEnvNote() + " " + BUILD_ENV_NOTE };
+}
+function uvTestCmd(consumer, e) {
+const tc = state.testCmd;
+if (consumer === "hrun" || !tc || !/^uv\s/.test(String(tc.command).trim())) return {};
+return { test_cmd: Object.assign({}, tc, { command: "env " + hookEnvPrefix({ UV_PROJECT_ENVIRONMENT: e.UV_PROJECT_ENVIRONMENT, UV_CACHE_DIR: e.UV_CACHE_DIR }) + String(tc.command).trim() }) };
 }
 function buildDirPrompt(inputs) {
 const mode = inputs.args[0];
@@ -3328,6 +3351,7 @@ repo: null,
 pathChecks: 0,
 buildResets: 0,
 buildScratch: null,
+testCmd: null,
 scriptsDir: null,
 rolesDir: null,
 ledgerTools: [],
@@ -3402,9 +3426,10 @@ if (!hit) halt("failed", "no INFRA_TIER entry for agent label " + label);
 return hit[1];
 }
 const REWRITE_RE = /^infra:(plan|state|park)-chunks.*:r[1-9][0-9]*w[0-9]+$/;
+const LOAD_RETRY_RE = /^infra:load-(ref|parked)\b.*:retry$/;
 function relayModel(label) {
 const m = infraModel(label);
-return RETRY_RE.test(label) || REWRITE_RE.test(label) ? RETRY_UP[m] : m;
+return RETRY_RE.test(label) || REWRITE_RE.test(label) || LOAD_RETRY_RE.test(label) ? RETRY_UP[m] : m;
 }
 const TOK = {};
 let tokAt = null;
@@ -3463,11 +3488,13 @@ if (!opts || !(opts.digest || opts.nested) || RETRY_RE.test(label)) return r;
 const dm = !!opts.digest && digestOnlyMiss(r, opts.digest);
 const am = !dm && ((Array.isArray(opts.args) && !!r && r.status === "ok" && relayDigestOk(r, progKeys(opts.digest), opts.digest.split(":")[0]) && canonical(r.args) !== canonical(opts.args)) || nestedArgsMiss(r, opts.nested));
 const nm = !dm && !am ? nestedMiss(label, r, opts.nested) : null;
-if (!dm && !am && !nm) return r;
+const pg = r && r.program;
+const pm = !dm && !am && !nm && /^hasher(:base)?$/.test(opts.digest) && !!pg && r.status === "ok" && pg.name === "hasher" && pg.sha256 === programSha("hasher") && programProblem(r, "hasher");
+if (!dm && !am && !nm && !pm) return r;
 if (again === softDispatch && capped() + 1 > MAX_AGENTS) return r;
-const sfx = dm || nm ? DIGEST_RETRY : ARGS_RETRY;
-gate(label + ": " + (dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ") on " + relayModel(label + sfx));
-return again(label + sfx, prompt + (dm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
+const sfx = dm || nm || pm ? DIGEST_RETRY : ARGS_RETRY;
+gate(label + ": " + (pm ? pm : dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ") on " + relayModel(label + sfx));
+return again(label + sfx, prompt + (dm || pm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
 }
 function nestedArgsMiss(r, nested) {
 return !!nested && !!r && r.status === "ok" && nested.some(([slot, name, args]) => r[slot] && relayDigestOk(r[slot], progKeys(name), name) && canonical(r[slot].args) !== canonical(args));
@@ -3885,8 +3912,23 @@ const ok = !!g && typeof g === "object" && canonical(g.args) === canonical([repo
 strsOf(g.languages) && !!g.matrix && typeof g.matrix === "object" && g.languages.every((l) => !!g.matrix[l] && typeof g.matrix[l] === "object") && !!g.container && typeof g.container === "object";
 state.gateTools = ok ? g : null;
 if (!ok) return gate("gate census unusable (no digest-checked gate_tools): no gate tool available");
-for (const l of g.languages) gate("gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) => k + " " + g.matrix[l][k]).join(", "));
+for (const l of g.languages) gate(censusLine(g, l));
 gate("gate census security: " + (g.container.present === true ? g.container.runtime + " " + AUDIT_IMAGE : "not available: " + g.container.reason));
+}
+function censusLine(g, l) {
+return "gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) => k + " " + g.matrix[l][k]).join(", ");
+}
+const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
+const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
+const REQ_NEG_RE = /\b(?:not|no|never|without|optional)\b|n't\b/i;
+function unsupportedRequired(text) {
+const g = state.gateTools;
+if (!g || !g.languages.length) return null;
+const sents = String(text).split(/(?<=[.!?;])\s+|\n+/).filter((x) => REQ_WORD_RE.test(x) && !REQ_NEG_RE.test(x));
+for (const [k, re] of REQ_GATES)
+if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
+return "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run";
+return null;
 }
 function gatePrompt(slots) {
 return (
@@ -4055,7 +4097,7 @@ requireProgram(r, "parked", "infra:run-lock");
 if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
 if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("failed", "infra:run-lock: relay off its digest or args");
 const h = r.held_by || {};
-if (!r.claimed) halt("needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); if its session is dead, delete " + r.lock);
+if (!r.claimed) halt("needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); a closed session does not end a run: check /workflows (or the run's task output) for run " + h.nonce + " before you delete " + r.lock);
 gate("run lock " + r.lock + " claimed" + (r.stale ? ", stale one moved" : ""));
 }
 async function lockRelease() {
@@ -4389,6 +4431,26 @@ if (!c) out.push("criterion " + c0.id + " dropped");
 else if (c.text.length < String(c0.text || "").length && !named[c0.id]) out.push("criterion " + c0.id + " text shortened with no finding naming it");
 }
 return out;
+}
+function keptSymbols(prior, plan) {
+const raw = plan.changed_symbols;
+const aa = plan.allowed_additions && Array.isArray(plan.allowed_additions.symbols) ? plan.allowed_additions.symbols : [];
+const iface = [].concat(...aa.map((e) => (typeof e === "string" && e.split(".").every((p) => SYMBOL_RE.test(p)) ? e.split(".") : [])));
+const fs = Array.isArray(prior.findings) ? prior.findings.filter((f) => f && typeof f === "object") : [];
+const top = Math.max(-1, ...fs.map((f) => (typeof f.round === "number" ? f.round : -1)));
+const last = /(^|: )plan-audit verdict /.test(String(prior.reason)) ? fs.filter((f) => f.round === top) : [];
+const word = (x, t) => typeof t === "string" && new RegExp("(^|[^A-Za-z0-9_])" + x + "(?![A-Za-z0-9_])").test(t);
+const kept = [];
+for (const x of Array.isArray(prior.symbols) ? prior.symbols : []) {
+if (raw.some((e) => e && e.symbol === x)) continue;
+const e = (Array.isArray(prior.changed_symbols) ? prior.changed_symbols : []).find((m) => m && m.symbol === x);
+const inIface = iface.indexOf(x) >= 0;
+if (!inIface && !(e && last.some((f) => f.symbol === x || word(x, f.finding)))) continue;
+if (e) raw.push(e);
+kept.push(x);
+gate("changed_symbols kept " + x + ": " + (inIface ? "the plan interface" : "a latest plan-audit finding") + " names it; " + (e ? "its earlier map entry is put back" : "no earlier map entry (a new symbol), not counted as dropped"));
+}
+return kept;
 }
 function priorRoundView(prior) {
 if (!prior) return null;
@@ -4930,7 +4992,10 @@ if (canonical(r.args) !== canonical(args)) halt("failed", label + ": the program
 if (r.error !== null) hookReadStop(r.error);
 for (const u of r.unreadable) gate("warning: " + u);
 const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
-return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
+const str = (x) => (typeof x === "string" ? logPath(x).slice(0, 200) : null);
+const checks = (Array.isArray(r.checks) ? r.checks : []).filter((c) => c && typeof c === "object").map((c) => ({ workflow: str(c.workflow), check: str(c.check) }));
+if (checks.length) gate("ruleset required checks: " + checks.map((c) => (c.check || "(check name not read)") + (c.workflow ? " (" + c.workflow + ")" : "")).join(", "));
+return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String), checks };
 }
 async function prConvention(label, worktree, slug, defaultBranch, got) {
 const args = ghArgs(worktree, slug, defaultBranch);
@@ -4951,6 +5016,7 @@ return Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface, conve
 function sealedRs(x) {
 return x && typeof x === "object" && ["surface", "sources", "read", "unreadable"].every((k) => Array.isArray(x[k])) ? x : null;
 }
+const rcOf = (ref) => ((sealedRs(ref.plan_facts.ruleset_surface) || {}).checks || []);
 function rulesetGaps(rs) {
 return rs && rs.unreadable.length ? [{ gate: "org-rulesets", reason: rs.unreadable.join("; ") }] : [];
 }
@@ -5003,6 +5069,7 @@ mode: "commit=false",
 }, dbInputs("plan"));
 if (ctx.priorDraft) plannerIn.prior_draft = ctx.priorDraft;
 if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
+if (ctx.planRs && ctx.planRs.checks.length) plannerIn.required_checks = ctx.planRs.checks;
 const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
 if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
 halt("failed", "scope-and-plan returned no plan_path/criteria");
@@ -5039,11 +5106,12 @@ const conf = confusableFindings(criteria);
 if (conf.length) return planFindingsStop(ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
 if (!Array.isArray(plan.changed_symbols))
 halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
+const kept = prior ? keptSymbols(prior, plan) : [];
 const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
 if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
 if (prior) {
 const now = cs.clean.map((x) => x.symbol);
-const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
+const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0 && kept.indexOf(x) < 0);
 if (dropped.length)
 return planFindingsStop(ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
 }
@@ -5091,6 +5159,8 @@ plan.new_behaviour +
 " -> " +
 (wouldBeShort ? "short (one test writer for every criterion, at most " + MAX_SHORT_TEST_ROUNDS + " test rounds; every gate runs)" : "full"),
 );
+const early = pathFenceProblems(planScopePaths(planFacts, criteria)).filter((x) => /: secret-like path$/.test(x));
+if (early.length) halt("needs_human", "scope check failed: " + early.join("; "), "scope");
 const pnt = npmTargetOf(plan.test_cmd.command);
 const pxt = /^npx$/.test(String(plan.test_cmd.command || "").trim().split(/[ \t]+/)[0]) ? "pkg:package.json" : null;
 const pst = pnt ? "pkg:scripts." + pnt.slice(4) : null;
@@ -5105,6 +5175,7 @@ surfL,
 );
 const planHs = await hookSurface(surfL + " hook_surface", ctx.common.worktree, "HEAD", planT, "Plan", planGot);
 const planRs = await rulesetSurface(surfL + " ruleset_surface", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan", planGot);
+ctx.planRs = planRs;
 hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
 if ((pnt && !planHs.make_paths[pst]) || (pxt && !planHs.make_paths[pxt])) planGot.settle();
 if (pnt && !planHs.make_paths[pst])
@@ -5161,7 +5232,7 @@ base_ref: ctx.baseRef,
 mode: "writeback=false",
 caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
 prior_round: priorRoundView(prior),
-}, aEnv),
+}, planRs.checks.length ? { required_checks: planRs.checks } : {}, aEnv),
 "Plan",
 ),
 );
@@ -5465,6 +5536,14 @@ if (base.indexOf(".env") === 0 || base.indexOf("secret") >= 0 || /\.(pem|key)$/.
 return "secret-like path";
 return null;
 }
+function pathFenceProblems(paths) {
+const out = [];
+for (const p of paths) {
+const why = fencePathProblem(p);
+if (why) out.push("path " + JSON.stringify(p) + ": " + why);
+}
+return out;
+}
 function scopeProblems(ctx) {
 const out = [];
 const paths = [];
@@ -5472,10 +5551,7 @@ for (const c of ctx.criteria) for (const f of c.test_files) paths.push(f);
 const aa = ctx.planFacts.allowed_additions;
 if (aa && Array.isArray(aa.files)) for (const f of aa.files) if (typeof f === "string") paths.push(f);
 for (const o of ctx.planFacts.repo_obligations || []) for (const f of o.files || []) if (typeof f === "string") paths.push(f);
-for (const p of paths) {
-const why = fencePathProblem(p);
-if (why) out.push("path " + JSON.stringify(p) + ": " + why);
-}
+out.push(...pathFenceProblems(paths));
 for (const c of ctx.planFacts.commands || [])
 if (FENCE_COMMAND_RE.test(String(c.command || ""))) out.push("command " + JSON.stringify(c.command) + " names kubectl, helm or an IaC tool");
 if (!ctx.branch || ctx.branch === ctx.defaultBranch) out.push("target branch " + JSON.stringify(ctx.branch) + " is the default branch");
@@ -5595,10 +5671,10 @@ const sfx = ctx.sfx || "";
 const ad = ledgerAdapter(null, ctx.brief.sources, state.ledgerTools).adapter;
 const ledger = ad === "yaadgaar" ? ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0) : null;
 await pathRecheck("intent" + sfx, "Auto-confirm");
-const jr = await judged(
+const ask = (tag, extra) => judged(
 "fleet-intent-judge",
-"role:fleet-intent-judge" + sfx,
-"intent" + sfx,
+"role:fleet-intent-judge" + sfx + tag,
+"intent" + sfx + tag,
 Object.assign({}, ctx.common, {
 brief: ctx.brief,
 ledger_task: ledger ? { ref: ledger.ref, body: ledger.body } : null,
@@ -5612,14 +5688,14 @@ commands: ctx.planFacts.commands,
 changed_symbols: ctx.planFacts.changed_symbols,
 change_kind: ctx.planFacts.change_kind === undefined ? null : ctx.planFacts.change_kind,
 new_behaviour: ctx.planFacts.new_behaviour === undefined ? null : ctx.planFacts.new_behaviour,
-}, ctx.relaxed && ctx.relaxed.length ? { relaxed: ctx.relaxed } : {}),
+}, ctx.relaxed && ctx.relaxed.length ? { relaxed: ctx.relaxed } : {}, extra),
 ctx.mainWt,
 "Auto-confirm",
 null,
 ctx.files,
-{ allowNotOk: true, preLabel: "hasher:pre-intent" + sfx },
+{ allowNotOk: true, preLabel: "hasher:pre-intent" + sfx + tag },
 );
-const r = jr.r;
+const check = (r) => {
 const intent = stripHeldOut({
 status: r.status,
 verdict: r.verdict || null,
@@ -5628,12 +5704,24 @@ deviations: Array.isArray(r.deviations) ? r.deviations : [],
 coverage: r.coverage || null,
 classification: r.classification && typeof r.classification === "object" ? r.classification : null,
 });
+const g1 = intentProblems(r, ctx.planDiff);
+for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
+return { intent, g1 };
+};
+let { intent, g1 } = check((await ask("", {})).r);
+const unfiled = g1.filter((p) => /^plan_diff entry ".* is neither a deviation nor bookkept$/.test(p));
+if (unfiled.length && unfiled.length === g1.length) {
+gate("auto-confirm: re-asking the intent judge: " + unfiled.length + " unfiled plan_diff entry(s)");
+reserve(3, "the intent re-ask");
+({ intent, g1 } = check((await ask(":reask", {
+unfiled_plan_diff: unfiled.map((p) => JSON.parse(p.slice(16, -36))),
+reask: "Your answer left each unfiled_plan_diff entry out of deviations[].item and bookkept, or changed its text. Answer again in full, each plan_diff entry copied exactly.",
+})).r));
+}
 const fail = (failedCheck, reasons) => {
 gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
 return { ok: false, failedCheck, reasons, intent };
 };
-const g1 = intentProblems(r, ctx.planDiff);
-for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
 if (g1.length) return fail("intent", g1);
 gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");
 const shape = commandShapeProblems(ctx.planFacts.commands);
@@ -5713,6 +5801,8 @@ if (problem) halt("needs_human", "intake: " + problem);
 const brief = cleanBrief(it.brief);
 const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
 if (lp) halt("needs_human", "intake: " + lp);
+const ug = unsupportedRequired([brief.title, brief.description].concat(brief.sources.map((x) => x.body)).join("\n"));
+if (ug) halt("needs_human", "intake: " + ug, "gates");
 const names = namesFor(brief, raw);
 if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
 await lockClaim(brief.repo, names.taskId, "Intake");
@@ -6010,8 +6100,8 @@ const rows = [
 if (c.ci) rows.push(["CI", c.ci.verdict + " (" + c.ci.fixRounds + " CI-fix rounds, waited " + fmtDur(c.ci.waitS) + ")"]);
 if (c.tokens) rows.push(["output tokens (approx.)", Object.keys(c.tokens).sort().map((m) => m + " " + fmtTok(c.tokens[m])).join(", ") || "none"]);
 return (
-"<details><summary>Built with ccpm fleet " + FLEET_VERSION + "</summary>\n\n| metric | value |\n|---|---|\n" + rows.map((r) => "| " + r[0] + " | " + r[1] + " |").join("\n") +
-"\n\nBuilt by the [ccpm](https://github.com/m-agahi/ccpm) fleet; input tokens are not available to the workflow.\n\n</details>\n" + STATS_END
+"<details><summary>Built with ccpmcwf " + FLEET_VERSION + "</summary>\n\n| metric | value |\n|---|---|\n" + rows.map((r) => "| " + r[0] + " | " + r[1] + " |").join("\n") +
+"\n\nBuilt by [ccpmcwf](https://github.com/m-agahi/ccpm) (Claude Code marketplace coding workflow); input tokens are not available to the workflow.\n\n</details>\n" + STATS_END
 );
 }
 function prStatsPrompt(inputs) {
@@ -6028,7 +6118,7 @@ const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " pa
 const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
 if (toks[toks.length - 1] === "--") toks.pop();
 const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
-return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") + TESTS_END;
+return TESTS_START + "\n**Tests (measured by ccpmcwf):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") + TESTS_END;
 }
 function testsHeaders(bc, unattended) {
 return JSON.stringify(((bc && bc.required_sections) || []).concat(unattended ? [UNATT_HEAD] : []));
@@ -6107,7 +6197,7 @@ INFRA_STEP + "watch the CI checks of the fleet's own PR. READ ONLY: never rerun,
 );
 }
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
-function subjectsOf(pf, brief, slug, taskId) {
+function subjectsOf(pf, brief, slug, taskId, tldr) {
 const c = Object.assign({}, pf.conventions.title);
 c.types = (Array.isArray(c.types) ? c.types : []).filter((x) => COMPONENT_RE.test(String(x)));
 if (!c.types.length) c.types = CC_TYPES;
@@ -6115,7 +6205,7 @@ const j = brief.sources.find((x) => x.kind === "jira");
 const key = j && /^[A-Z][A-Z0-9]+-[0-9]+$/.test(String(j.ref).toUpperCase()) ? String(j.ref).toUpperCase() : "NOJIRA";
 const scope = c.style === "scoped-key" ? pf.component + ", " + key : pf.component;
 const head = (t) => (c.types.indexOf(t) >= 0 ? t : c.types.indexOf("chore") >= 0 ? "chore" : c.types[0]) + "(" + scope + "): ";
-let sl = "-" + slug + "-";
+let sl = "-" + (slugify(String(tldr || "").split("\n")[0].replace(/(^|\s)\/\S*/g, " "), 80) || slug) + "-";
 for (const x of [taskId].concat(brief.sources.map((y) => y.ref), brief.sources.map((y) => "l" + y.ref))) for (const k = slugify(x); k && sl.indexOf("-" + k + "-") >= 0; ) sl = sl.split("-" + k + "-").join("-");
 const main = (head(KIND_TYPE[pf.change_kind] || "feat") + (sl.replace(/^-+|-+$/g, "").replace(/-+/g, " ") || "update")).slice(0, 72).replace(/\s+$/, "");
 const fix = head("fix");
@@ -6198,7 +6288,7 @@ parts.push(r);
 }
 }
 const js = parts.map(joined);
-return { count, content: js.every((x) => x !== null) ? js.join("") : null };
+return { count, parts, content: js.every((x) => x !== null) ? js.join("") : null };
 };
 return { joined, partOk, countOf, readParts };
 }
@@ -6218,7 +6308,7 @@ const ep = planRefMetaProblem(entryOf(r), tiny.plan_commit, tiny.ref_sha256);
 if (ep) changed(ep);
 return r;
 };
-const { partOk, countOf, readParts } = partReader({
+const { joined, partOk, countOf, readParts } = partReader({
 prefix: "infra:load-ref",
 what: "the plan ref parts",
 load,
@@ -6242,6 +6332,11 @@ gate("infra:load-ref: the joined parts do not match ref_sha256; reading part 0 o
 const q0 = checked(await infra("infra:load-ref:retry", loadPrompt(0) + "\nThe parts of an earlier read did not join: run the command again and copy every value exactly, the part count included.", "Verify", JUDGE_AGENT), "infra:load-ref:retry");
 const n = countOf(q0);
 if (n !== null && n !== got.count && partOk(q0, 0)) got = await readParts(q0, ":c" + n);
+else if (partOk(q0, 0, got.count)) got.parts[0] = q0;
+for (let i = 1; i <= MAX_CHUNK_RETRIES && got.parts.some((r, k) => !partOk(r, k, got.count)); i++)
+for (let k = 0; k < got.count; k++)
+if (!partOk(got.parts[k], k, got.count)) got.parts[k] = checked(await load("infra:load-ref:p" + k + ":r" + i + ":retry", k), "infra:load-ref:p" + k + ":r" + i + ":retry");
+if (got.parts.every((r, k) => partOk(r, k, got.count))) got.content = got.parts.map(joined).join("");
 }
 content = got.content;
 }
@@ -6291,7 +6386,7 @@ const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref:
 const brief = cleanBrief(ref.brief);
 const names = { taskId: ref.task_id, slug: ref.slug };
 state.ownRefs = ownRefPrefixes(names, lay);
-const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id);
+const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id, ref.tldr);
 for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
 const history = {
 runs: (ref.history.runs || 0) + 1,
@@ -6353,6 +6448,7 @@ gate("verify: HEAD " + v.head + " descends from plan_base by " + (v.commits_sinc
 } else gate("verify: HEAD is plan_base " + planBase + "; plan hash matches at " + planBlob);
 const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
 state.buildScratch = lay.scratch;
+state.testCmd = ref.plan_facts.test_cmd;
 const planCtx = { plan_path: ref.plan_path, plan_blob: planBlob };
 const planFacts = {
 allowed_additions: ref.plan_facts.allowed_additions,
@@ -6579,6 +6675,7 @@ suite_result: suiteResult,
 gates_not_run: state.gatesNotRun,
 auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended_section: unattendedSection() } : {}),
+...(rcOf(ref).length ? { required_checks: rcOf(ref) } : {}),
 intent: intentForPr,
 review_notes: reviewNotes,
 draft: prDraft(),
@@ -7355,6 +7452,14 @@ requireOk("fleet-test-writer " + cid, r);
 writerOut[cid] = stripHeldOut(r);
 }
 }
+async function writerStop(n, post, msg, sg) {
+if (sg !== "ownership" || freezeTree !== null || aug) halt("needs_human", msg, sg);
+const fp = post.fingerprint;
+const ref = "refs/fleet/" + lay.key + "/stopped-" + safeName(state.nonce) + "-r" + n + "-tree";
+const r = await softDispatch("infra:stop-save:r" + n, stopSavePrompt({ main_worktree: mainWt, expected_head: fp.head, expected_tree: fp.tree, ref }), { schema: INFRA_SCHEMA, phase: "Tests" });
+const ok = !!r && r.status === "ok" && r.ref_target === fp.tree && r.head === fp.head && r.clean === true;
+halt("needs_human", msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " and clean not confirmed (" + (r ? r.status + ": " + r.reason : "no result") + ")"), sg);
+}
 async function afterWriters(n, pending, pre) {
 const roundOut = pending.map((p) => writerOut[p.criterion.id]);
 state.testsWritten = Object.keys(writerOut).reduce((a, k) => a + writerOut[k].tests.length, 0);
@@ -7381,7 +7486,7 @@ for (const p of pending) {
 const cid = p.criterion.id;
 for (const f of writerOut[cid].files) {
 const nf = normPath(f);
-if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + logPath(nf) + " in test round " + n + " (not its own test file)", og(nf));
+if (owner[nf] !== cid) await writerStop(n, post, "writer " + cid + " touched " + logPath(nf) + " in test round " + n + " (not its own test file)", og(nf));
 reported[nf] = true;
 }
 }
@@ -7390,17 +7495,18 @@ const changed = post.changed.map(normPath);
 const keys = await expandKeys(changedKeys(pre.hashes, post.hashes, mainWt), pre.hashes, post.hashes, "writers:r" + n, "Tests", null, Object.keys(owner));
 let more = 0;
 for (const k of keys) {
-if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
-halt("needs_human", (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
+if (k.map === "ignored")
+await writerStop(n, post, ((k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
+else if (k.map === "git" && k.key.indexOf(FLEETREF) === 0) halt("needs_human", logPath(violationName(k)) + " in test round " + n, "ownership");
 if (k.more) more = k.more;
 else if (!(k.key !== MAP_ALL && (k.map === "files" ? owner[k.key] : k.map === "sections" && k.kind === "added" && k.key.indexOf("#") > 0 && owner[k.key.split("#")[0]]))) changed.push(violationName(k));
 }
 const ids = pending.map((p) => p.criterion.id).join(", ");
 const uniq = changed.filter((x, i, a) => a.indexOf(x) === i);
-if (more) halt("needs_human", "writer touched " + MORE_OUTSIDE + " (" + more + " more) in test round " + n + "; listed first: " + uniq.filter((p) => !owner[p]).slice(0, 10).map(logPath).join(", "), "ownership");
+if (more) await writerStop(n, post, "writer touched " + MORE_OUTSIDE + " (" + more + " more) in test round " + n + "; listed first: " + uniq.filter((p) => !owner[p]).slice(0, 10).map(logPath).join(", "), "ownership");
 const foreign = uniq.filter((p) => !owner[p]);
-if (foreign.length) halt("needs_human", "writer touched " + foreign.map(logPath).join(", ") + " in test round " + n + " (not a test file of " + ids + ")", foreign.some((p) => og(p) === "hash") ? "hash" : "ownership");
-for (const p of uniq) if (!reported[p]) halt("needs_human", "writer touched " + logPath(p) + " in test round " + n + " but it was not reported in any writer's files", "ownership");
+if (foreign.length) await writerStop(n, post, "writer touched " + foreign.map(logPath).join(", ") + " in test round " + n + " (not a test file of " + ids + ")", foreign.some((p) => og(p) === "hash") ? "hash" : "ownership");
+for (const p of uniq) if (!reported[p]) await writerStop(n, post, "writer touched " + logPath(p) + " in test round " + n + " but it was not reported in any writer's files", "ownership");
 if (aug) {
 const t = [].concat(...roundOut.map((o) => o.tests));
 const miss = aug.mut.filter((v) => !t.some((x) => x && new RegExp("\\b" + v.id + "\\b").test(x.covers)));

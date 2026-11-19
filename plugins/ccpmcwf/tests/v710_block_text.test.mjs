@@ -13,7 +13,7 @@ import { ARGS, SOURCE, happy, run, inputsOf } from "./harness.mjs";
 const LF = String.fromCharCode(10);
 const START = "<!-- ccpm-fleet-tests -->";
 const END = "<!-- /ccpm-fleet-tests -->";
-const NOT_REPORTED = "**Tests (measured by the fleet):** not reported (the code judge's suite run gave no counts).";
+const NOT_REPORTED = "**Tests (measured by ccpmcwf):** not reported (the code judge's suite run gave no counts).";
 const cmdOf = (command, env = {}) => ({ command, paths_placeholder: "<paths>", env, tools: [] });
 
 // the happy build with a plan test_cmd and a code judge suite_result (undefined: no suite_result key)
@@ -38,7 +38,7 @@ const NPM = cmdOf("npm test -- <paths>");
 
 test("AC3 ex1: counts from the judge, command from the plan", async () => {
   const out = await build(NPM, { command: "pytest", exit_code: 0, passed: 133, failed: 0, errors: 0 });
-  assert.equal(blockOf(out), START + LF + "**Tests (measured by the fleet):** 133 passed, 0 failed, 0 errors, 133 total." + LF + "Command: `npm test`" + LF + END);
+  assert.equal(blockOf(out), START + LF + "**Tests (measured by ccpmcwf):** 133 passed, 0 failed, 0 errors, 133 total." + LF + "Command: `npm test`" + LF + END);
 });
 
 test("AC3 ex2: env entries prefix the command, sorted by key; <paths> dropped", async () => {
@@ -49,12 +49,12 @@ test("AC3 ex2: env entries prefix the command, sorted by key; <paths> dropped", 
 // 7.4.0 #64 item 5: errors null is "errors not reported" (was "0 errors"), not added to the total
 test("AC3 ex3: errors null is not reported; failures count in the total", async () => {
   const out = await build(NPM, { exit_code: 1, passed: 133, failed: 2, errors: null });
-  assert.equal(line(out, 1), "**Tests (measured by the fleet):** 133 passed, 2 failed, errors not reported, 135 total.");
+  assert.equal(line(out, 1), "**Tests (measured by ccpmcwf):** 133 passed, 2 failed, errors not reported, 135 total.");
 });
 
 test("AC3 ex4: all zero is a valid count", async () => {
   const out = await build(NPM, { exit_code: 0, passed: 0, failed: 0, errors: 0 });
-  assert.equal(line(out, 1), "**Tests (measured by the fleet):** 0 passed, 0 failed, 0 errors, 0 total.");
+  assert.equal(line(out, 1), "**Tests (measured by ccpmcwf):** 0 passed, 0 failed, 0 errors, 0 total.");
 });
 
 test("AC3 ex5: no suite_result key gives the not-reported line; the command line stays", async () => {
@@ -97,6 +97,6 @@ test("AC3 ex10: JUDGE_SUITE types passed as integer or null, optional", () => {
 test("AC3 property: any suite_result value gives one of the two line-2 forms", async () => {
   for (const suite of [{}, { passed: 3, failed: 1 }, { passed: 3, failed: 1, errors: 2 }, { passed: 3, failed: null }]) {
     const out = await build(NPM, suite);
-    assert.match(line(out, 1), /^\*\*Tests \(measured by the fleet\):\*\* (\d+ passed, \d+ failed, (\d+ errors|errors not reported), \d+ total\.|not reported \(the code judge's suite run gave no counts\)\.)$/);
+    assert.match(line(out, 1), /^\*\*Tests \(measured by ccpmcwf\):\*\* (\d+ passed, \d+ failed, (\d+ errors|errors not reported), \d+ total\.|not reported \(the code judge's suite run gave no counts\)\.)$/);
   }
 });

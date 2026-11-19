@@ -177,6 +177,8 @@ test("6.3.4 2176: a part that is bad twice stops the build (chunks do not match 
   };
   s["infra:load-ref:p1"] = bad;
   s["infra:load-ref:p1:retry"] = bad;
+  // 8.3.0 (#91): and its re-reads after the failed join
+  s["infra:load-ref:p1:r1:retry"] = s["infra:load-ref:p1:r2:retry"] = bad;
   const out = await runOne(s, buildArgs(tiny));
   // 7.3.0 (#47b): an intact ref whose parts do not join is a relay failure
   assert.equal(out.result.status, "failed");

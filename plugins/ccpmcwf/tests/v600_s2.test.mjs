@@ -340,7 +340,7 @@ test("6.0.0 2042a (security review): roles read the plan from the sealed plan co
     assert.equal(i.plan_path, "docs/plans/x.md", l);
   }
   for (const c of out.build.calls) assert.ok(!/\/plan\/docs\/plans\/x\.md/.test(c.prompt), c.label + " names no plan file copy");
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).tldr, "adds a thing");
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).tldr, "add thing");
   assert.equal(inputsOf(call(out, "infra:surfaces:r1").prompt).rev, PB);
   assert.equal(inputsOf(call(out, "role:pr-review:v1").prompt).base_ref, PB);
   assert.ok(out.build.logs.indexOf("verify: HEAD is plan_base " + PB + "; plan hash matches at " + PLAN_BLOB) >= 0, out.build.logs.join("\n"));

@@ -33,7 +33,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCRIPTS_SRC, ARGS, happy, run, sh, sha256, canon, FP_PRE, FP_TESTS, inputsOf, call, spawnSync, PROGRAMS, registerMap, scriptsSummary, HASH_MAP_NAMES } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, happy, run, sh, sha256, canon, FP_PRE, FP_TESTS, inputsOf, call, spawnSync, PROGRAMS, registerMap, scriptsSummary, HASH_MAP_NAMES, SAVED_R1 } from "./harness.mjs";
 
 const HASHER = join(SCRIPTS_SRC, "hasher.py");
 const DIFF = join(SCRIPTS_SRC, "hash_diff.py");
@@ -415,7 +415,8 @@ const V504 = {
 const HINT = " (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree)";
 const V506 = (k) => {
   const [st, g, r] = V504[k];
-  return [st, g, r.replace(/^(.*ignored path written: [^ ;]+)/, "$1" + HINT)];
+  // 8.3.0 (#98): a writer ownership stop names the ref the writers' output is saved under
+  return [st, g, r.replace(/^(.*ignored path written: [^ ;]+)/, "$1" + HINT) + (g === "ownership" ? SAVED_R1 : "")];
 };
 
 test("5.0.5 2018: non-weakening: an ignored file a writer changes, inside target/ or not, or plants, stops as in 5.0.4", async () => {
@@ -455,7 +456,7 @@ test("5.0.5 2018: a comparison that fails (missing file, forged output, no resul
       const out = await run(s, ARGS);
       assert.equal(out.result.status, "needs_human");
       assert.equal(out.result.stop_gate, "ownership");
-      assert.match(out.result.reason, /^ignored path written: \(the ignored files changed: 3001 -> 3001 files; the path list is unavailable: [^)]+\) \(likely cause: a build or test command ran without the fleet build env, test_env_prefix, [^)]+\) in test round 1$/);
+      assert.match(out.result.reason, /^ignored path written: \(the ignored files changed: 3001 -> 3001 files; the path list is unavailable: [^)]+\) \(likely cause: a build or test command ran without the fleet build env, test_env_prefix, [^)]+\) in test round 1; writers' output saved as refs\/fleet\/y42-add-thing\/stopped-n1-0000001-r1-tree, worktree reset to b0de1234567$/);
     }
   } finally {
     f.done();

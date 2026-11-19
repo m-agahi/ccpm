@@ -44,7 +44,7 @@ if len(sys.argv) != 4:
 # UTF-8 bytes}). No mode prints message text whole (3.0.0, ledger 1952).
 # 6.3.4 (ledger 2176): part mode replaced 'chunks:<plan ref name>', which put
 # the whole message in one relay.
-PART = 32000
+PART = 8000
 wt, tid, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
     sys.exit('bad task id: ' + tid)

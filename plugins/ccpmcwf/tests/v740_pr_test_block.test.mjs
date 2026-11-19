@@ -30,7 +30,7 @@ const LF = "\n";
 const NBSP = String.fromCharCode(0xa0);
 const START = "<!-- ccpm-fleet-tests -->";
 const END = "<!-- /ccpm-fleet-tests -->";
-const BLOCK = [START, "**Tests (measured by the fleet):** 133 passed, 0 failed, 0 errors, 133 total.", "Command: `npm test`", END].join(LF);
+const BLOCK = [START, "**Tests (measured by ccpmcwf):** 133 passed, 0 failed, 0 errors, 133 total.", "Command: `npm test`", END].join(LF);
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 
 // a stub gh over a stored body; logs each call's verb
@@ -176,11 +176,11 @@ test("7.4.0 #64 V5: errors null -> 'errors not reported', not added to the total
   assert.equal(out.result.status, "ok", out.result.reason);
   const c = out.calls.find((x) => x.label === "infra:pr-tests");
   const block = Buffer.from(inputsOf(c.prompt).args[3], "base64").toString("utf8");
-  assert.equal(block.split(LF)[1], "**Tests (measured by the fleet):** 133 passed, 2 failed, errors not reported, 135 total.");
+  assert.equal(block.split(LF)[1], "**Tests (measured by ccpmcwf):** 133 passed, 2 failed, errors not reported, 135 total.");
 });
 
 test("7.4.0 #64 V6: an opener-written stats start above the test block -> pr_body_block error, body unchanged", () => {
-  const tpl = "<details><summary>Built with ccpm fleet 7.4.0</summary>" + LF + "wall @@WALL@@" + LF + "</details>" + LF + "<!-- ccpm-fleet-stats -->";
+  const tpl = "<details><summary>Built with ccpmcwf 7.4.0</summary>" + LF + "wall @@WALL@@" + LF + "</details>" + LF + "<!-- ccpm-fleet-stats -->";
   const body = "## Summary" + LF + "<details><summary>Built with ccpm fleet (by the opener)</summary>" + LF + "text" + LF + "</details>" + LF + LF + BLOCK + LF + LF + tpl.replace("@@WALL@@", "5s") + LF;
   const g = stubGh(body);
   try {

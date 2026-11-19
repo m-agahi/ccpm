@@ -20,7 +20,7 @@ const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).s
 const LF = "\n";
 const START = "<!-- ccpm-fleet-tests -->";
 const END = "<!-- /ccpm-fleet-tests -->";
-const BLOCK = [START, "**Tests (measured by the fleet):** 133 passed, 0 failed, 0 errors, 133 total.", "Command: `npm test`", END].join(LF);
+const BLOCK = [START, "**Tests (measured by ccpmcwf):** 133 passed, 0 failed, 0 errors, 133 total.", "Command: `npm test`", END].join(LF);
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 
 // the claims of 'Intro.' + block + text through the real program (a stub gh serves the body)

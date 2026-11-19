@@ -1,5 +1,49 @@
 # Changelog
 
+## [8.3.0] - 2026-11-19
+
+ccpmcwf 8.3.0: a batch of relay, gate and PR-text fixes (yaadgaar #84, #87, #90 to #96, #98 to #100).
+
+### Fixed
+
+- #91: load-ref and load-parked read the plan and parked messages in parts of 8000 code points
+  (was 32000), so each part relay stays under the Bash inline limit. A bad part is read again
+  one model step up, and a bad part 0 is checked against q0's content.
+- #92: the hasher relay may wrap the hex in quotes or whitespace; the compare stays exact. A
+  mis-copied `file_sha256` of the shipped program is retried as a digest miss.
+- #90: the PR stats block says "Built with ccpmcwf". A block with the old "Built with ccpm
+  fleet" prefix is still found and replaced.
+- #87: the PR title comes from the plan tldr (first line, no absolute path tokens), not from the
+  intake slug.
+- #93: an intent judge answer that files a plan_diff entry neither as a deviation nor as
+  bookkept gets one re-ask that names the unfiled entries. The second answer is checked again.
+- #96: the lock-held message names /workflows and the run nonce, and no longer says that a dead
+  session means a dead run. The lock carries a heartbeat that a re-claim refreshes; a lock is
+  stale when its heartbeat (else its start) is over 12 h old.
+- #98: a uv test_cmd carries its uv env in the command, so a run without the prefix does not
+  create a `.venv` in the worktree. The build env note says a nested `$(...)` needs its own
+  prefix. An ownership stop after the test writers saves their output under a ref, then cleans
+  the worktree, so a rerun needs no manual stash.
+- #84: the sandbox forge test writes its file aside and renames it over, so a reader never sees
+  an empty file (the CI flake).
+- #100: a symbol of an earlier round no longer counts as dropped while the new plan's interface
+  or the latest plan-audit finding still names it.
+
+### Added
+
+- #94: a task that requires a gate the preflight census reports unsupported stops at intake,
+  before scope-and-plan, with needs_human. A task that only mentions the gate goes on.
+- #95: the ruleset read collects the required checks of the branch rules (required workflows
+  and status checks). The plan ref seals them; the planner (re-plan rounds), plan-audit and the
+  PR opener get them as `required_checks`.
+- #99: the secret-like path check also runs at plan time, before the surface reads and
+  plan-audit.
+
+### Changed
+
+- The dist size guard is 520000 bytes (ADR-1316, amended 2026-11-19 by Max; was 495000). The
+  dist is 502943 bytes.
+
 ## [8.2.5] - 2026-11-19
 
 ccpmcwf 8.2.5: yaadgaar #89, found in the 8.2.4 smoke runs wf_c6778ab7-68e, wf_66c5a236-9f2 and
