@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon, registerMap, hashDiffOut, tfGateRelay } from "./harness.mjs";
+import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon, registerMap, hashDiffOut, tfGateRelay, SAVED_R1 } from "./harness.mjs";
 
 const HASHER = join(SCRIPTS_SRC, "hasher.py");
 
@@ -225,6 +225,8 @@ const V506 = {
     "reason": "re-freeze touched unrouted path tests/test_b.py"
   }
 };
+// 8.3.0 (#98): a writer ownership stop names the ref the writers' output is saved under
+for (const k of Object.keys(V506)) if (k.indexOf("writers/") === 0 && V506[k].gate === "ownership") V506[k].reason += SAVED_R1;
 
 for (const site of SITES)
   for (const kind of Object.keys(KINDS))
@@ -352,7 +354,7 @@ test("5.0.7 2020: a missing map file never reads as no change: the writers stop 
   let out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "ownership");
-  assert.match(out.result.reason, /^writer touched frozen files map changed \(\d+ -> 3 entries; the key list is unavailable: the step returned failed: 0 files match files-[0-9a-f]{12}\*\.json [^)]+\) in test round 1 \(not a test file of AC1, AC2\)$/);
+  assert.match(out.result.reason, /^writer touched frozen files map changed \(\d+ -> 3 entries; the key list is unavailable: the step returned failed: 0 files match files-[0-9a-f]{12}\*\.json [^)]+\) in test round 1 \(not a test file of AC1, AC2\); writers' output saved as refs\/fleet\/y42-add-thing\/stopped-n1-0000001-r1-tree, worktree reset to b0de1234567$/);
   s = scenario("none", "file");
   s["hasher:post-coder:r1"] = (p) => ({ status: "ok", fingerprint: FP_K1, hashes: unwritten(base(), inputsOf(p).scratch_dir) });
   out = await run(s, ARGS);
@@ -387,7 +389,7 @@ test("5.0.7 2020: a capped key list routes nothing it did not list: past the cap
   const out = await run(s, ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
   // 7.4.0 (#22): past the cap the halt says so, and names the listed rows
-  assert.equal(out.result.reason, "writer touched more than 50 changed files outside the round's test files (59 more) in test round 1; listed first: git:config:local");
+  assert.equal(out.result.reason, "writer touched more than 50 changed files outside the round's test files (59 more) in test round 1; listed first: git:config:local" + SAVED_R1);
   const s2 = scenario("writers", "git");
   s2["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["files", "tests/test_a.py", "changed"]].slice(0, 0), total: 60, allowed: [], allowed_changed: 0, counts: { git: [1, 1] }, error: null, ...hd(p) });
   const o2 = await run(s2, ARGS);

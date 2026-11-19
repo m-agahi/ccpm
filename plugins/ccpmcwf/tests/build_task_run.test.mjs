@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.2\.5 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.3\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1765,7 +1765,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   const r = out.result;
   assert.equal(r.status, "awaiting_confirmation");
   assert.equal(r.mode, "plan");
-  assert.equal(r.tldr, "adds a thing");
+  assert.equal(r.tldr, "add thing");
   assert.deepEqual(r.plan_diff, ["new plan"]);
   assert.deepEqual(r.fleet_size, { criteria: 2, est_agents: 20, est_rounds: 1 });
   assert.equal(r.plan_path, "docs/plans/x.md");
@@ -2812,7 +2812,7 @@ test("write-back: the ledger is written only for ledger sources", async () => {
   const lw = out.result.write_back.ledger[0];
   assert.deepEqual([lw.ref, lw.status], ["yaadgaar #42", "written"]);
   const text = inputsOf(call(out, "infra:yaadgaar-writeback").prompt).section_text;
-  assert.match(text, /adds a thing/);
+  assert.match(text, /add thing/);
   assert.match(text, /docs\/plans\/x\.md/);
   assert.match(text, /https:\/\/github\.com\/o\/r\/pull\/7/);
   assert.match(text, /fleet:y42/);
@@ -2841,7 +2841,7 @@ test("write-back: one marked comment per external source; GitHub hides the marke
   assert.match(jira, /\n\nfleet:abc-9$/);
   assert.match(gh, /\n\n<!-- fleet:abc-9 -->$/);
   for (const t of [jira, gh]) {
-    assert.match(t, /^adds a thing/);
+    assert.match(t, /^add thing/);
     // 6.0.0 (ledger 2042): the plan doc never ships, so no plan line and no blob link
     assert.doesNotMatch(t, /Plan:|\/blob\/|docs\/plans/);
     assert.match(t, /PR: https:\/\/github\.com\/o\/r\/pull\/7/);
@@ -3682,13 +3682,17 @@ test("2.0.3 inputs: plan-audit, coder and code-judge get repo_obligations and te
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
+  // 8.3.0 (#98): a build role gets a uv test_cmd with its own uv env bound in front
+  const bound = (i) => (i.test_env && i.test_env.UV_PROJECT_ENVIRONMENT ? Object.assign({}, TEST_CMD, { command: "env UV_PROJECT_ENVIRONMENT='" + i.test_env.UV_PROJECT_ENVIRONMENT + "' UV_CACHE_DIR='" + i.test_env.UV_CACHE_DIR + "' " + TEST_CMD.command }) : TEST_CMD);
   for (const l of ["role:plan-audit", "role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
     const i = inputsOf(call(out, l).prompt);
     assert.deepEqual(i.repo_obligations, [OB_LOG], l);
-    assert.deepEqual(i.test_cmd, TEST_CMD, l);
+    assert.deepEqual(i.test_cmd, bound(i), l);
   }
-  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1"])
-    assert.deepEqual(inputsOf(call(out, l).prompt).test_cmd, TEST_CMD, l);
+  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1"]) {
+    const i = inputsOf(call(out, l).prompt);
+    assert.deepEqual(i.test_cmd, bound(i), l);
+  }
   assert.ok(!("obligation_results" in inputsOf(call(out, "role:fleet-code-judge:r1").prompt)));
 });
 
@@ -4514,17 +4518,14 @@ test("2.1.0 G2 commands: only test_cmd and `pre-commit run <id>` hooks that exis
 test("2.1.0 G3 scope fence: secrets, rulesets and a foreign repo are refused (IaC paths are fleet work since ADR-1172)", async () => {
   const planWith = (o) => autoHappy({ script: { "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], o) } });
   const fence = (files) => ({ allowed_additions: { files, symbols: [], deps: [], settings: [] } });
-  for (const o of [
-    fence(["config/rulesets/main.json"]),
-    fence([".env.local"]),
-    fence(["src/db_secret.py"]),
-    fence(["certs/server.pem"]),
-    fence(["keys/deploy.key"]),
-    fence(["home/id_rsa.pub"]),
-    fence(["aws_credentials.json"]),
-  ]) {
-    const out = await runOne(planWith(o), AUTO);
-    autoFail(out, "scope");
+  autoFail(await runOne(planWith(fence(["config/rulesets/main.json"])), AUTO), "scope");
+  // 8.3.0 (#99): a secret-like path stops earlier, at plan time, before plan-audit (same fence, gate scope)
+  for (const f of [".env.local", "src/db_secret.py", "certs/server.pem", "keys/deploy.key", "home/id_rsa.pub", "aws_credentials.json"]) {
+    const out = await runOne(planWith(fence([f])), AUTO);
+    assert.equal(out.result.status, "needs_human", f);
+    assert.equal(out.result.stop_gate, "scope", f);
+    assert.ok(out.result.reason.includes('scope check failed: path "' + f + '": secret-like path'), out.result.reason);
+    assert.ok(!out.labels.some((l) => l.startsWith("role:plan-audit")), f + ": plan-audit never ran");
   }
   // 3.1.0: a CI workflow is hook surface: Max's rule stops the plan earlier, before the audit
   for (const o of [fence([".github/workflows/ci.yml"]), fence([".github/CODEOWNERS"]), { criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] }]) {
@@ -5684,6 +5685,10 @@ const ARRAY_SITES = {
   "prior.symbols @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "prior.findings @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "prior.criteria_by_round @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
+  // 8.3.0 (#100)
+  "prior.findings @ keptSymbols": "parsed: the script's round record (or a parked findings.json)",
+  "prior.symbols @ keptSymbols": "parsed: the script's round record (or a parked findings.json)",
+  "prior.changed_symbols @ keptSymbols": "parsed: the script's round record (the prior round's raw map)",
   "r.defs @ buildCallerCheck": "infra:defs",
   "r.generated @ buildCallerCheck": "parsed: the changed_defs relay (digest-checked; schema prog:changed_defs:generated)",
   "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
@@ -5750,6 +5755,7 @@ const ARRAY_SITES = {
   "r.sources @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "r.read @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "r.unreadable @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
+  "r.checks @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   // 6.0.0 (ledger 2042)
   "c.types @ subjectsOf": PARSED_SEALED_TYPES,
   "t.types @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
@@ -6323,7 +6329,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.2\.5; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.3\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7022,7 +7028,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.2\.5\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.2\.5 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.3\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8734,7 +8740,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.2\.5/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.3\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

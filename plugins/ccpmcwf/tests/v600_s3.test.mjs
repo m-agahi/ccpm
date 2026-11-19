@@ -33,7 +33,7 @@ function bodyBlock(dir, tpl, t0, headers) {
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
-const TPL = "<details><summary>Built with ccpm fleet 8.2.5</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
+const TPL = "<details><summary>Built with ccpmcwf 8.3.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
 
 // ---------------------------------------------------------------- 2044: pr_body_block.py
 
@@ -54,6 +54,20 @@ test("6.0.0 2044: pr_body_block.py appends the block when absent and fills the w
     assert.match(o.digest, /^[0-9a-f]{64}$/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("8.3.0 #90: a body with the old \"Built with ccpm fleet\" prefix is found and replaced; the new prefix too", () => {
+  for (const pre of ["Built with ccpm fleet 7.0.2", "Built with ccpmcwf 8.2.5"]) {
+    const old = "<details><summary>" + pre + "</summary>\nold\n</details>\n<!-- ccpm-fleet-stats -->";
+    const dir = fakeGh("## Summary\n\n" + old + "\n\n## Notes\n\ntail\n");
+    try {
+      const o = bodyBlock(dir, TPL, "-", []);
+      assert.equal(o.replaced, true, pre);
+      assert.equal(readFileSync(join(dir, "body.md"), "utf8"), "## Summary\n\n" + TPL.replace("@@WALL@@", "not measured") + "\n\n## Notes\n\ntail\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -109,7 +123,7 @@ test("6.0.0 2044: after the write-back the build writes a stats block of script 
   // the default policy stub prints no now: the wall time is not measured
   assert.deepEqual([a[0], a[1], a[2], a[4], a[5]], ["gh", "o/r", String(out.result.pr_number), "-", "[]"]);
   const block = blockOf(out);
-  assert.ok(block.startsWith("<details><summary>Built with ccpm fleet 8.2.5</summary>\n\n| metric | value |\n|---|---|\n"), block);
+  assert.ok(block.startsWith("<details><summary>Built with ccpmcwf 8.3.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
   assert.ok(block.endsWith("</details>\n<!-- ccpm-fleet-stats -->"), block);
   for (const row of ["| acceptance criteria | 2 |", "| code rounds | 1 |", "| wall time (build) | @@WALL@@ |", "| independent review | approve (sweep: not triggered) |", "| output tokens (approx.) | "])
     assert.ok(block.indexOf(row) >= 0, row + " in\n" + block);

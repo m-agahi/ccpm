@@ -125,10 +125,11 @@ const SCENARIOS = {
 // 8.2.3 (#85): format_files gains the digested key base_red (the format prompts name it, the program-output schema types it): the three build pins move, probe unchanged
 // 8.2.4 (#86): the held-out runner role file names the printed store_digest (not digest) and held_out.py show prints store_digest (the held_out schema and the show key list gain it); the version moves: the three build pins move, probe unchanged
 // 8.2.5 (#89): the build env note ends with the paste-literally rule, the hook env starts with PYTHONDONTWRITEBYTECODE (the commit <git> prefix drops its own copy), every role prompt asks for timeout 600000 ms, the held-out runner role sha moves, and the version moves: the three build pins move, probe unchanged
+// 8.3.0 (#87, #95, #98): infra:surfaces:plan's ruleset_surface prompt and schema gain checks (#95); the build env note says a nested $(...) needs its own prefix (#98), in all 7 build role prompts; the harness fixture tldr is "add thing" (#87, the PR title comes from the tldr), seen in the pr-opener and yaadgaar write-back inputs; the scope-and-plan, plan-audit and pr-opener role shas move (masked); same call counts: the three build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "b6f5ef595878feaacb5828df97a4deaf2dc6f5a4794b17410d410c60d83d3c07" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "510c73a0487a32f36ec1f13c95e72f0b08ec6fe01b4bd4477687c81413dad1b3" },
-  "short path (one test writer)": { calls: 88, sha256: "04db7fc05262dd68f7dfa94da2aa6241241deaaf2e1e67555043f1f06f00ac9d" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "4f433c029d72d8cf459d46cb2658019d6638591faeb2caa1834336e9b3f68224" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "4f38ab943a89ccf39c62c63ab94608691939916687796d31979460445baaa810" },
+  "short path (one test writer)": { calls: 88, sha256: "f7efcbc7a13aa923f4aba22b542673a1c18c1cf754d47abe2f48b043e64df75f" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

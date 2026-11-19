@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARGS, happy, run, inputsOf, programOf, programSha, relayDigestOf, K, H, HASHES_FLAT, FP_PRE, hashDiffOut } from "./harness.mjs";
+import { ARGS, happy, run, inputsOf, programOf, programSha, relayDigestOf, K, H, HASHES_FLAT, FP_PRE, hashDiffOut, SAVED_R1 } from "./harness.mjs";
 
 // Fixture F: a relay the agent marked failed, from the shipped program, on the given args
 function F(name, id, fields, args) {
@@ -79,5 +79,5 @@ test("7.1.1 L2142 AC1 (softDispatch): a failed hash-diff relay with a mis-copied
   const out = await run(s, ARGS);
   assert.equal(count(out.labels, "infra:hash-diff:writers:r1:digest-retry"), 1, out.labels.join(", "));
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"], out.result.reason);
-  assert.equal(out.result.reason, "writer touched git:config:local in test round 1 (not a test file of AC1, AC2)");
+  assert.equal(out.result.reason, "writer touched git:config:local in test round 1 (not a test file of AC1, AC2)" + SAVED_R1);
 });

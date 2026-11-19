@@ -48,7 +48,8 @@ except Exception:
 # with admin:org, and any failure of the repo or rules read, sets `error`.
 # 8.2.2 (#83): bar a rules read 403 whose API message says "Upgrade to GitHub
 # Pro" (rulesets are off for a private repo on the free plan): `unreadable`.
-# Prints {surface, sources, read, unreadable, error, args, program, digest}.
+# #95: checks, the required checks of the branch rules (workflows and required_status_checks).
+# Prints {surface, sources, read, unreadable, checks, error, args, program, digest}.
 # Read only: GET requests through the given command; no token is read.
 import base64, hashlib, json, os, re, subprocess, sys, time
 def lift():
@@ -195,6 +196,58 @@ def api_all(path):
         path, page = m.group(1), page + 1
 
 
+# #95: the required checks of the branch rules: {type, ruleset_id, workflow (repo@ref:path or null), check}
+checks = []
+CTRL = re.compile(r'[\x00-\x1f\x7f-\x9f  ]')
+
+
+def clip(v):
+    return CTRL.sub('?', str(v))[:200]
+
+
+def ystr(v):
+    # a YAML scalar: quotes stripped, an unquoted trailing comment cut
+    v = v.strip()
+    q = re.match(r'^(["\'])(.*?)\1', v)
+    if q:
+        return q.group(2)
+    return re.sub(r'\s+#.*$', '', v).strip()
+
+
+def wf_checks(text):
+    # "<workflow name> / <job name or id>" per job of a workflow text (a line scan, no YAML parser)
+    m = re.search(r'^name:[ \t]*(\S.*)$', text, re.M)
+    wname = ystr(m.group(1)) if m else None
+    jobs, ind, cur = [], None, None
+    lines = text.split('\n')
+    i = next((k for k, x in enumerate(lines) if re.match(r'^jobs:[ \t]*(#.*)?$', x)), None)
+    for x in lines[i + 1:] if i is not None else []:
+        if not x.strip() or x.lstrip().startswith('#'):
+            continue
+        d = len(x) - len(x.lstrip(' '))
+        if d == 0:
+            break
+        if ind is None:
+            ind = d
+        j = re.match(r'^ {%d}([A-Za-z0-9_-]+):[ \t]*(#.*)?$' % ind, x)
+        if j:
+            cur = [j.group(1), None, None]
+            jobs.append(cur)
+        elif cur is not None:
+            n = re.match(r'^( +)name:[ \t]*(\S.*)$', x)
+            if cur[2] is None:
+                cur[2] = d
+            if n and len(n.group(1)) == cur[2] and cur[1] is None:
+                cur[1] = ystr(n.group(2))
+    return [(wname + ' / ' if wname else '') + (j[1] or j[0]) for j in jobs]
+
+
+def add_check(r, wf, check):
+    c = {'type': r.get('type'), 'ruleset_id': r.get('ruleset_id') if isinstance(r.get('ruleset_id'), int) else None, 'workflow': None if wf is None else clip(wf), 'check': None if check is None else clip(check)}
+    if c not in checks and len(checks) < 50:
+        checks.append(c)
+
+
 def workflows_of(rules):
     for r in rules if isinstance(rules, list) else []:
         if isinstance(r, dict) and r.get('type') == 'workflows':
@@ -227,11 +280,20 @@ else:
             names = {}
             for r, w in workflows_of(rules):
                 src = {'ruleset_id': r.get('ruleset_id'), 'name': None, 'source_type': r.get('ruleset_source_type')}
+                at = '@' + str(w.get('ref') or '') + ':' + w['path']
                 if w.get('repository_id') == rid:
                     p = norm(w['path'])
+                    t = None
                     if p:
                         surface.add(p)
                         sources.append(dict(src, path=p, via=p))
+                        try:
+                            with open(os.path.join(wt, p), 'rb') as fh:
+                                t = fh.read(FILE_CAP).decode('utf-8', 'replace') if p in tracked else None
+                        except OSError:
+                            t = None
+                    for c in (wf_checks(t) if t is not None else None) or [None]:
+                        add_check(r, slug + at, c)
                     continue
                 # a required workflow in another repo: its self-references into this repo
                 c1, other, _ = api('repositories/' + str(w.get('repository_id')))
@@ -239,6 +301,7 @@ else:
                 c2, f, _ = api('repos/' + full + '/contents/' + quote(w['path']) + '?ref=' + quote(str(w.get('ref') or ''), False)) if full else (c1, None, {})
                 if c2 != 200 or not isinstance(f, dict) or not isinstance(f.get('content'), str):
                     unreadable.append('required workflow ' + w['path'] + ' in repo ' + str(w.get('repository_id')) + ' not readable (' + http(c2) + '): its references into ' + slug + ' not checked')
+                    add_check(r, (full or 'repo ' + str(w.get('repository_id'))) + at, None)
                     continue
                 try:
                     t = base64.b64decode(f['content']).decode('utf-8', 'replace')
@@ -246,6 +309,13 @@ else:
                     t = ''
                 usrc = dict(src, source_type=(src['source_type'] or 'ruleset'))
                 add_refs(t, full + ':' + w['path'], usrc)
+                for c in wf_checks(t) or [None]:
+                    add_check(r, full + at, c)
+            for r in rules if isinstance(rules, list) else []:
+                if isinstance(r, dict) and r.get('type') == 'required_status_checks':
+                    for c in ((r.get('parameters') or {}).get('required_status_checks') or []):
+                        if isinstance(c, dict) and isinstance(c.get('context'), str):
+                            add_check(r, None, c['context'])
             if otype == 'Organization':
                 org, why, code, hdr = api_all('orgs/' + owner + '/rulesets?per_page=100')
                 if why is not None and why.startswith('HTTP'):
@@ -277,7 +347,7 @@ else:
             else:
                 read.append('owner ' + owner + ' is not an organization: no org rulesets')
 sources.sort(key=lambda s: (s['path'], str(s['ruleset_id']), s['via']))
-out = {'surface': [] if error else sorted(surface), 'sources': [] if error else sources, 'read': read, 'unreadable': unreadable, 'error': error, 'args': args}
+out = {'surface': [] if error else sorted(surface), 'sources': [] if error else sources, 'read': read, 'unreadable': unreadable, 'checks': [] if error else checks, 'error': error, 'args': args}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))

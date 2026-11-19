@@ -87,7 +87,9 @@ test("8.0.1 #76: a foreign lock is held (claimed false, the holder named, the fi
     const same = lockProg("claim", t.repo, "y41", "n1-aaaaaa", "build");
     assert.equal(same.out.claimed, true);
     assert.equal(same.out.again, true);
-    assert.equal(readFileSync(join(t.locks, "y41.json"), "utf8"), before);
+    // 8.3.0 #96: the holder's re-claim refreshes only the heartbeat
+    const after = JSON.parse(readFileSync(join(t.locks, "y41.json"), "utf8"));
+    assert.deepEqual(Object.assign(after, { heartbeat: null }), Object.assign(JSON.parse(before), { heartbeat: null }));
     // another task has its own lock
     assert.equal(lockProg("claim", t.repo, "y42", "n2-bbbbbb", "plan").out.claimed, true);
   } finally {
@@ -405,4 +407,53 @@ test("8.0.1: the first narrator line names the mode and the task, before any age
   assert.equal(out.logs[0], "plan #42");
   const b = await runOne(happy(), Object.assign({}, ARGS, { mode: "build", plan_ref: out.result.plan_ref, input: undefined }));
   assert.equal(b.logs[0], "build refs/fleet/y42/plan");
+});
+
+// 8.3.0 #96: the stale check follows a heartbeat the run refreshes, never the helper pid
+const iso = (secAgo) => new Date(Date.now() - secAgo * 1000).toISOString().replace(/\.\d+Z$/, "Z");
+
+test("8.3.0 #96: a lock with a dead helper pid and a fresh heartbeat is held, however old its start; the same nonce claiming again refreshes the heartbeat", () => {
+  const t = repo();
+  try {
+    mkdirSync(t.locks, { recursive: true });
+    const p = join(t.locks, "y96.json");
+    writeFileSync(p, JSON.stringify({ nonce: "n0-live00", mode: "build", started: iso(20 * 3600), heartbeat: iso(60), pid: "2147483646", host: "h" }), { mode: 0o600 });
+    const r = lockProg("claim", t.repo, "y96", "n1-aaaaaa", "plan");
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.out.claimed, false);
+    assert.equal(r.out.stale, null);
+    assert.equal(r.out.held_by.nonce, "n0-live00");
+    assert.equal(JSON.parse(readFileSync(p, "utf8")).nonce, "n0-live00");
+    // the holder claiming again beats: the heartbeat moves forward
+    writeFileSync(p, JSON.stringify({ nonce: "n0-live00", mode: "build", started: iso(20 * 3600), heartbeat: iso(3600), pid: "1", host: "h" }), { mode: 0o600 });
+    const a = lockProg("claim", t.repo, "y96", "n0-live00", "build");
+    assert.equal(a.out.again, true);
+    assert.ok(Date.now() / 1000 - Date.parse(JSON.parse(readFileSync(p, "utf8")).heartbeat) / 1000 < 120);
+  } finally {
+    t.done();
+  }
+});
+
+test("8.3.0 #96: a lock whose heartbeat is over 12 h old is stale and moved, even when its start is recent", () => {
+  const t = repo();
+  try {
+    mkdirSync(t.locks, { recursive: true });
+    const p = join(t.locks, "y96.json");
+    writeFileSync(p, JSON.stringify({ nonce: "n0-dead00", mode: "build", started: iso(60), heartbeat: iso(13 * 3600), pid: "1", host: "h" }), { mode: 0o600 });
+    const r = lockProg("claim", t.repo, "y96", "n1-aaaaaa", "plan");
+    assert.equal(r.out.claimed, true);
+    assert.equal(r.out.stale.nonce, "n0-dead00");
+  } finally {
+    t.done();
+  }
+});
+
+test("8.3.0 #96: the lock-held reason names /workflows and the run nonce, and never says a dead session means a dead run", async () => {
+  const s = happy();
+  s["infra:run-lock"] = held;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /\/workflows/);
+  assert.match(out.result.reason, /n9-other00/);
+  assert.doesNotMatch(out.result.reason, /session is dead/);
 });

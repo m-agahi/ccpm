@@ -1,7 +1,7 @@
 // fleet 7.3.0 (#42, L2175) A7, A8: the parked draft travels in parts. The
 // meta relay (parked.py read, digest id parked:read, so the digest retry runs)
 // names the run, the plan path, payload_sha256 and part_count; the parts
-// (parked.py read-part, labels infra:load-parked:p<k>) hold 32000 code points
+// (parked.py read-part, labels infra:load-parked:p<k>) hold PARKED_PART code points
 // each with their own sha256; the joined payload must hash to payload_sha256,
 // else the prior is ignored (fail closed, the unreadable blocker as before).
 //
@@ -13,10 +13,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, SCRIPTS_SRC, happy, runOne, call, inputsOf, noUnscripted, spawnSync, sha256, parkedPartOut, PARKED_STORE } from "./harness.mjs";
+import { ARGS, SCRIPTS_SRC, happy, runOne, call, inputsOf, noUnscripted, spawnSync, sha256, parkedPartOut, PARKED_STORE, PARKED_PART } from "./harness.mjs";
 
 const PRUN = "n0-1234567";
-const DRAFT = "# draft plan\n" + "d".repeat(70000 - 13);
+// 8.3.0 (#91): sizes scale with PARKED_PART (32000 until 8.2.5)
+const DRAFT = "# draft plan\n" + "d".repeat((70000 * PARKED_PART) / 32000 - 13);
 const FINDINGS = JSON.stringify({ reason: "plan-audit verdict plan_defect", rounds: [{ round: 0, findings: [{ criterion: "AC1", finding: "f0" }], criteria: [], change_kind: "feature", new_behaviour: true }], symbols: [], plan_path: "docs/plans/x.md" });
 const pieces = (t) => {
   const out = [];
@@ -32,7 +33,7 @@ function parked(draft = DRAFT, findings = FINDINGS) {
 }
 const ignored = (out) => out.logs.some((l) => /^parked draft ignored \(/.test(l));
 
-test("7.3.0 #42 A7: a parked draft of 70000 code points loads in 3 part reads; the planner gets the draft", async () => {
+test("7.3.0 #42 A7: a parked draft of 70000 code points (scaled to PARKED_PART) loads in 3 part reads; the planner gets the draft", async () => {
   const s = happy();
   s["infra:load-parked"] = parked();
   const out = await runOne(s, ARGS);
@@ -116,7 +117,7 @@ test("7.3.0 #42 A8: a draft parked by 7.2.0 (the same on-disk files) loads: read
   try {
     const d = join(scratch, "parked", PRUN, "docs", "plans");
     mkdirSync(d, { recursive: true });
-    const draft = "# draft é ✓ 😀\n" + "x".repeat(40000);
+    const draft = "# draft é ✓ 😀\n" + "x".repeat((40000 * PARKED_PART) / 32000);
     writeFileSync(join(d, "x.md"), draft);
     writeFileSync(join(scratch, "parked", PRUN, "findings.json"), FINDINGS);
     const m = parkedPy("read", scratch, "null");
@@ -132,7 +133,7 @@ test("7.3.0 #42 A8: a draft parked by 7.2.0 (the same on-disk files) loads: read
       assert.ok(p.chunks.every((c) => Array.from(c).length <= 1000));
       assert.deepEqual(p.part, { index: i, count: 2, sha256: sha256(t) });
       const n = Array.from(t).length;
-      assert.ok(i === 0 ? n === 32000 : n >= 1 && n <= 32000, "part " + i + " holds " + n);
+      assert.ok(i === 0 ? n === PARKED_PART : n >= 1 && n <= PARKED_PART, "part " + i + " holds " + n);
       joined += t;
     }
     assert.equal(sha256(joined), k.payload_sha256);

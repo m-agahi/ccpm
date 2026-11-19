@@ -48,7 +48,7 @@ def lift():
     # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
     for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
         _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
-START, END, WALL = '<details><summary>Built with ccpm fleet', '<!-- ccpm-fleet-stats -->', '@@WALL@@'
+START, END, WALL = '<details><summary>Built with ccpmcwf', '<!-- ccpm-fleet-stats -->', '@@WALL@@'
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 if len(args) != 6 or args[0] not in ('gh', 'gh-personal') or not SLUG.match(args[1]) or not re.match(r'^[1-9][0-9]{0,9}$', args[2]) or not re.match(r'^(-|[0-9]{1,12})$', args[4]):
@@ -77,7 +77,8 @@ def dur(s):
 wall = None if t0 == '-' else int(time.time()) - int(t0)
 block = tpl.replace(WALL, dur(wall))
 out = {'replaced': None, 'wall_s': wall, 'block_sha256': hashlib.sha256(block.encode('utf-8')).hexdigest(), 'body_sha256_before': None, 'body_sha256_after': None, 'headers_missing': [], 'error': None}
-REGION = re.compile(re.escape(START) + r'.*?' + re.escape(END), re.S)
+# 8.3.0 (#90): a block from before the rename starts 'Built with ccpm fleet'
+REGION = re.compile(r'(?:' + re.escape(START) + '|' + re.escape('<details><summary>Built with ccpm fleet') + r').*?' + re.escape(END), re.S)
 HEAD = re.compile(r'^#{1,6}[ \t]+\S.*$', re.M)
 
 

@@ -272,6 +272,8 @@ const READS = {
     "r.program object": "infra:program",
     "r.program array": "!infra:program",
     "p.sha256 string": "infra:program.sha256",
+    // 8.3.0 (#92)
+    "r.file_sha256 string": "parsed: trimmed of quotes and whitespace, then compared exactly with the table's sha256",
   },
   // 5.0.1 (ledger 2003)
   printedProgram: {
@@ -545,6 +547,18 @@ const READS = {
     "prior.findings array": PARSED_ROUND,
     "prior.criteria_by_round array": PARSED_ROUND,
   },
+  // 8.3.0 (#100)
+  keptSymbols: {
+    "plan.allowed_additions.symbols array": SP + "allowed_additions.symbols",
+    "e string": "~" + SP + "allowed_additions.symbols[]",
+    "p string-re": PARSED_TOKEN,
+    "f object": PARSED_ROUND,
+    "prior.findings array": PARSED_ROUND,
+    "f.round number": PARSED_ROUND,
+    "t string": PARSED_ROUND,
+    "prior.symbols array": PARSED_ROUND,
+    "prior.changed_symbols array": PARSED_ROUND,
+  },
   occurrenceKey: { "at string": SP + "changed_symbols[].occurrences[].at" },
   changedSymbolFindings: {
     "e object": SP + "changed_symbols[]",
@@ -631,7 +645,13 @@ const READS = {
     "r.sources array": "prog:ruleset_surface:sources",
     "r.read array": "prog:ruleset_surface:read",
     "r.unreadable array": "prog:ruleset_surface:unreadable",
+    // #95
+    "r.checks array": "prog:ruleset_surface:checks",
+    "c object": "prog:ruleset_surface:checks[]",
+    "x string": PARSED_TOKEN,
   },
+  // #94: a sentence the script split from the brief
+  unsupportedRequired: { "x string-re": [PARSED_TOKEN, 2] },
   sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
   // 6.0.0 (ledger 2042)
   prConvention: {
@@ -713,7 +733,7 @@ const READS = {
   // 7.3.0 (#47a): the shared rewrite loop; a program's exit-3 list (it only picks chunks to write again)
   chunkRounds: { "r.bad_chunks array": "infra:bad_chunks", "i integer": "infra:bad_chunks[]" },
   // 7.3.0 (#67, #59)
-  relayModel: { "label string-re": ["parsed: the script's own step label", 2] },
+  relayModel: { "label string-re": ["parsed: the script's own step label", 3] },
   // 7.3.0 car 2 (Max: "Exempt writers"): the script's own flag
   tailWriter: { "state.tailWriters boolean": "parsed: the script's own flag (saveState sets it from the PR state)" },
   // 7.3.0 (#47, #42): the shared part reader (a part only picks what to read again; the whole-payload sha256 decides)
@@ -849,6 +869,8 @@ const READS = {
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 8.3.0 (#98): the writers' save step
+    "r.clean boolean": "infra:clean",
     // 7.1.0 (L2145): the resume check of the test block
     "state.testsResumed boolean": PARSED_LOCAL,
     "state.review.nits array": "parsed: state.review, the review step's result or JSON.parse of the run-state message (digest-checked read_state)",
@@ -1242,7 +1264,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.2\.5\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.2\.5\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

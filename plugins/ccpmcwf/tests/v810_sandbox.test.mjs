@@ -621,7 +621,10 @@ if 'coverage' not in sys.modules and os.fork() == 0:
         while time.time() < end:
             for p in walk(('data', 'cov.json')):
                 try:
-                    json.dump(FORGED if p.endswith('.json') else {'pkg/mod.py': LINES}, open(p, 'w'))
+                    # atomic (write aside, rename over): a plain open(p, 'w') truncates first, and a reader
+                    # that lands in that window sees an empty file (the CI flake of #84)
+                    json.dump(FORGED if p.endswith('.json') else {'pkg/mod.py': LINES}, open(p + '.t', 'w'))
+                    os.replace(p + '.t', p)
                 except OSError:
                     pass
             time.sleep(0.01)

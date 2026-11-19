@@ -4,8 +4,8 @@
 // The source is plugins/ccpmcwf/src/build-engine.js; the Claude Code plugin
 // loader registers every plugins/<p>/workflows/*.js, so the source lives outside
 // workflows/. The dist plugins/ccpmcwf/workflows/build-engine.js is committed
-// (the plugin installs from git) and must stay at most 495000 bytes (ADR-1189, ADR-1316;
-// Claude Code skips a workflow file over 524288 bytes).
+// (the plugin installs from git) and must stay at most 520000 bytes (ADR-1189, ADR-1316 as
+// amended on 2026-11-19; Claude Code skips a workflow file over 524288 bytes).
 //
 // The dist is the source's `export const meta = {...};` block byte for byte,
 // then every other source line with its leading whitespace cut, minus the

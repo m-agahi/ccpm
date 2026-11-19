@@ -535,7 +535,7 @@ export async function runOne(script, args0) {
       return { status: "ok", reason: "removed", mode: "cleanup", removed: true, deleted: true, error: null, args: inputsOf(prompt).args };
     // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
-      return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
+      return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], checks: [], error: null, args: inputsOf(prompt).args };
     // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
     if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
@@ -586,6 +586,12 @@ export async function runOne(script, args0) {
       fleetRefs["fleetref:" + i.ref] = i.tree;
       return { status: "ok", reason: "written", ref_target: i.tree };
     }
+    // 8.3.0 (#98): an unscripted save after a writer ownership stop saves the tree and cleans the worktree
+    if (!(label in script) && /^infra:stop-save:r\d+$/.test(label)) {
+      const i = inputsOf(prompt);
+      fleetRefs["fleetref:" + i.ref] = i.expected_tree;
+      return { status: "ok", reason: "saved", ref_target: i.expected_tree, head: i.expected_head, clean: true };
+    }
     // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
     // 6.3.4 (2176): unscripted plan-ref chunk writers write their chunks exactly
@@ -604,7 +610,7 @@ export async function runOne(script, args0) {
     const rw = /^(infra:commit-plan.*?):rewrite-[0-9]+$/.exec(key);
     if (!(key in script) && rw) key = roundBase(rw[1]);
     // 6.3.4 (2176): an unscripted load-ref part (or its re-read) reads with the load-ref stub
-    if (!(key in script) && /^infra:load-ref(:p[0-9]+(:c[0-9]+)?)?:retry$|^infra:load-ref:p[0-9]+(:c[0-9]+)?$/.test(key)) key = "infra:load-ref";
+    if (!(key in script) && /^infra:load-ref(:p[0-9]+(:c[0-9]+)?(:r[0-9]+)?)?:retry$|^infra:load-ref:p[0-9]+(:c[0-9]+)?$/.test(key)) key = "infra:load-ref";
     // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
     // that label (or its round-0 stub); script "<label>:retry" to differ
     if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));
@@ -806,6 +812,8 @@ export const ARGS = {
 export const PC ="abc1234def0";
 // 6.0.0 (ledger 2042): the branch commit the dangling plan commit PC sits on
 export const PB = "b0de1234567";
+// 8.3.0 (#98): the tail of a writer ownership stop in test round 1 (the save step's default stub)
+export const SAVED_R1 = "; writers' output saved as refs/fleet/y42-add-thing/stopped-" + NONCE + "-r1-tree, worktree reset to " + PB;
 // the plan doc's own blob id, as verify resolves it with replacement objects off
 export const PBLOB = "b10b".repeat(10);
 export const PSHA = "a".repeat(64);
@@ -1100,7 +1108,7 @@ export function refContentOf(prompt) {
 export const CHUNK_STORE = new Map();
 // 7.3.0 (#42): parked payloads by run (canonical JSON {draft, findings}), parts of PARKED_PART code points
 export const PARKED_STORE = new Map();
-export const PARKED_PART = 32000;
+export const PARKED_PART = 8000;
 function parkedMeta(r) {
   const p = r.parked;
   const was = r.digest === relayDigestOf(r, K("parked:read"));
@@ -1235,7 +1243,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.2.5/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1642,7 +1650,7 @@ export function loadStub(store) {
 }
 
 // 6.3.4 (2176): plan_ref.py part mode: {part: {index, count, sha256}, chunks}
-export const PART_CHARS = 32000;
+export const PART_CHARS = 8000;
 export function partOut(content, k) {
   const cps = [...content];
   const count = Math.max(1, Math.ceil(cps.length / PART_CHARS));
@@ -1752,7 +1760,7 @@ export function happy(over = {}) {
       criteria: crit,
       est_diff_lines: 80,
       new_behaviour: true,
-      tldr: "adds a thing",
+      tldr: "add thing",
       plan_diff: ["new plan"],
       fleet_estimate: { criteria: crit.length, agents: 20, rounds: 1 },
       memory_notes: ["planner fact"],

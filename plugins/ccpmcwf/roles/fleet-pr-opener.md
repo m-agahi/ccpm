@@ -23,6 +23,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `unattended_section` (optional): put it verbatim under the body's Risks section (add `## Risks` if none).
 - `title`: the PR title, built from the repo's convention. Use it verbatim.
 - `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
+- `required_checks` (optional; absent → none): `[{workflow, check}]`, the checks the branch rulesets require (`workflow` is `<repo>@<ref>:<path>` or null). Where a check reads the PR title or body (for example a label or survey check), write the title and body it needs.
 - `draft` (boolean): true only when the plan names a merge condition (`merge_after`) or the policy keeps PRs as drafts. Otherwise the PR opens ready for review.
 - `merge_after` (string or null): the condition or the PRs this PR waits for. When set, write it verbatim in the body as the line `Merge after: <merge_after>` (with a template: its most fitting section).
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.

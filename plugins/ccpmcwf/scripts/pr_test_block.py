@@ -111,7 +111,7 @@ def code_spans(text):
     return out + [m.span() for m in CODE.finditer(text)]
 # the stats block's '| tests written | <n> (<m> test rounds) |' cell, only on that row of the stats region
 ROUNDS = ' rounds)'
-STATS = re.compile(re.escape('<details><summary>Built with ccpm fleet') + r'.*?' + re.escape('<!-- ccpm-fleet-stats -->'), re.S)
+STATS = re.compile(re.escape('<details><summary>Built with ') + r'(?:ccpm fleet|ccpmcwf).*?' + re.escape('<!-- ccpm-fleet-stats -->'), re.S)
 LIMIT = 16384
 
 

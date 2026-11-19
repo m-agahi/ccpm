@@ -28,6 +28,8 @@ test("7.3.0 #47b A5: an intact ref whose part 1 is mis-copied on every read stop
   };
   s["infra:load-ref:p1"] = bad;
   s["infra:load-ref:p1:retry"] = bad;
+  // 8.3.0 (#91): and its re-reads after the failed join
+  s["infra:load-ref:p1:r1:retry"] = s["infra:load-ref:p1:r2:retry"] = bad;
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "failed", out.result.reason);
   assert.ok(out.result.reason.includes("the plan ref"), out.result.reason);
@@ -51,7 +53,7 @@ test("7.3.0 #47b A5 control: a meta relay whose ref_sha256 differs stops needs_h
 });
 
 test("7.3.0 #47c A6: after a first part-0 re-read relays count 1 (true count 2), one more part-0 read runs and the ref loads", async () => {
-  const s = bigHappy(40);
+  const s = bigHappy(10);
   const tiny = await planRefFor(s);
   const good = loadStub(s.__store);
   const n = Math.ceil([...s.__store[PC]].length / PART_CHARS);

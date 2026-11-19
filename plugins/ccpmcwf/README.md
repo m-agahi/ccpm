@@ -230,9 +230,9 @@ travels through agents, but no agent copies all of it. In plan mode, writer step
 dir; `infra:commit-plan` carries no chunk text, runs `plan_ref_write.py` and relays its exit-3
 `bad_chunks` list. Only those chunks go to fresh writers, then `infra:commit-plan:rewrite-<n>`
 runs, at most 2 rounds; then the run stops `failed` at the commit gate with nothing sealed. In
-build mode, load-ref reads the message in parts of 32000 code points (`plan_ref.py` mode
+build mode, load-ref reads the message in parts of 8000 code points (`plan_ref.py` mode
 `part:<ref>:<k>`): part 0 as `infra:load-ref`, the rest in parallel as `infra:load-ref:p<k>`. A
-part whose chunks do not match its sha256, its length (every part but the last holds exactly 32000
+part whose chunks do not match its sha256, its length (every part but the last holds exactly 8000
 code points) or part 0's count is read once more; the ref metadata of every relay is checked. When
 the joined parts miss `ref_sha256`, part 0 is read once more for its count before the run stops.
 Only a `failed` commit relay steers a rewrite. The joined parts must match `ref_sha256`, as before.
@@ -821,7 +821,7 @@ needs_human run is never marked ready or merged. The tail's agents count in `age
 the 100-agent cap (like path checks); CI-fix coder rounds still count.
 
 - Stats (`infra:pr-stats`, `pr_body_block.py`): a `<details>` block at the end of the PR body,
-  between `<details><summary>Built with ccpm fleet` and `<!-- ccpm-fleet-stats -->`, built from
+  between `<details><summary>Built with ccpmcwf` and `<!-- ccpm-fleet-stats -->`, built from
   script counters only: acceptance criteria, tests written and test rounds, code rounds,
   plan-audit rounds, agents, build wall time, gates passed, review verdict, and "output tokens
   (approx.)" per model (from `budget.spent()`; no input tokens, no cost). It never names a path,
@@ -1161,8 +1161,11 @@ claims a lock file for its task:
 
 Stops:
 
-- `needs_human`: "task <id> is held by run <nonce> (<mode>, started <time>); if its session is
-  dead, delete <lock path>". Delete the file only when no session still runs that task.
+- `needs_human`: "task <id> is held by run <nonce> (<mode>, started <time>); a closed
+  session does not end a run: check /workflows (or the run's task output) for run <nonce> before
+  you delete <lock path>". Delete the file only when that run is gone. The lock's pid is a
+  short-lived helper's, not the workflow's. The lock carries a `heartbeat` that the holder's
+  re-claim refreshes; the lock is stale when its heartbeat (else its start) is over 12 h old.
 - `failed`: "infra:run-lock: relay off its digest or args" (the claim relay does not match the
   program's digest or arguments). A relay that claimed is still released.
 
@@ -2296,5 +2299,5 @@ and drops the empty lines and the lines that are only a `//` comment (the table 
 Nothing inside a line changes. It then checks that esbuild `--minify-whitespace` (pinned
 `ESBUILD_VERSION`, run by `npx`) gives the same bytes for the source and the workflow, and fails
 when they differ (a string, template or comment that spans a line). The workflow must stay at most
-495000 bytes (8.0.0, G1; was 480000 under ADR-1189; Claude Code skips a workflow file over 524288
+520000 bytes (ADR-1316 as amended on 2026-11-19; was 495000, and 480000 under ADR-1189; Claude Code skips a workflow file over 524288
 bytes).

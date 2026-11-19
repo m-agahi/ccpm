@@ -54,7 +54,7 @@ def read_text(p):
         return None
 def pieces(t):
     return [t[i:i + CHUNK] for i in range(0, len(t), CHUNK)]
-PART = 32000
+PART = 8000
 def files_of(d):
     files = []
     for dp, dns, fns in os.walk(d):
@@ -324,7 +324,9 @@ elif mode == 'retire' and len(sys.argv) == 4:
 elif mode in ('claim', 'release'):
     # fleet 8.0.1 (#76): the per-task run lock <git-common-dir>/fleet/locks/<task id>.json.
     # claim <repo> <task id> <nonce> <plan|build>: O_CREAT|O_EXCL|O_NOFOLLOW, 0600; the same nonce
-    # holds it again; a lock over 12 h old moves to .stale-<old>-<new> and is claimed once more.
+    # holds it again and refreshes its heartbeat; a lock whose heartbeat (else start) is over 12 h old
+    # moves to .stale-<old>-<new> and is claimed once more. The heartbeat follows the run; the pid is
+    # a short-lived helper's and says nothing about the run.
     # release <repo> <task id> <nonce>: unlinks the lock only when it holds this nonce.
     # The pid and host are for a human only; no symlink is followed on the way.
     import calendar, socket, subprocess, time
@@ -380,9 +382,9 @@ elif mode in ('claim', 'release'):
             j = j if isinstance(j, dict) else None
         except ValueError:
             j = None
-        h = {k: (j.get(k) if j and isinstance(j.get(k), str) else None) for k in ('nonce', 'mode', 'started', 'pid', 'host')}
+        h = {k: (j.get(k) if j and isinstance(j.get(k), str) else None) for k in ('nonce', 'mode', 'started', 'heartbeat', 'pid', 'host')}
         try:
-            t0 = calendar.timegm(time.strptime(h['started'], '%Y-%m-%dT%H:%M:%SZ'))
+            t0 = calendar.timegm(time.strptime(h['heartbeat'] or h['started'], '%Y-%m-%dT%H:%M:%SZ'))
         except (TypeError, ValueError):
             t0 = st.st_mtime
         return h, st.st_ino, time.time() - t0
@@ -398,13 +400,22 @@ elif mode in ('claim', 'release'):
             out['held_by'] = h[0]
         emit(out)
         sys.exit(0)
+    def stamp():
+        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    def beat(h):
+        # the holder's own re-claim: rewrite the lock with a fresh heartbeat (temp file, then rename)
+        tmp = lock + '.beat-' + str(os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(dict({k: v for k, v in h.items() if v is not None}, heartbeat=stamp()), f)
+        os.replace(tmp, lock)
     def create():
         try:
             fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         except FileExistsError:
             return False
         with os.fdopen(fd, 'w') as f:
-            json.dump({'nonce': nonce, 'mode': run_mode, 'started': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'pid': str(os.getpid()), 'host': socket.gethostname()}, f)
+            json.dump({'nonce': nonce, 'mode': run_mode, 'started': stamp(), 'heartbeat': stamp(), 'pid': str(os.getpid()), 'host': socket.gethostname()}, f)
         return True
     out = {'claimed': False, 'again': False, 'stale': None, 'held_by': None, 'lock': lock, 'args': args}
     if create():
@@ -413,6 +424,7 @@ elif mode in ('claim', 'release'):
         h = holder()
         if h and h[0]['nonce'] == nonce:
             out['claimed'] = out['again'] = True
+            beat(h[0])
         elif h and h[2] > 12 * 3600:
             moved = lock + '.stale-' + (h[0]['nonce'] if isinstance(h[0]['nonce'], str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', h[0]['nonce']) else 'unknown') + '-' + nonce
             os.rename(lock, moved)

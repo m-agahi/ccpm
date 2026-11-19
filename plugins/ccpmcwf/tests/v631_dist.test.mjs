@@ -99,10 +99,10 @@ test("6.3.1 2129: the dist holds no control or invisible format character (the l
   assert.deepEqual(bad, []);
 });
 
-// 8.0.0 (G1, Q7): 495000, the size guard's limit (was 480000)
-test("6.3.1 2129: the dist stays at most 495000 bytes, under Claude Code's 524288-byte cap (ADR-1189)", () => {
+// ADR-1316 as amended 2026-11-19 (#91): 520000, the size guard's limit (was 495000, 480000)
+test("6.3.1 2129: the dist stays at most 520000 bytes, under Claude Code's 524288-byte cap (ADR-1189)", () => {
   const n = statSync(DIST_PATH).size;
-  assert.ok(495000 < 524288);
-  assert.ok(n <= 495000, "dist is " + n + " bytes");
+  assert.ok(520000 < 524288);
+  assert.ok(n <= 520000, "dist is " + n + " bytes");
   assert.ok(existsSync(SRC_PATH));
 });

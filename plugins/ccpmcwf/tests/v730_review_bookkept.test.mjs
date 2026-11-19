@@ -32,6 +32,9 @@ function auto(judge) {
     ),
     "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   });
+  // #93: an unfiled entry earns one re-ask; this judge gives the same answer again
+  s["role:fleet-intent-judge:reask"] = s["role:fleet-intent-judge"];
+  s["hasher:pre-intent:reask"] = s["hasher:fp-post:intent:reask"] = s["hasher:pre-intent"];
   return s;
 }
 const gateLine = (out) => out.logs.find((l) => /^auto-confirm: intent/.test(l)) || "";
