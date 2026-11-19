@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.3.0";
+const FLEET_VERSION = "8.3.1";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -5532,9 +5532,19 @@ if (segs.some((x) => ["." + "terra" + "form", "terra" + "form.d", "." + "terra" 
 if (segs.some((x) => x.toLowerCase() === ".github")) return ".github/ (CI, settings, rulesets)";
 if (HOOK_PATH_RE.test(q)) return "hook surface (a CI or hook-manager path)";
 if (q.toLowerCase().indexOf("rulesets") >= 0) return "rulesets";
-if (base.indexOf(".env") === 0 || base.indexOf("secret") >= 0 || /\.(pem|key)$/.test(base) || base.indexOf("id_rsa") === 0 || base.indexOf("credentials") >= 0)
-return "secret-like path";
+if (secretLikePath(q)) return "secret-like path";
 return null;
+}
+const SECRET_SOURCE_EXT = /\.(py|pyi|js|mjs|cjs|jsx|ts|tsx|mts|cts|go|rs|java|kt|kts|scala|groovy|rb|php|cs|fs|c|h|cc|cpp|cxx|hpp|hh|m|mm|swift|dart|ex|exs|erl|hs|clj|lua|r|jl|vue|svelte)$/;
+function secretLikePath(q) {
+const segs = q.split(/[\/\\]/).map((x) => x.toLowerCase());
+const base = segs[segs.length - 1];
+if (segs.slice(0, -1).some((x) => x === "secret" || x === "secrets")) return true;
+for (const b of [q.split("/").pop().toLowerCase(), base]) {
+if (b.indexOf(".env") === 0 || /\.(pem|key|p12|pfx)$/.test(b) || /^id_(rsa|dsa|ecdsa|ed25519)/.test(b)) return true;
+if (b.indexOf("credentials") >= 0 || b.indexOf("kubeconfig") === 0 || [".netrc", ".npmrc", ".pypirc"].indexOf(b) >= 0) return true;
+}
+return base.indexOf("secret") >= 0 && !SECRET_SOURCE_EXT.test(base);
 }
 function pathFenceProblems(paths) {
 const out = [];

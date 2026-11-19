@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.3.1] - 2026-11-19
+
+ccpmcwf 8.3.1: yaadgaar `#99` option (a), approved by Max on 2026-11-19.
+
+### Changed
+
+- yaadgaar `#99` (a): the secret-like path check refuses real secret-file shapes only. A source
+  file whose name holds "secret" (for example `secrets.py`, `test_output_scan_secrets.py`,
+  `secret_store.go`) is no longer refused, unless it sits under a `secret/` or `secrets/` dir. A
+  `*secret*` name that is not a source file (`secrets.yaml`, `client_secret.json`, `secret.txt`)
+  still stops. New refusals: a `secret/` or `secrets/` dir, `*.p12`, `*.pfx`, `id_dsa*`,
+  `id_ecdsa*`, `id_ed25519*`, `kubeconfig*`, `.netrc`, `.npmrc`, `.pypirc`, and a name after a
+  backslash. The dist is 503587 bytes.
+
 ## [8.3.0] - 2026-11-19
 
 ccpmcwf 8.3.0: a batch of relay, gate and PR-text fixes (yaadgaar #84, #87, #90 to #96, #98 to #100).

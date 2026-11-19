@@ -9,7 +9,8 @@ const SRC = readFileSync(SRC_PATH, "utf8");
 const mk = () => Object.assign(happy(), { __source: SRC });
 
 const withFiles = (s, files) => Object.assign(s["role:scope-and-plan"], { allowed_additions: { files, symbols: [], deps: [], settings: [] } });
-const SECRET = "packages/core/src/output_scan/secrets.py";
+// 8.3.1 (#99 a): a source file named secrets.py is no longer secret-like; a secrets.yaml still is
+const SECRET = "packages/core/src/output_scan/secrets.yaml";
 
 test("8.3.0 (#99): a secret-like planned path stops before plan-audit", async () => {
   const s = mk();
@@ -17,7 +18,7 @@ test("8.3.0 (#99): a secret-like planned path stops before plan-audit", async ()
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "scope");
-  assert.match(out.result.reason, /scope check failed: path "packages\/core\/src\/output_scan\/secrets\.py": secret-like path/);
+  assert.match(out.result.reason, /scope check failed: path "packages\/core\/src\/output_scan\/secrets\.yaml": secret-like path/);
   assert.ok(!out.labels.some((l) => l.startsWith("role:plan-audit")), "plan-audit never ran");
 });
 
