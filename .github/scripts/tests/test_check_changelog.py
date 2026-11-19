@@ -2,7 +2,9 @@
 
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -155,3 +157,63 @@ class TestMarketplaceBumps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "check_changelog_staged.py"
+
+
+class TestStagedRenames(unittest.TestCase):
+    """Run the real script against a throwaway git repo with staged changes."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = pathlib.Path(self._tmp.name)
+        self._git("init", "-q")
+        self._git("config", "user.email", "t@example.com")
+        self._git("config", "user.name", "t")
+        self._git("config", "commit.gpgsign", "false")
+        # Without -M on the command line, this makes git report a rename as D + A.
+        self._git("config", "diff.renames", "false")
+        self._write("plugins/old/CHANGELOG.md", "# Changelog\n\n## 1.0.0\n- first\n")
+        self._write("plugins/old/skills/a/SKILL.md", "skill body line one\nline two\nline three\n")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "init")
+
+    def _git(self, *args):
+        subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
+
+    def _write(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def _run(self):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT)], cwd=self.repo, capture_output=True, text=True
+        )
+
+    def _move_skill_to_new_plugin(self):
+        (self.repo / "plugins/new/skills/a").mkdir(parents=True)
+        self._git("mv", "plugins/old/skills/a/SKILL.md", "plugins/new/skills/a/SKILL.md")
+
+    def test_rename_with_changelog_under_new_dir_passes(self):
+        self._move_skill_to_new_plugin()
+        self._write("plugins/new/CHANGELOG.md", "# Changelog\n\n## 1.0.0\n- moved\n")
+        self._git("add", "-A")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rename_without_changelog_update_fails(self):
+        self._move_skill_to_new_plugin()
+        self._git("add", "-A")
+        result = self._run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("plugins/new/CHANGELOG.md", result.stderr)
+        self.assertNotIn("plugins/old/CHANGELOG.md", result.stderr)
+
+    def test_deleting_plugin_file_still_requires_that_changelog(self):
+        self._git("rm", "-q", "plugins/old/skills/a/SKILL.md")
+        result = self._run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("plugins/old/CHANGELOG.md", result.stderr)
