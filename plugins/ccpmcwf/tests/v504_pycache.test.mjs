@@ -375,7 +375,7 @@ test("5.0.4 2013: the hooks that run in the real worktree write no bytecode (for
   const out = await buildWith(null);
   const p = call(out, "infra:commit:r1").prompt;
   // 5.0.6 (ledger 2019): the build vars of the commit's own dir follow
-  assert.match(p, new RegExp("`env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " git "));
+  assert.match(p, new RegExp("`env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE='1' " + buildAssignsRe("commit-r1") + " git "));
   assert.ok(!/PYTEST_ADDOPTS/.test(p), "the repo's own PYTEST_ADDOPTS is left alone");
   const plan = await runOne(happy(), ARGS);
   // 7.3.0 (#9): format-plan runs format_files.py in plan mode; its fixer runs set PYTHONDONTWRITEBYTECODE=1

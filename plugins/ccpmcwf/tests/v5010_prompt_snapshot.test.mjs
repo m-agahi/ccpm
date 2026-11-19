@@ -124,10 +124,11 @@ const SCENARIOS = {
 // 8.2.1 (#82): every relay checked against a program digest runs on sonnet first (the model is in the pin) and the version moves: all four pins move, no prompt text or call count changes
 // 8.2.3 (#85): format_files gains the digested key base_red (the format prompts name it, the program-output schema types it): the three build pins move, probe unchanged
 // 8.2.4 (#86): the held-out runner role file names the printed store_digest (not digest) and held_out.py show prints store_digest (the held_out schema and the show key list gain it); the version moves: the three build pins move, probe unchanged
+// 8.2.5 (#89): the build env note ends with the paste-literally rule, the hook env starts with PYTHONDONTWRITEBYTECODE (the commit <git> prefix drops its own copy), every role prompt asks for timeout 600000 ms, the held-out runner role sha moves, and the version moves: the three build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "a998c1fae530a5f95f8696ba388f4339e9610143e6347b8ed7cbb7fc91c23823" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "c73a28e77d67af361c46d041487547861e492271bce49931095ce850049c0e59" },
-  "short path (one test writer)": { calls: 88, sha256: "ba9824113ae1d14195c9baaec63a2a8b6760cc203fdd07942cb9c0f9361a9e0b" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "b6f5ef595878feaacb5828df97a4deaf2dc6f5a4794b17410d410c60d83d3c07" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "510c73a0487a32f36ec1f13c95e72f0b08ec6fe01b4bd4477687c81413dad1b3" },
+  "short path (one test writer)": { calls: 88, sha256: "04db7fc05262dd68f7dfa94da2aa6241241deaaf2e1e67555043f1f06f00ac9d" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 
