@@ -129,7 +129,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "8.3.2");
+  assert.equal(m[1], "8.3.3");
   assert.match(SCRIPTS_DIR, new RegExp("/ccpmcwf/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -228,6 +228,8 @@ function relayRetried(label) {
   if (/^infra:path-check:/.test(label)) return new RegExp("^" + esc + "(:relay-retry)?$");
   // 8.0.0 (#62 B1): a reset's broken path_check slot gets the standalone check on sonnet; the mutation applies there too
   if (/^infra:build-reset:/.test(label)) return new RegExp("^(" + esc + "|infra:path-check:" + esc.slice("infra:build-reset:".length) + ":relay-retry)$");
+  // 8.3.3 (yaadgaar #97): preflight's broken path_check gets one standalone check one tier up; the mutation applies there too
+  if (label === "preflight") return /^(preflight|infra:path-check:preflight:relay-retry)$/;
   return label;
 }
 
@@ -360,24 +362,24 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/8.3.2/scripts", ["fleet/8.3.2/scripts"]],
+    ["fleet/8.3.3/scripts", ["fleet/8.3.3/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
     ["/home/u/.claude/plugins/cache/m/ccpmcwf/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/ccpmcwf/3.1.3/scripts"]],
-    ["/home/u/../x/ccpmcwf/8.3.2/scripts", ["/home/u/../x/ccpmcwf/8.3.2/scripts"]],
-    ["/home/u//ccpmcwf/8.3.2/scripts", ["/home/u//ccpmcwf/8.3.2/scripts"]],
-    ["/home/u/a b/ccpmcwf/8.3.2/scripts", ["/home/u/a b/ccpmcwf/8.3.2/scripts"]],
+    ["/home/u/../x/ccpmcwf/8.3.3/scripts", ["/home/u/../x/ccpmcwf/8.3.3/scripts"]],
+    ["/home/u//ccpmcwf/8.3.3/scripts", ["/home/u//ccpmcwf/8.3.3/scripts"]],
+    ["/home/u/a b/ccpmcwf/8.3.3/scripts", ["/home/u/a b/ccpmcwf/8.3.3/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/ccpmcwf/<version>/scripts
-    ["/home/u/x/ccpmcwf/8.3.2/scripts", ["/home/u/x/ccpmcwf/8.3.2/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.3.2/scripts", ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.3.2/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.3.2/scripts", ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.3.2/scripts"]],
-    ["/home/u/.claude/plugins/cache/../ccpmcwf/8.3.2/scripts", ["/home/u/.claude/plugins/cache/../ccpmcwf/8.3.2/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.3.2/scripts", ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.3.2/scripts"]],
+    ["/home/u/x/ccpmcwf/8.3.3/scripts", ["/home/u/x/ccpmcwf/8.3.3/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.3.3/scripts", ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.3.3/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.3.3/scripts", ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.3.3/scripts"]],
+    ["/home/u/.claude/plugins/cache/../ccpmcwf/8.3.3/scripts", ["/home/u/.claude/plugins/cache/../ccpmcwf/8.3.3/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.3.3/scripts", ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.3.3/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/ccpmcwf/8.3.2/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/ccpmcwf/8.3.3/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/ccpmcwf/8.3.2/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/ccpmcwf/8.3.3/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -398,7 +400,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.3.2/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.3.3/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -407,16 +409,19 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /ccpmcwf\/8\.3\.2\/scripts/);
+  assert.match(b.build.calls[0].prompt, /ccpmcwf\/8\.3\.3\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
   const s = happy();
-  s.__mutate = { label: "preflight", fn: (r) => ((r.path_check.program = { name: "path_check", sha256: "1".repeat(64) }), r) };
+  // 8.3.3 (yaadgaar #97): the one standalone check one tier up runs the same wrong program
+  s.__mutate = { label: /^(preflight|infra:path-check:preflight:relay-retry)$/, fn: (r, prompt, real) => (((real === "preflight" ? r.path_check : r).program = { name: "path_check", sha256: "1".repeat(64) }), r) };
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "iac");
   assert.match(out.result.reason, /did not run the shipped program path_check/);
-  assert.deepEqual(out.labels, ["preflight"]);
+  assert.ok(out.logs.some((l) => /^preflight: no usable path_check: .*did not run the shipped program path_check/.test(l)), out.logs.join("\n"));
+  assert.deepEqual(out.labels, ["preflight", "infra:path-check:preflight:relay-retry"]);
 });
 
 // ---------------------------------------------------------------- AC-1993-5: commit, then a read-only verify that retries once
@@ -715,7 +720,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.2", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.3", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -729,9 +734,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.2"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.2"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.2"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.3"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.3"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.3"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {

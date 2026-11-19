@@ -127,10 +127,11 @@ const SCENARIOS = {
 // 8.2.5 (#89): the build env note ends with the paste-literally rule, the hook env starts with PYTHONDONTWRITEBYTECODE (the commit <git> prefix drops its own copy), every role prompt asks for timeout 600000 ms, the held-out runner role sha moves, and the version moves: the three build pins move, probe unchanged
 // 8.3.0 (#87, #95, #98): infra:surfaces:plan's ruleset_surface prompt and schema gain checks (#95); the build env note says a nested $(...) needs its own prefix (#98), in all 7 build role prompts; the harness fixture tldr is "add thing" (#87, the PR title comes from the tldr), seen in the pr-opener and yaadgaar write-back inputs; the scope-and-plan, plan-audit and pr-opener role shas move (masked); same call counts: the three build pins move, probe unchanged
 // 8.3.2 (#103): every build-mode hasher prompt passes the lock's task id and nonce to hasher.py (the per-gate heartbeat) and its read-only line names the lock heartbeat; #101 changes no prompt. Checked: with those two hasher edits stripped every pin is 8.3.1's; same call counts: the three build pins move, probe unchanged
+// 8.3.3 (yaadgaar #97): the plan-ref chunks are PLAN_CHUNK_CHARS (2000) long, so the infra:plan-chunks writer prompt says "(2000 characters each at most)" and carries more, shorter chunks (each with its sha256), and commit-plan's plan_ref_write command carries a longer chunk sha256 list. Checked: with PLAN_CHUNK_CHARS put back to 4000 every pin is 8.3.2's (the #102 role-file edits only move masked role shas; the preflight PATH-check retry runs only on a bad relay); same call counts: the three build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "6cd036acd6024ac26c587a6056868160704a85ddc108db6728d433380a3bd5ab" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "98227887b3a4a8bfe82556813169b77d39fcf521a5b61f9c0b089c6bc433ef00" },
-  "short path (one test writer)": { calls: 88, sha256: "b5761ed7059d94cc0f0f10159d1aa90143578bbd608e20e13a1a9c7f5d0736ec" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "0be02cfc8e15ecb8ac6398c66dcc2b5a2c393c5fa20c4e270361f709583739d7" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "9ac88b35756303edaa19e1a9c7ed583f8734f4341da092c6b197a7c0fe853b9e" },
+  "short path (one test writer)": { calls: 88, sha256: "1f29675e56d41ba809a09f1ce54a0ddb2521101565b933eaa6a29d22e94fd4ef" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

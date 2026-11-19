@@ -126,11 +126,16 @@ test("5.0.1: a relay that is not the program's output still refuses, with what f
       for (const mode of [ARGS, PROBE]) {
         const s = happy();
         s.preflight = Object.assign({}, s.preflight, { path_check: pc, __raw_path_check: true });
+        // 8.3.3 (yaadgaar #97): the preflight relay gets one PATH check one tier up; here it relays the same bad output
+        s["infra:path-check:preflight:relay-retry"] = Object.assign({ status: "ok", reason: "checked" }, pc);
         const out = await runOne(s, mode);
         assert.equal(out.result.status, "needs_human", what);
+        assert.equal(out.result.stop_gate, "iac", what);
         assert.match(out.result.reason, NOT_SHIMMED, what);
         assert.match(out.result.reason, /could not complete/, what);
-        assert.match(out.result.reason, re, what + ": " + out.result.reason);
+        const line = out.logs.find((l) => l.startsWith("preflight: no usable path_check"));
+        assert.ok(line, what + ": " + out.logs.join("\n"));
+        assert.match(line, re, what + ": " + line);
       }
     }
   } finally {

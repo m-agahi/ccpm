@@ -271,7 +271,9 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
      any `section_text`, for a yaadgaar entry that failed or was unavailable, or a legacy ledger
      entry from a plan ref sealed before 7.0.0) so the user can post it by hand.
    - `memory_notes`, grouped by role, when not empty. If this session has a memory tool, offer to
-     store them; otherwise show them.
+     store only the notes that end with an "(observed at <short sha>, <file:line>)" tag, and keep
+     that tag in the stored memory text; show the other notes but do not offer to store them.
+     Without a memory tool, show them all.
 
 ## Policy file on first use
 

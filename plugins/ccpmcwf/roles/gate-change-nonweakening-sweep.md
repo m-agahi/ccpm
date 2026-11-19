@@ -42,7 +42,7 @@ With `mode: "plan"` the fleet runs you on an approved plan, before it is sealed 
 - Remove both copies with `<scratch_copy_cmd> remove <worktree> <tmp>` before you report, even when you fail.
 - Never run terraform, tofu, tfp or any `digger` / `atlantis` command, even when the gate under test wraps one: report such a unit as not runnable.
 - Non-interactive: never ask. A blocker → `status: "needs_human"`.
-- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`.
+- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed state wins over memory.
 
 ## The protocol
 
@@ -79,7 +79,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line: the loosened count first when non-zero) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `verdict`, `units` (array) and `findings` (array). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape:
 

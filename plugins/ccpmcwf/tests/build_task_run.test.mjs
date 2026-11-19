@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.3\.2 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.3\.3 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6329,7 +6329,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.3\.2; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.3\.3; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7028,7 +7028,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.2\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.3\.2 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.3\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.3\.3 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8740,7 +8740,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.3\.2/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.3\.3/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -9628,15 +9628,20 @@ test("3.1.0 PATH check: a real tool on PATH stops preflight in plan and build mo
 
 test("3.1.0 PATH check: a missing, tampered or test-overridden result refuses", async () => {
   for (const [pc, re] of [
-    [undefined, /PATH check could not complete/],
-    [Object.assign(preflightWith({}), { tools: {} }), /PATH check could not complete/],
-    [preflightWith({}, ["/r", "--store-prefix=/tmp/x"]), /PATH check could not complete/],
+    [undefined, /PATH re-check infra:path-check:preflight:relay-retry could not complete/],
+    [Object.assign(preflightWith({}), { tools: {} }), /PATH re-check infra:path-check:preflight:relay-retry could not complete/],
+    [preflightWith({}, ["/r", "--store-prefix=/tmp/x"]), /PATH re-check infra:path-check:preflight:relay-retry could not complete/],
   ]) {
     const s = happy();
     s.preflight = Object.assign({}, s.preflight, { path_check: pc, __raw_path_check: true });
+    // 8.3.3 (yaadgaar #97): the one standalone check one tier up relays the same bad result
+    s["infra:path-check:preflight:relay-retry"] = Object.assign({ status: "ok", reason: "checked" }, pc || {});
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(pc));
+    assert.equal(out.result.stop_gate, "iac", JSON.stringify(pc));
+    // the stop names the re-check that could not complete; the gate line names preflight's
     assert.match(out.result.reason, re);
+    assert.ok(out.logs.some((l) => l.startsWith("preflight: no usable path_check")), JSON.stringify(pc));
   }
   const p = call(await runOne(happy(), ARGS), "preflight").prompt;
   // 4.0.0: run from the scripts_dir the same agent found
@@ -9801,10 +9806,13 @@ test("3.1.0 PATH review: the workflow refuses PATH problems, a wrong repo argume
   ]) {
     const s = happy();
     s.preflight = Object.assign({}, s.preflight, { path_check: pc });
+    // 8.3.3 (yaadgaar #97): a relay that does not check out gets one standalone check one tier up; here it relays the same bad result
+    s["infra:path-check:preflight:relay-retry"] = Object.assign({ status: "ok", reason: "checked" }, pc);
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(pc));
     assert.match(out.result.reason, re, JSON.stringify(pc));
-    assert.deepEqual(out.labels, ["preflight"]);
+    // only the path_problems case is a relay that checks out: it stops at once
+    assert.deepEqual(out.labels, pc.path_problems.length ? ["preflight"] : ["preflight", "infra:path-check:preflight:relay-retry"], JSON.stringify(pc));
   }
   // a well-formed shim passes; the preflight prompt passes the repo to the program
   const s = happy();

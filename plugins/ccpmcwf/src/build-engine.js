@@ -137,7 +137,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.3.2";
+const FLEET_VERSION = "8.3.3";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1744,17 +1744,17 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
-  "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
+  "fleet-code-judge": "97be586c1fd16588732c66c6afc6ed665fee02df6ef2ebf6e7a734bbd642a684",
+  "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
   "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
-  "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
-  "fleet-pr-opener": "c5ae7c61bab867cd46006cdd1fe5601e798783f9e3d6579e58afcc37239d0b17",
-  "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
-  "fleet-test-writer": "f5c1a19c1f324274aa40b26f7c06036c7cb9102286254b52c7388998d265835c",
-  "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
-  "plan-audit": "7a1073675c33fb7ecfe34793cefcf5f640279824753cbc31ae8a8cbb387fb17c",
-  "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
-  "scope-and-plan": "6088e8fd82b6c35bb1163b61c2362479d6eeebda3da113217d37fba26d5f21a9"
+  "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
+  "fleet-pr-opener": "1f88b7eafc51f60762bdc58b919e1ddbce39f56b1c044099b4225721eb495d0e",
+  "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
+  "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
+  "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
+  "plan-audit": "e487cc5dd1e6805f5b2259eecc7052c6802ac0066b5fac93a2c22aadc76e1ac7",
+  "pr-review": "e21205c77290c082cada562ac8a3c63b47a4d2866614d18f9f20d617c2c5e9f1",
+  "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -2411,15 +2411,19 @@ function base64Of(str) {
   return out;
 }
 const CHUNK_CHARS = 4000;
+// 8.3.3 (yaadgaar #97): the plan-ref chunks are half as long: plan-chunk writers mis-copied most (27 bad chunks in 7 runs);
+// the per-chunk sha256 and the whole-payload seal are unchanged (ADR-1267)
+const PLAN_CHUNK_CHARS = 2000;
 // 6.3.4 (2176): the most parts load-ref reads; 8.3.0 (#91): plan_ref.py and parked.py PART, a part relay under the ~30 KB Bash inline limit
 const MAX_REF_PARTS = 64;
 const REF_PART_CHARS = 8000;
 const MAX_CHUNK_RETRIES = 2;
-function chunked(message) {
+function chunked(message, size) {
+  const n = size || CHUNK_CHARS;
   const b64 = base64Of(message);
   const chunks = [];
-  for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
-  return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
+  for (let i = 0; i < b64.length; i += n) chunks.push(b64.slice(i, i + n));
+  return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })), size: n };
 }
 // 7.3.0 (#9, Max ruled Q4 (a)): a chunk file is written with the Write tool (settingsFor allows Write to <scratch>/chunks/*/*.b64)
 function CHUNK_WRITE(dir) {
@@ -2432,7 +2436,7 @@ function chunkSteps(dir, c, cmd) {
     cmd +
     "\n" +
     "   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step a, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
-    "The " + c.chunks.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
+    "The " + c.chunks.length + " chunk(s) (" + c.size + " characters each at most):\n" +
     c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join("")
   );
 }
@@ -2940,11 +2944,11 @@ function planChunksPrompt(inputs, c, ids, what) {
     inputsLine(Object.assign({}, inputs, { chunks: ids })) +
     "1. " + CHUNK_WRITE(inputs.chunk_dir) + "\n" +
     'Return {status: "ok", reason, written: [<i>, ...]}: the chunk numbers you wrote. A later step checks every file against its sha256 and sends a bad one to a fresh writer.\n' +
-    "The " + ids.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
+    "The " + ids.length + " chunk(s) (" + c.size + " characters each at most):\n" +
     ids.map((i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + c.chunks[i] + "\n").join("")
   );
 }
-// c: chunked(refMessage(full)); the writer steps wrote its chunks to <chunk_dir>
+// c: chunked(refMessage(full), PLAN_CHUNK_CHARS); the writer steps wrote its chunks to <chunk_dir>
 function commitPlanPrompt(inputs, c) {
   return (
     INFRA_STEP + "seal the plan doc LOCALLY: the program writes a plan commit that is on no branch (parent <plan_base>), records the sealed plan ref as a local git object and moves the plan doc out of the worktree. Never git add, commit, checkout or reset yourself. Never push. No ledger, ticket or comment writes.\n" +
@@ -3572,20 +3576,21 @@ function pathRecheckPrompt(inputs) {
   );
 }
 
-async function pathRecheckOne(site, label, model, phaseName) {
+// repo: preflight's (8.3.3 #97: before state.repo is set)
+async function pathRecheckOne(site, label, model, phaseName, repo) {
   state.pathChecks++;
   const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
   state.agents++;
-  const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
+  const ic = infraCall(label, pathRecheckPrompt({ repo: repo || state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
   const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model }));
-  return { r, label, token };
+  return { r, label, token, repo: repo || state.repo };
 }
 function pathRecheckEnd(x) {
-  const { r, label, token } = x;
+  const { r, label, token, repo } = x;
   if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
   if (r.status !== "ok")
     halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
-  pathCheck(r, state.repo, { label, args: [state.repo, token] });
+  pathCheck(r, repo, { label, args: [repo, token] });
 }
 // the one check on RELAY_RETRY_MODEL after a first check gave no usable result
 async function pathRecheckRetry(site, phaseName) {
@@ -4342,7 +4347,13 @@ async function preflightStep(repo) {
   state.rolesDir = sp.rolesDir;
   gate("scripts_dir: " + state.scriptsDir);
   gate("roles_dir: " + state.rolesDir);
-  pathCheck(pre.path_check, repo);
+  // 8.3.3 (yaadgaar #97): a path_check relay that does not check out gets one standalone check one tier up; that one stops as before
+  const prp = pathRelayProblem(pre.path_check, [repo]);
+  if (prp) {
+    const up = RETRY_UP[infraModel("preflight")];
+    gate("preflight: no usable path_check" + prp + "; checking once more on " + up);
+    pathRecheckEnd(await pathRecheckOne("preflight", "infra:path-check:preflight:relay-retry", up, "Preflight", repo));
+  } else pathCheck(pre.path_check, repo);
   const census = Array.isArray(pre.ledger_tools) ? pre.ledger_tools.filter((x) => typeof x === "string") : null;
   state.ledgerTools = census ? LEDGER_TOOLS.filter((n) => census.indexOf(n) >= 0) : [];
   gate("ledger tools: " + (state.ledgerTools.length ? state.ledgerTools.join(", ") : "none") + (census ? "" : " (census not a list: " + JSON.stringify(pre.ledger_tools === undefined ? null : pre.ledger_tools) + ")") + "; advisory");
@@ -5942,12 +5953,12 @@ async function commitPlanAndRef(ctx) {
   let writers = 1;
   let full = sealAt(writers);
   for (let k = 0; k < 4; k++) {
-    const n = Math.ceil(chunked(refMessage(full)).chunks.length / CHUNKS_PER_WRITER);
+    const n = Math.ceil(chunked(refMessage(full), PLAN_CHUNK_CHARS).chunks.length / CHUNKS_PER_WRITER);
     if (n === writers) break;
     writers = n;
     full = sealAt(writers);
   }
-  const c = chunked(refMessage(full));
+  const c = chunked(refMessage(full), PLAN_CHUNK_CHARS);
   const msgSha = c.expected;
   const label = "infra:commit-plan" + sfx;
   const chunkDir = scratchOf(ctx.worktree) + "/chunks/plan-ref-" + safeName(state.nonce + sfx);

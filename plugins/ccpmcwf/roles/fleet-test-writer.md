@@ -28,7 +28,7 @@ You write tests for ONE acceptance criterion. Nothing else. Other writers cover 
 
 - Never ask. A question, ambiguity or blocker → `status: "needs_human"` with the question in `reason`, then stop.
 - `failed` = you tried and could not complete (tool error, the same fix failed twice). `needs_human` = a human decision is required.
-- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`.
+- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed state wins over memory.
 
 ## Test command
 
@@ -129,7 +129,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `criterion_id`, `tests` and `files`. `tests` and `files` are JSON arrays (`[]` when empty), never strings. On the short path `criterion_id` is `"short"` and every `tests[].covers` starts with `<criterion id>:`. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `addressed_findings`, `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `addressed_findings`, `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape:
 
