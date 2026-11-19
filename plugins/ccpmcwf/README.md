@@ -525,7 +525,9 @@ The first failure stops the run:
    `allowed_additions.files`, obligation `files`) and every command. It refuses `*.tf`, `*.tfvars`,
    a `terraform/` or `.terraform` dir, `kustomization.y*ml`, YAML under `k8s/` or `manifests/`,
    `charts/*/templates/`, anything under `.github/` or `.fleet/`, `rulesets`, secret-like paths (`.env*`,
-   `*secret*`, `*.pem`, `*.key`, `id_rsa*`, `*credentials*`), a command that names kubectl, helm or
+   `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `*credentials*`,
+   `kubeconfig*`, `.netrc`, `.npmrc`, `.pypirc`, a `secret/` or `secrets/` dir, and a `*secret*` name
+   that is not a source file: since 8.3.1 `secrets.py` and its tests go on), a command that names kubectl, helm or
    an IaC tool, the default branch as the target, and a work repo other than the caller's.
 
 On a failure the result is `needs_human` with `failed_check` (`intent`, `commands` or `scope`),

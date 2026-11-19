@@ -197,7 +197,7 @@ function defsOf(names, over) {
 
 test("4.0.0 S4: FENCED_FILES is fenced by exact path, case-insensitively (S5 fills it)", () => {
   assert.match(SOURCE, /\nconst FENCED_FILES = \[".fleet-test-db.json"\];\n/);
-  const names = ["normPath", "HOOK_PATH_RE", "FENCED_FILES", "fencePathProblem"];
+  const names = ["normPath", "HOOK_PATH_RE", "FENCED_FILES", "fencePathProblem", "SECRET_SOURCE_EXT", "secretLikePath"];
   const empty = defsOf(names);
   assert.equal(empty.fencePathProblem("x.json"), null);
   const d = defsOf(names, { FENCED_FILES: '[".fleet-test-db.json"]' });
