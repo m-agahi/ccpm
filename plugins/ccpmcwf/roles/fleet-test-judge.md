@@ -31,7 +31,7 @@ You judge the tests written for a plan BEFORE they are frozen. The coder will be
 
 - READ-ONLY on `worktree`: no edits, no staging, no commits, no stash, no push. You may run tests. Stub and revert experiments run in a throwaway copy (see below) that you remove before finishing. Record `git status --porcelain --untracked-files=all` in `worktree` at the start; at the end it must be unchanged.
 - Non-interactive: never ask. A blocker → `status: "needs_human"` with the question in `reason`.
-- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`. Observed state wins over writer reports and the plan.
+- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed state wins over writer reports and the plan.
 
 ## What you judge — the working tree
 
@@ -102,7 +102,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `verdict`, `routed_findings` (array, `[]` when none) and `checked` (array, one entry per criterion). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape (use `null` for a stub that does not apply, for `red_valid` on re-entry tests, and for `reverse_order_stable` when the reverse-order run was skipped):
 

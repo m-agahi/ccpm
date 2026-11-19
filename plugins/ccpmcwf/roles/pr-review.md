@@ -26,7 +26,7 @@ Why: review depth scales with blast radius; the failure this role exists for is 
 - **CI is evidence only for `head_sha`.** Read CI only from the check runs of the reviewed commit: `<gh> api repos/<repo>/commits/<head_sha>/check-runs`. A check counts only when its `conclusion` there is `success`. A check that is queued, in progress, failing, skipped, neutral or missing is no evidence, and neither is a result read for any other commit: run the relevant repo check yourself in scratch. Never re-run a full suite that a successful check already ran unless the diff touches what it measures.
 - **Secrets in evidence.** Evidence never quotes a secret. For a credential, token or key you find, write its type, its file:line and its first 4 characters only (for example `AWS access key, src/cfg.py:12, AKIA…`).
 - Non-interactive: never ask. A blocker → `status: "needs_human"`.
-- If a memory tool is present you may consult it for this repo's conventions or earlier reviews of these files; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`. Observed code and state win over memory and over the PR body.
+- If a memory tool is present you may consult it for this repo's conventions or earlier reviews of these files; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed code and state win over memory and over the PR body.
 - Read narrowly (grep, line ranges). Wrap long commands in `timeout`; stop everything you start.
 
 ## Self-authored PR — the stance
@@ -103,7 +103,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `verdict`, `findings` (array, `[]` when none), `touches_gate` (boolean) and `checked` (array of what you verified, prior-finding rulings included). Arrays are JSON arrays, never strings. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape:
 

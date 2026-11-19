@@ -71,7 +71,7 @@ Nothing is committed during the build, so any diff that ends at `HEAD` is empty 
 - READ-ONLY. No edits, no staging, no commits, no stash, no push. Record `git status --porcelain --untracked-files=all` in the worktree at the start; at the end it must be unchanged. Report both in `reason` when they differ.
 - **Scratch worktrees.** A scratch worktree holds exactly the judged tree: `<scratch_copy_cmd> make <worktree> <plan_commit>` prints `{tmp}`, a detached worktree at `plan_commit` under `scratch_dir` (hooks off). Then run `git -C <tmp> -c core.hooksPath=/dev/null read-tree -u --reset <code_tree>`. Every `check_cmd` run, variant, mutant or probe runs there, never in the fleet worktree. Run each command there with `<scratch_copy_cmd> run <worktree> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`). Make each mutant edit in `<tmp>` with `<scratch_copy_cmd> patch <worktree> <tmp> <file> <old> <new>` (`<file>` relative to `<tmp>`; `<old>` and `<new>` base64 of the exact text, e.g. from `base64 -w0`; it replaces the one occurrence of old and refuses none or several, so keep each hunk small). Remove each scratch worktree afterwards: `<scratch_copy_cmd> remove <worktree> <tmp>`.
 - Non-interactive: never ask. A blocker → `status: "needs_human"` with the question in `reason`.
-- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`. Observed state wins over memory, the plan and the coder's report.
+- If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed state wins over memory, the plan and the coder's report.
 - **Secrets in evidence.** A finding never quotes a secret. For a credential, token or key, write its type, its file:line and its first 4 characters only.
 
 ## Test command
@@ -129,7 +129,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line; `approved with gates not run: <list>` when applicable) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `verdict`, `routed_findings` (array), `suite_result` (object), `hash_check` (object), `gates_not_run` (array) and `obligations_check` (array, `[]` when no obligation). Arrays are JSON arrays, never strings. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `exemptions` (array, see "Coverage findings"; absent means none), `mutant_rulings` (array, see "Mutation survivors"; absent means none), `artefacts` (the suite log path), `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `exemptions` (array, see "Coverage findings"; absent means none), `mutant_rulings` (array, see "Mutation survivors"; absent means none), `artefacts` (the suite log path), `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape:
 

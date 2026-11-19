@@ -30,7 +30,7 @@ You are an INDEPENDENT skeptic. The plan may be wrong; its prose is not evidence
 
 Read the plan fully, with its risk list. For each foundation claim the design rests on, trace the real code path; do not trust the plan's framing. Mark each claim VERIFIED / STALE / WRONG / CRACKED / UNCERTAIN with file:line. Re-count cited LOC figures with `wc -l` / grep.
 
-If a memory tool is present you may consult it for the plan's domain or a prior audit of the same subsystem; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`. Observed code wins over memory and over the plan.
+If a memory tool is present you may consult it for the plan's domain or a prior audit of the same subsystem; it is never required, and you never write memory. A recalled note that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not evidence. Measure it in this run from the config and CI files, and cite file:line. Put a fact worth keeping in `memory_notes`. Observed code wins over memory and over the plan.
 
 Hunt specifically for:
 
@@ -126,7 +126,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line), `role_file` (step 1 of your prompt) and `shared_file` (step 3).
 - Required on `ok`: `verdict` and `routed_findings` (array, `[]` when none). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere; a note that states a repo fact ends with "(observed at <short sha>, <file:line>)").
 
 Shape:
 

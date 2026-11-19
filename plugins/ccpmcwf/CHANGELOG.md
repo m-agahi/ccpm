@@ -1,5 +1,37 @@
 # Changelog
 
+## [8.3.3] - 2026-11-19
+
+ccpmcwf 8.3.3: role fact notes and relay robustness (yaadgaar `#102` and `#97`).
+
+### Fixed
+
+- yaadgaar `#102`: the memory line of the ten roles that may consult memory says a recalled note
+  that states a measurable repo fact (tool scope, CI checks, config, versions) is a lead, not
+  evidence: measure it in this run from the config and CI files and cite file:line. The test
+  writer, intent judge, PR opener and gate sweep gain the observed-state-wins clause.
+- yaadgaar `#102`: the `memory_notes` field line of those roles asks a note that states a repo
+  fact to end with "(observed at <short sha>, <file:line>)".
+- yaadgaar `#102`: `/build-task` offers to store only the `memory_notes` that carry that tag, and
+  keeps the tag in the stored memory text; the other notes are shown only.
+- yaadgaar `#97`: a preflight `path_check` relay that does not check out (run wf_b025a832-dc0
+  stopped on a digest mismatch with no retry) gets one standalone PATH check on a fresh agent one
+  model tier up (opus). A second unusable relay still stops at `iac`; a relay that checks out
+  and names a real tool still stops at once, with no retry.
+- yaadgaar `#97`: the sealed plan ref is cut into chunks of at most 2000 characters
+  (`PLAN_CHUNK_CHARS`, was 4000), so each plan-chunk writer copies half as much and a bad chunk
+  is cheaper to rewrite. The per-chunk sha256 and the whole-payload seal are unchanged. The
+  run-state, park and held-out chunks keep 4000 (the held-out store's chunk cap counts chunks).
+  A writer still takes at most 8 chunks, so a plan ref over 16000 base64 characters now needs
+  one more writer per 16000 characters.
+- The dist is 504678 bytes.
+
+### Notes
+
+- yaadgaar `#97` next step 3: `infra:callers` and `infra:read-state` already run on sonnet
+  (8.2.1, `#82`) and their retries on opus; the haiku data in `#97` came from older runs. No
+  model changes; a test now pins both rows.
+
 ## [8.3.2] - 2026-11-19
 
 ccpmcwf 8.3.2: follow-ups to 8.3.0 (yaadgaar `#101` and `#103`).

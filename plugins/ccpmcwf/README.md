@@ -1472,9 +1472,10 @@ fleet". No name resolving at all passes. The program gets the repo as its argume
 agent PATH: an empty or relative PATH entry (the agent's shell would resolve it against the
 worktree) and an entry inside the repo (the fleet worktree, the scratch dir, a role's own `bin/`)
 stop the run too ("PATH has entries the agent shell resolves differently"). A missing or tampered
-result stops the same way: no `path_check`, a wrong digest, tool keys other than exactly those
-six names, an entry whose `path` is not absolute or whose `shim` is not a boolean, or a program
-argument other than the repo. A found entry passes only with `shim` exactly `true`. Every embedded
+result (no `path_check`, a wrong digest, tool keys other than exactly those six names, an entry
+whose `path` is not absolute or whose `shim` is not a boolean, or a program argument other than
+the repo) gets one standalone check on a fresh agent one model tier up
+(`infra:path-check:preflight:relay-retry`, 8.3.3); a second such result stops the same way. A found entry passes only with `shim` exactly `true`. Every embedded
 program also gives its children a PATH without empty or relative entries, and the fixer gives
 pre-commit and its hooks one without the worktree's and the scratch dir's entries. The program spells the names in pieces, because
 the agent's Bash guard blocks them.
