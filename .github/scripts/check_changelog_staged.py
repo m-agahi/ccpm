@@ -16,14 +16,29 @@ import subprocess
 import sys
 
 
+def parse_name_status(output):
+    """Map `git diff --name-status` lines to the paths that count as changed.
+
+    R<score> and C<score> entries count their NEW path only; every other
+    status (A, M, D, T, ...) counts its single path.
+    """
+    paths = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        paths.append(fields[-1] if fields[0][:1] in ("R", "C") else fields[1])
+    return paths
+
+
 def staged_files():
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only"],
+        ["git", "diff", "--cached", "--name-status", "-M"],
         capture_output=True,
         text=True,
         check=True,
     )
-    return result.stdout.strip().splitlines()
+    return parse_name_status(result.stdout)
 
 
 def read_marketplace_json_staged():
