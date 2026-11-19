@@ -137,7 +137,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.3.1";
+const FLEET_VERSION = "8.3.2";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1700,12 +1700,12 @@ const PROGRAM_SHA256 = {
   "gate_tools": "328c31407cf9dff8099e1b5c60f3028db5a32d48b9eb344fa6b75c5dcd9a833c",
   "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
   "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
-  "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
+  "hasher": "b7470772776a9866b0a6cb7c319d8c8abcb9d039907b47b675a3a8042e37a9bd",
   "held_out": "bf0a828f8463a1029b29430e2e27c1d55b1df0cdb06bf193051a7d018103c8f0",
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
   "mutants": "430e1bb6aa9de51d76b58bab9167a7ee6d8770ec75bf4573721456e233369b0c",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "2592cd86bc705f4ead3750c41ccc8cd28ffbc07e67d7c61172a6e760d8a34411",
+  "parked": "494e97658c92d03f229436aec1179f6d43cd7ea8ac69fabace0e3216cf88cdb3",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
   "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
@@ -2639,7 +2639,9 @@ function workspacePrompt(inputs) {
 
 function hasherPrompt(inputs) {
   const hid = inputs.base_tree ? "hasher:base" : "hasher";
-  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files), inputs.base_tree || "", inputs.scratch_dir]);
+  // 8.3.2 (#103): a build-mode hasher also beats the run lock it holds (each judge has one before and after)
+  const beat = state.mode === "build" && state.lock ? state.lock.a.slice(1, 3) : [];
+  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files), inputs.base_tree || "", inputs.scratch_dir].concat(beat));
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
@@ -2655,7 +2657,7 @@ function hasherPrompt(inputs) {
     RUNNER_CONFIG_SECTIONS.map((s) => s.file + "#" + s.section + " = " + s.rule).join("; ") +
     ". Canonical form: json.dumps(sort_keys=True, separators=(',', ':')). Missing section = ABSENT, missing file = MISSING.";
   return (
-    INFRA_STEP + "HASHER. Read only: do not edit, create, stage or commit anything in the worktree (the program writes its maps to scratch_dir only).\n" +
+    INFRA_STEP + "HASHER. Read only: do not edit, create, stage or commit anything in the worktree (the program writes its maps to scratch_dir only" + (beat.length ? ", and this run's lock heartbeat" : "") + ").\n" +
     inputsLine(inputs) +
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
@@ -5693,6 +5695,9 @@ async function planAndAudit(ctx0) {
     const rx = (prior.relaxed || []).slice();
     for (const x of relaxedReasons(prior, roundSnapshot(plan))) if (rx.indexOf(x) < 0) rx.push(x);
     if (rx.length) gate("re-plan relaxed round 0: " + rx.join("; "));
+    // 8.3.2 (#101): each relaxed item is a result warning too (criterion and round), never a pass
+    const ws = (state.warnings = state.warnings || []);
+    for (const x of rx) if (!ws.some((w) => w.gate === "re-plan-relaxed" && w.reason === x)) ws.push({ gate: "re-plan-relaxed", criterion: (/^criterion (\S+) /.exec(x) || [])[1] || null, round: ctx.auditRound || 0, reason: x });
     ctx = Object.assign({}, ctx, { relaxed: rx });
   }
   const conf = confusableFindings(criteria);
@@ -6648,7 +6653,7 @@ async function planMode(input, date) {
   for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : b === PARKED_UNREADABLE ? ": " + parked.unreadable + "; plan-audit passed; the auto gates run" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
   if (ua && blockers.length) {
     gate("unattended: asking Max (" + blockers.join("; ") + ")");
-    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.join("; ") });
+    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.concat(p.relaxed.length && !blockers.some((b) => /^re-plan relaxed/.test(b)) ? ["re-plan relaxed: " + p.relaxed.join("; ")] : []).join("; ") });
   }
   // a relaxed re-plan never reaches the auto gates (unattended: the intent judge rules on it)
   if (auto && !ua && p.relaxed.length)
@@ -6660,7 +6665,7 @@ async function planMode(input, date) {
     if (confirm === "default") {
       extra.confirm_reason = blockers.join("; ");
       gate("confirm default: asking Max (" + extra.confirm_reason + ")");
-    }
+    } else if (p.relaxed.length) extra.confirm_reason = "re-plan relaxed: " + p.relaxed.join("; ");
     return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, extra);
   }
   if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");

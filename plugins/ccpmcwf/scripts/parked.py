@@ -321,18 +321,20 @@ elif mode == 'retire' and len(sys.argv) == 4:
             os.rename(src, dest)
             moved = True
     emit({'moved': moved, 'args': [src, used]})
-elif mode in ('claim', 'release'):
+elif mode in ('claim', 'release', 'beat'):
     # fleet 8.0.1 (#76): the per-task run lock <git-common-dir>/fleet/locks/<task id>.json.
     # claim <repo> <task id> <nonce> <plan|build>: O_CREAT|O_EXCL|O_NOFOLLOW, 0600; the same nonce
     # holds it again and refreshes its heartbeat; a lock whose heartbeat (else start) is over 12 h old
     # moves to .stale-<old>-<new> and is claimed once more. The heartbeat follows the run; the pid is
     # a short-lived helper's and says nothing about the run.
     # release <repo> <task id> <nonce>: unlinks the lock only when it holds this nonce.
+    # beat <repo> <task id> <nonce> (8.3.2, #103): the hasher's per-gate heartbeat; rewrites the
+    # heartbeat only of a lock that holds this nonce; never creates, moves or claims one.
     # The pid and host are for a human only; no symlink is followed on the way.
     import calendar, socket, subprocess, time
     n_args = 6 if mode == 'claim' else 5
     if len(sys.argv) != n_args:
-        sys.exit('usage: claim <repo> <task id> <nonce> <plan|build> | release <repo> <task id> <nonce>')
+        sys.exit('usage: claim <repo> <task id> <nonce> <plan|build> | release|beat <repo> <task id> <nonce>')
     repo, task, nonce = sys.argv[2:5]
     run_mode = sys.argv[5] if mode == 'claim' else None
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', task):
@@ -354,7 +356,7 @@ elif mode in ('claim', 'release'):
         if os.path.islink(d):
             sys.exit('refusing a symlink at ' + d)
         if not os.path.lexists(d):
-            if mode == 'release':
+            if mode != 'claim':
                 break
             try:
                 os.mkdir(d, 0o700)
@@ -417,6 +419,16 @@ elif mode in ('claim', 'release'):
         with os.fdopen(fd, 'w') as f:
             json.dump({'nonce': nonce, 'mode': run_mode, 'started': stamp(), 'heartbeat': stamp(), 'pid': str(os.getpid()), 'host': socket.gethostname()}, f)
         return True
+    if mode == 'beat':
+        h = holder()
+        out = {'beat': False, 'absent': h is None, 'held_by': None, 'lock': lock, 'args': args}
+        if h and h[0]['nonce'] == nonce:
+            beat(h[0])
+            out['beat'] = True
+        elif h:
+            out['held_by'] = h[0]
+        emit(out)
+        sys.exit(0)
     out = {'claimed': False, 'again': False, 'stale': None, 'held_by': None, 'lock': lock, 'args': args}
     if create():
         out['claimed'] = True
@@ -447,4 +459,4 @@ elif mode in ('claim', 'release'):
             out['claimed'] = True
     emit(out)
 else:
-    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce> | beat <repo> <task id> <nonce>')

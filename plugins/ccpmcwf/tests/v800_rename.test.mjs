@@ -21,7 +21,7 @@ test("8.0.0 R (#38) B1: the marketplace entry is ccpmcwf at ./plugins/ccpmcwf; n
   const e = mk.plugins.filter((p) => p.name === "ccpmcwf");
   assert.equal(e.length, 1);
   assert.equal(e[0].source, "./plugins/ccpmcwf");
-  assert.equal(e[0].version, "8.3.1");
+  assert.equal(e[0].version, "8.3.2");
   assert.equal(mk.plugins.filter((p) => p.name === "fleet").length, 0);
 });
 
@@ -30,7 +30,7 @@ test("8.0.0 R (#38) B2, B3: the manifest names ccpmcwf; plugins/ccpmcwf exists a
   assert.ok(P.endsWith(join("plugins", "ccpmcwf")), P);
   assert.ok(!existsSync(join(REPO, "plugins", "fleet")), "plugins/fleet is gone");
   const readme = readFileSync(join(REPO, "README.md"), "utf8");
-  assert.match(readme, /^### ccpmcwf \(v8\.3\.1\)$/m);
+  assert.match(readme, /^### ccpmcwf \(v8\.3\.2\)$/m);
   assert.doesNotMatch(readme, /^### fleet /m);
   assert.match(read("README.md"), /\/plugin install ccpmcwf@maxagahi-marketplace/);
 });
@@ -86,15 +86,15 @@ test("8.0.0 R (#38) B7, B8: the internals keep their names (refs/fleet/*, fleet/
 });
 
 test("8.0.0 R (#38) probe: the preflight globs .../cache/*/ccpmcwf/<version>/scripts and finds the scripts and roles dirs there", async () => {
-  assert.equal(SCRIPTS_DIR, "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.1/scripts");
+  assert.equal(SCRIPTS_DIR, "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.2/scripts");
   const s = happy();
   delete s.__dispatch;
   const out = await runOne(s, { mode: "probe", repo: "/r", date: ARGS.date });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.probe.scripts_dir, SCRIPTS_DIR);
-  assert.equal(out.result.probe.roles_dir, "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.1/roles");
-  assert.ok(out.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.3.1/scripts;'));
-  assert.ok(!out.calls[0].prompt.includes("/fleet/8.3.1/"));
+  assert.equal(out.result.probe.roles_dir, "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.2/roles");
+  assert.ok(out.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.3.2/scripts;'));
+  assert.ok(!out.calls[0].prompt.includes("/fleet/8.3.2/"));
 });
 
 test("8.0.0 R (#38) probe: a scripts dir of the old fleet install is refused, and the reason names ccpmcwf", async () => {
@@ -104,6 +104,6 @@ test("8.0.0 R (#38) probe: a scripts dir of the old fleet install is refused, an
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /install ccpmcwf 8\.3\.1 from the marketplace/);
+  assert.match(out.result.reason, /install ccpmcwf 8\.3\.2 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
