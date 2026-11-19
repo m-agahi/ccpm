@@ -1,5 +1,36 @@
 # Changelog
 
+## [8.2.5] - 2026-11-19
+
+ccpmcwf 8.2.5: yaadgaar #89, found in the 8.2.4 smoke runs wf_c6778ab7-68e, wf_66c5a236-9f2 and
+wf_ae59597d-2f6.
+
+### Fixed
+
+- #89: a role no longer runs its commands through a `$E` shell variable. The Bash tool shell is
+  zsh, and zsh does not split an unquoted `$E`: `$E cmd` exited 127 ("no such file or directory:
+  env PYTHONDONTWRITEBYTECODE=1 ..."), and one coder read the 127 as its red baseline. The build
+  env note (`test_env_note`) now ends with "Paste it literally, never in a shell variable (zsh:
+  exit 127, not a red test)." `test_env_prefix` keeps its shape (`env K='v' ... `).
+- #89: the repo's hooks in the commit step and the push now get `PYTHONDONTWRITEBYTECODE=1` from
+  `hookEnv()`, ahead of the build vars and the DSN. The commit step named it by hand in its
+  `<git>` prefix, and the push hooks did not get it. The commit prefix now names it once, from
+  the hook env. Ruling D1: `PYTEST_ADDOPTS` stays out of the hook env (5.0.4: it would replace
+  the repo's own value). A commit hook that runs pytest can still leave `.pytest_cache`;
+  `infra:purge-bytecode` deletes it before every hash check.
+- #89: role Bash calls ran with the tool default of 120 s. Every role prompt now holds the line
+  "Give every Bash call timeout 600000 ms." right before the StructuredOutput rule. The
+  held-out runner role file, step 4, now treats a `sandbox-run` call that the Bash tool itself
+  stops (a timeout, no JSON printed) as `timed_out` true, so the runner returns
+  `store: "timeout"`. Ruling D2: that is a stop for the human, as for the sandbox's own 540 s
+  deadline, never `not_run` (a coder whose code hangs must not turn the held-out gate off). The
+  engine is unchanged.
+
+### Notes
+
+- The dist has about 60 bytes left under the 495000-byte cap (ADR-1316). The next engine change
+  with new prompt text needs a trim or an ADR that moves the cap.
+
 ## [8.2.4] - 2026-11-18
 
 ccpmcwf 8.2.4: yaadgaar #86, found in the build run wf_ae59597d-2f6.

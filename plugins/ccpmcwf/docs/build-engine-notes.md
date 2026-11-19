@@ -4229,8 +4229,9 @@ for roles that get test_env only when the run has a test database
 ### `before hookEnv` (5.0.9 line 8127)
 
 ```text
-the env the repo's hooks get in the commit step and the push: the build
-vars of `key` (5.0.6; never PYTEST_ADDOPTS, see 5.0.4) and the run's DSN
+the env the repo's hooks get in the commit step and the push:
+PYTHONDONTWRITEBYTECODE=1 (8.2.5, #89), the build vars of `key` (5.0.6;
+never PYTEST_ADDOPTS, see 5.0.4) and the run's DSN
 ```
 
 ### `before testDbStep` (5.0.9 line 8172)

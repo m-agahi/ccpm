@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.4";
+const FLEET_VERSION = "8.2.5";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1568,7 +1568,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-"fleet-held-out-runner": "45d8598c8c940fda09f06ca2881190181f0c7e7333ecbde7d35f11a983913284",
+"fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -2287,6 +2287,7 @@ roleReadSteps(role) +
 (sh ? sharedReadSteps(sh) : "") +
 "The file is your role's instructions: follow them. If " + (sh ? "a step" : "step 1 or 2") + " fails, return status failed with the error.\n" +
 inputsLine(inputs) +
+"Give every Bash call timeout 600000 ms.\n" +
 "Return the role's final JSON object through the StructuredOutput tool; the schema enforces its keys. Put " +
 roleFileRule(role) +
 " Put it in the final StructuredOutput even when the role file's output section does not list it." +
@@ -2943,7 +2944,7 @@ const BUILD_ENV_ROWS = Object.freeze([
 ]);
 const BUILD_ENV_NOTE =
 "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
-") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run for the roles that write code, another for the gates). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
+") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run for the roles that write code, another for the gates). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there. Paste it literally, never in a shell variable (zsh: exit 127, not a red test).";
 function buildDirOf(key) {
 return state.buildScratch + "/build/" + safeName(state.nonce) + "/" + key;
 }
@@ -3070,7 +3071,7 @@ function commitStepPrompt(inputs) {
 return (
 INFRA_STEP + "COMMIT the code the code judge approved, in ONE new commit, WITH the repo's hooks. Never --no-verify, never -n, never --amend, never any other hook bypass; no Co-Authored-By trailer. Never push. Never edit, format, unstage or restore a file, and never retry the commit.\n" +
 inputsLine(inputs) +
-"Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+"Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
 "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
 "2. `<git> add -A`.\n" +
 "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
@@ -8410,7 +8411,7 @@ function dbInputs(consumer) {
 return state.db ? { test_env: testEnvFor(consumer), test_env_note: testEnvNote() } : {};
 }
 function hookEnv(key) {
-const o = buildEnv(key);
+const o = Object.assign({ PYTHONDONTWRITEBYTECODE: "1" }, buildEnv(key));
 if (state.db) o[state.db.env] = dbDsn("hooks");
 return o;
 }

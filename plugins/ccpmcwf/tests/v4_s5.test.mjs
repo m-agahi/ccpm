@@ -362,7 +362,7 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.ok(!JSON.stringify(w1env).includes("fleet_w_ac2"));
   // the repo's hooks get their own database in the commit step and the push
   // 5.0.6 (ledger 2019): after the build vars of the step's own dir
-  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " YADGAR_TEST_DSN='mysql:\\/\\/fleet_hooks:[0-9a-f]{32}@127\\.0\\.0\\.1:40000\\/fleet_hooks' git "));
+  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE='1' " + buildAssignsRe("commit-r1") + " YADGAR_TEST_DSN='mysql:\\/\\/fleet_hooks:[0-9a-f]{32}@127\\.0\\.0\\.1:40000\\/fleet_hooks' git "));
   // 7.4.0 (#9, changed on purpose): push.py takes the hook env as its JSON argument
   const pushIn = inputsOf(call(out.build, "infra:push").prompt);
   assert.equal(pushIn.args[5], JSON.stringify(pushIn.hook_env));
@@ -405,7 +405,7 @@ test("1981: no declaration starts no database and changes no role input", async 
   assert.equal(inputsOf(call(out, "role:scope-and-plan").prompt).test_env, undefined);
   // 5.0.6 (ledger 2019): the build vars of the role's own dir, never a DSN
   assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).test_env, roleTestEnv("coder-r1"));
-  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " git "));
+  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE='1' " + buildAssignsRe("commit-r1") + " git "));
 });
 
 test("AC-1981-2: a coder halt still removes the database, and the halt reason stays", async () => {
