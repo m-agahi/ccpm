@@ -1,5 +1,24 @@
 # Changelog
 
+## [8.3.5] - 2026-11-20
+
+ccpmcwf 8.3.5: canary for yaadgaar `#25`: omitClaudeMd on the ccpmcwf:judge agent.
+
+### Changed
+
+- yaadgaar `#25` (step 1 of Max's ruling A, 2026-11-19): `agents/judge.md` sets
+  `omitClaudeMd: true` (Claude Code v2.1.271 or later). Every probe-mode agent (preflight and the
+  role read) runs under `ccpmcwf:judge`, so a probe run shows whether the user, project and local
+  CLAUDE.md files (and AGENTS.md) still reach a Workflow agent. The other steps (every agent()
+  call under a ccpmcwf agent type, the safety rules in the role files, the README threat model)
+  wait for the canary result.
+
+### Notes
+
+- Test v835_omit_claude_md pins the field and that the probe-mode agents run under
+  `ccpmcwf:judge`.
+- Only the version and the field change; the dist is 504678 bytes.
+
 ## [8.3.4] - 2026-11-20
 
 ccpmcwf 8.3.4: placebo mutant control and code-judge tamper signatures (yaadgaar `#79`).
