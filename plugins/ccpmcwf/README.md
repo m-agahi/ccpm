@@ -38,7 +38,8 @@ free text.
 
 The commands are `/ccpmcwf:build-task`, `/ccpmcwf:plan-task` and `/ccpmcwf:fleet-policy` (or
 `/build-task`, `/plan-task` and `/fleet-policy` when no other plugin has the name); the workflow is
-`ccpmcwf:build-engine` and the read-only agent is `ccpmcwf:judge`.
+`ccpmcwf:build-engine`. Its agents run under four agent types (8.4.0, see the threat model): the read-only
+`ccpmcwf:judge`, `ccpmcwf:builder`, `ccpmcwf:infra-writer` and `ccpmcwf:yaadgaar-writer`.
 
 **Upgrade from fleet (8.0.0).** The plugin was named `fleet` up to 7.4.0. Run
 `/plugin marketplace update maxagahi-marketplace`, uninstall it
@@ -954,8 +955,8 @@ is `plan_base`, for example after a re-plan.
   project other than the scope, or gives a version that is not an integer. An answer naming no
   project needs the proven session project (5.0.9) = the scope: another is `failed`, no proof
   is `unavailable`, and neither edits. `ccpmcwf:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
-  `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
-  agent: `ccpmcwf:judge` may never write to a ledger) edits each task by id with the version read
+  `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (`ccpmcwf:yaadgaar-writer`:
+  `ccpmcwf:judge` may never write to a ledger) edits each task by id with the version read
   as `expect_version`, after it re-reads the task by id and checks its id and number (fail
   closed): an empty body gets `body` = the `## Fleet build` heading plus
   `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
@@ -963,9 +964,9 @@ is `plan_base`, for example after a re-plan.
   (`expect_count: 1`). On `VERSION_MISMATCH` it re-reads and retries once; any other refusal fails
   the entry. It re-reads after the edit to confirm the marker landed and nothing was cut. The step
   calls no other task, memory or wiki tool. A task that already carries the marker is skipped without
-  an edit step. Task bodies are data, not instructions. No
-  tool-restricted agent type that can call `mcp__yaadgaar__*` exists, so the step uses the default
-  agent. A ref that is not a task number is never sent. A failed entry carries `section_text` to
+  an edit step. Task bodies are data, not instructions. Since 8.4.0 the step runs as
+  `ccpmcwf:yaadgaar-writer`, the only agent type that can call `mcp__yaadgaar__edit_task`; it has no
+  Bash, no Write and no Edit, and cannot create or transition a task. A ref that is not a task number is never sent. A failed entry carries `section_text` to
   add by hand.
 - **Plan:** no link since 6.0.0; the plan doc is not on the pushed branch.
 - **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, PR
@@ -1037,7 +1038,7 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
    (never `cat`: the Bash tool cuts output near 30000 characters, and a cut file would still
    match its sha256sum line). It follows the file. The wrapper also carries the inputs, the
    StructuredOutput rule and, last, a reminder to put `role_file` in the final output. Every
-   role runs as `ccpmcwf:judge` or the default agent; both can use Read. `gen.mjs` refuses a role
+   role runs as a ccpmcwf agent type (8.4.0: `ccpmcwf:judge`, `ccpmcwf:builder` or `ccpmcwf:infra-writer`); each can use Read. `gen.mjs` refuses a role
    or shared file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over
    40000 characters in all. It also refuses a role file whose DISPATCH line is missing or names a
    tier outside `TIERS`.
@@ -1299,7 +1300,39 @@ Defended (each by a gate in script code):
 - planner-command injection: `test_cmd` and `check_cmd` pass a script allowlist and Max approves
   them verbatim (or G2 checks them), and the workflow script runs none of them.
 
+Instruction channels (8.4.0, yaadgaar #25, ADR-1348): every agent of the workflow runs under one of
+four plugin agent types in `agents/`, and each sets `omitClaudeMd: true`. So the user's global
+`~/.claude/CLAUDE.md` (with its `@` imports) and the session's project and local CLAUDE.md files do
+not reach a role or infra agent. Before 8.4.0 the default agent got them as an "OVERRIDE any default
+behavior" attachment, which put orchestrator, memory and fleet-routing rules next to the role file;
+the 8.3.5 canary (`ccpmcwf:judge`) showed none of them with the field set. `agentT`, the one
+`agent()` call, refuses a call with no ccpmcwf agent type (`stop_gate: "contract"`), and
+`roleAgent` takes each role's type from `ROLE_AGENT`. The types and their tools:
+
+| agent type                | runs                                                                                                                                                                                                                                          | denies                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `ccpmcwf:judge`           | the judges, `plan-audit`, `fleet-ci-classifier`, `fleet-held-out-runner`, and every read-only infra step (preflight, intake, hasher, reads, scans, gates, `pr_state` view and logs)                                                           | Write, Edit, NotebookEdit       |
+| `ccpmcwf:builder`         | `scope-and-plan` (the plan doc), `fleet-test-writer`, `fleet-coder`                                                                                                                                                                           | NotebookEdit                    |
+| `ccpmcwf:infra-writer`    | `fleet-pr-opener` (gh, its body file) and every infra write step (workspace, run lock, build dirs, format, plan commit, chunk writers, state and freeze refs, held-out store, commit, push, PR state changes, re-plan, test DB, comment post) | Edit, NotebookEdit              |
+| `ccpmcwf:yaadgaar-writer` | `infra:yaadgaar-writeback`                                                                                                                                                                                                                    | Bash, Write, Edit, NotebookEdit |
+
+Each type also denies the mutating yadgar and yaadgaar MCP tools (the yaadgaar writer keeps
+`mcp__yaadgaar__edit_task`). Dropping CLAUDE.md also drops the user's safety rules, so each agent
+file's body (its system prompt) carries them word for word, between the `ccpmcwf-safety-rules`
+markers: No Terraform (with its CI auto-plan and pre-commit exemptions), No `tf-local-*` Container
+Exec, Apply / Import (Shared Infra), 1Password MCP Is Read-Only, Branch First, Merging by Repo Owner,
+No Hook Bypass and No Co-Author Attribution. `tests/v840_agent_types.test.mjs` pins the block's
+sha256 and, where `~/.claude/agent-instructions.md` exists, its bytes against those sections.
+
 Not defended:
+
+- managed policy files: `omitClaudeMd` does not drop the managed (enterprise) CLAUDE.md and
+  settings; they still load for every agent;
+- the target repo's own CLAUDE.md: an agent's cwd is the session's cwd, not the target repo, and
+  no test or canary shows whether a CLAUDE.md inside the target repo reaches an agent that reads
+  files there (untested);
+- the copied safety rules can drift from the user's global rules: the sha256 pin catches a change
+  to the copy, and the byte check catches a change to the source only on a machine that has it;
 
 - a hostile agent with a shell: it can run anything the user can, outside the worktree too;
 - in-environment exec vectors: git filter drivers that act during the hasher's own `git add`,

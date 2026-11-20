@@ -129,10 +129,11 @@ const SCENARIOS = {
 // 8.3.2 (#103): every build-mode hasher prompt passes the lock's task id and nonce to hasher.py (the per-gate heartbeat) and its read-only line names the lock heartbeat; #101 changes no prompt. Checked: with those two hasher edits stripped every pin is 8.3.1's; same call counts: the three build pins move, probe unchanged
 // 8.3.3 (yaadgaar #97): the plan-ref chunks are PLAN_CHUNK_CHARS (2000) long, so the infra:plan-chunks writer prompt says "(2000 characters each at most)" and carries more, shorter chunks (each with its sha256), and commit-plan's plan_ref_write command carries a longer chunk sha256 list. Checked: with PLAN_CHUNK_CHARS put back to 4000 every pin is 8.3.2's (the #102 role-file edits only move masked role shas; the preflight PATH-check retry runs only on a bad relay); same call counts: the three build pins move, probe unchanged
 // 8.3.4 (yaadgaar #79): the mutants program pin, the code-judge role sha and the version move; all three are masked, so no pin moves (probe unchanged)
+// 8.4.0 (yaadgaar #25): no prompt changes; opts.agentType does: every call names a ccpmcwf type, and plan-audit, the plan-mode sweep, pr-view and ci-logs run as ccpmcwf:judge. Checked: with agentType put back to 8.3.5's (ccpmcwf:judge where it was, else absent) every pin is 8.3.5's; same call counts: the three plan/build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "0be02cfc8e15ecb8ac6398c66dcc2b5a2c393c5fa20c4e270361f709583739d7" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "9ac88b35756303edaa19e1a9c7ed583f8734f4341da092c6b197a7c0fe853b9e" },
-  "short path (one test writer)": { calls: 88, sha256: "1f29675e56d41ba809a09f1ce54a0ddb2521101565b933eaa6a29d22e94fd4ef" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "8596cf3e612374fcf9fb6c8b21120448f89b6e49a36e1cee8aec70909ff2a4e5" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "81c9426fc1d6ecdcae05833ab429e8caf7166f4a22ec23f513a7b71a1b0b9363" },
+  "short path (one test writer)": { calls: 88, sha256: "1d9045ae506bfebdc013ed609a882ad3c05bc85ac7083b2bd3bae461f86d7b7c" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

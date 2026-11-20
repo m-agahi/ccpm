@@ -1,5 +1,58 @@
 # Changelog
 
+## [8.4.0] - 2026-11-20
+
+ccpmcwf 8.4.0: every agent under a ccpmcwf agent type with omitClaudeMd; the safety rules in the agent bodies (yaadgaar `#25`, steps 2-5).
+
+### Added
+
+- yaadgaar `#25` (ADR-1348; the 8.3.5 canary showed `omitClaudeMd` works for `ccpmcwf:judge`
+  under Workflow `agent()`): three agent types beside `ccpmcwf:judge`, each with
+  `omitClaudeMd: true`, `model: inherit` and the judge's deny list of mutating yadgar and
+  yaadgaar MCP tools:
+  - `ccpmcwf:builder` for `scope-and-plan` (with its audit fix), `fleet-test-writer` and
+    `fleet-coder`: Write and Edit, no NotebookEdit;
+  - `ccpmcwf:infra-writer` for `fleet-pr-opener` (gh and its body file) and every infra write
+    step (workspace, run lock, build dirs, format, plan commit, chunk writers, state and freeze
+    refs, held-out store, park, stop save, commit, push, PR state changes, PR stats and tests,
+    review cleanup, re-plan, test DB, comment post): Write for the chunk and body files, no Edit;
+  - `ccpmcwf:yaadgaar-writer` for `infra:yaadgaar-writeback`: `mcp__yaadgaar__edit_task` only,
+    no Bash, Write or Edit.
+- Each agent file's body (its system prompt) carries the user's safety HARD RULES word for
+  word from `~/.claude/agent-instructions.md`: No Terraform (with the CI auto-plan and
+  pre-commit exemptions), No `tf-local-*` Container Exec, Apply / Import (Shared Infra),
+  1Password MCP Is Read-Only, Branch First, Merging by Repo Owner, No Hook Bypass, No
+  Co-Author Attribution. The body, not a shared role file, because it reaches every agent (the
+  infra steps run no role file), costs no dist bytes and no role-file reads, and changes no
+  role file, so no role hash pin and no prompt text moves.
+
+### Changed
+
+- Every `agent()` call runs under a ccpmcwf agent type. `agentT` (the one `agent()` call) stops
+  the run (`stop_gate: "contract"`) on a call with no type or an unknown one; `roleAgent` takes
+  each role's type from the new `ROLE_AGENT` table and stops on a caller that names another.
+- `plan-audit` and the plan-mode `gate-change-nonweakening-sweep` run as `ccpmcwf:judge` (both
+  only read and report); `pr_state` view and logs (`infra:pr-view`, `infra:ci-logs`) too.
+- README: the threat model names the closed CLAUDE.md channel, the agent types and their tools,
+  and what stays open (managed policy files, the target repo's own CLAUDE.md: untested).
+
+### Notes
+
+- Test v840_agent_types: the four agent files, `omitClaudeMd` on each, the safety block (same in
+  every file, sha256 pinned, byte-equal to the live source where it exists), each type's deny
+  list, `ROLE_AGENT`, the tools each role file asks for, the type of every agent of the happy
+  plan and build run, and the `agentT` refusal. The test harness (`WANT_AGENT`) now throws on any
+  agent call whose type is not the expected one for its label, so every scenario of the suite
+  checks the mapping.
+- v5010 prompt snapshot: the three plan/build pins move only because `opts.agentType` is in the
+  digest (probe unchanged). Checked: with `agentType` mapped back to 8.3.5's (`ccpmcwf:judge`
+  where it was, else absent) every pin is 8.3.5's.
+- The live-source byte check of the safety block fails on purpose on a machine whose
+  `~/.claude/agent-instructions.md` changed (copy the sections again and re-pin); CI has no such
+  file and skips it.
+- Dist 506570 bytes (8.3.5: 504678); role files unchanged.
+- The new types need `/reload-plugins` (or a new session) after the update.
+
 ## [8.3.5] - 2026-11-20
 
 ccpmcwf 8.3.5: canary for yaadgaar `#25`: omitClaudeMd on the ccpmcwf:judge agent.
