@@ -1405,6 +1405,16 @@ Closed in 8.1.0 (each has a fixture in `v810_sandbox`):
    not visible, and each mutant run gets a fresh overlay of the copy, so no run leaves state for
    the next.
 
+The placebo mutant (8.3.4, yaadgaar `#79`, flag-only). A source that fails whenever its own bytes
+change (it hashes its own file, say) makes every mutant count as killed. After the green baseline,
+`mutants.py` appends one comment line with a random token to every file it will mutate and runs the
+suite once, with the bound and deadline of a mutant run. Every file is put back in a `finally` block
+before any result. The suite must stay green: a red placebo run, or one past the bound, gives
+`not_run` "placebo mutant killed: ..." and no mutant runs. The gate is then listed in
+`gates_not_run` and flags the PR. It is not a new stop (a flaky or byte-sensitive suite gives the
+same result); the existing rule of ADR-1318 still stops a later round that gives `not_run` after
+findings. A deadline hit in the placebo run is `partial`, as for a mutant run.
+
 What is left (accepted residuals):
 
 - Other world-readable host paths stay readable (`/` is bound read-only), and so do host unix
@@ -1415,7 +1425,11 @@ What is left (accepted residuals):
 - In-process tampering: the tests share the tracer's process and its data dir in the
   `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
-  install) runs too.
+  install) runs too. The held-out and coverage verdicts stay in-process by design (ADR-1152,
+  ADR-1325): a sandbox limits what the tests touch, not what they report. Mutation has a placebo
+  control (above); a source that hashes its AST or `__code__` rather than its bytes still passes the
+  placebo. The code judge's step 9 lists the tamper signatures as advisory findings (`os._exit`,
+  the `coverage` API, `sys.settrace`, a module that hashes its own `__file__`, `atexit` exit codes).
 - The git common dir is bound read-only for the held-out and coverage copies, so the repo's
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
@@ -1953,7 +1967,8 @@ The script pins the role contract, not the prose:
   of changed production `.py` files: comparison flip, boolean swap, boundary +-1 and dropped
   `not`, at most 200 mutants spread evenly over the lines. It runs the sealed `test_cmd` once per
   mutant within 540 s and lists the survivors `{id, path, line, op}`. The file is restored and
-  checked after each run. A red baseline, another runner or no python source: `not_run`; changed
+  checked after each run. A placebo run (8.3.4, a random-token comment on each file) must stay
+  green first; red: `not_run` "placebo mutant killed". A red baseline, another runner or no python source: `not_run`; changed
   non-python source or the deadline: `partial` ("N of M not run"). The code judge rules every
   survivor in `mutant_rulings: [{id, target, reason}]`: `equivalent` passes, `code` goes to the
   coder, and `tests` goes to the augmentation round (below). An approve with an unruled survivor

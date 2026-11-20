@@ -1,5 +1,35 @@
 # Changelog
 
+## [8.3.4] - 2026-11-20
+
+ccpmcwf 8.3.4: placebo mutant control and code-judge tamper signatures (yaadgaar `#79`).
+
+### Added
+
+- yaadgaar `#79`: the mutation gate runs a placebo mutant. After the green baseline, `mutants.py`
+  appends one comment line with a random token to every file it will mutate and runs the suite
+  once, with the bound and the deadline of a mutant run. Every file is put back in a `finally`
+  block before any result is printed. A red placebo run (or one past the bound) gives `not_run`
+  "placebo mutant killed: the suite fails on a comment-only change (exit N); no mutant run", and
+  no mutant runs. This catches a source that hashes its own file (every mutant would count as
+  killed) and a flaky or byte-sensitive suite. Max ruled flag-only (2026-11-20): the result flags
+  the PR through `gates_not_run` and is no new stop; the ADR-1318 rule (a later round that gives
+  `not_run` after findings stops at `gates`) is unchanged. A deadline hit in the placebo run is
+  `partial` ("N of M not run"); a placebo run that cannot start the test_cmd (exit 4, 5, 126
+  or 127) exits non-zero, as a mutant run does. The output keys are unchanged; one extra test
+  run per gate run.
+- yaadgaar `#79`: the code judge's step 9 "Dodges" lists gate-tampering signatures as advisory
+  findings: `os._exit` or `sys.exit` outside an entry point, the `coverage` API,
+  `sys.settrace`, `sys.setprofile` or `sys.monitoring`, a module that reads or hashes its own
+  `__file__` or source, and an `atexit` handler that sets an exit status.
+
+### Notes
+
+- The held-out and coverage verdicts stay in-process limits by design (ADR-1152, ADR-1325); the
+  README threat model says so and names the residual of the placebo (a source that hashes its
+  AST or `__code__`, not its bytes).
+- The dist is 504678 bytes (only the version and two sha256 pins change).
+
 ## [8.3.3] - 2026-11-19
 
 ccpmcwf 8.3.3: role fact notes and relay robustness (yaadgaar `#102` and `#97`).

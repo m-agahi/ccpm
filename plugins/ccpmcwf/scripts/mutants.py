@@ -57,6 +57,12 @@ except Exception:
 # PATH guard, no COVERAGE_* or FLEET_* var, no bytecode written (a fresh pycache prefix outside
 # the scratch dir), no gate-data path. Changed non-python source: partial (python lines too) or
 # not_run "unsupported" (none).
+# 8.3.4 (#79, flag-only): the placebo mutant. After the green baseline and before the mutants, every
+# file to mutate gets one appended comment line with a random token (os.urandom; never printed), the
+# suite runs once (bound and deadline as a mutant run), and every file is put back in a finally block
+# before any result. A red placebo (or one past the bound): not_run "placebo mutant killed: ...", no
+# mutant run (a source that hashes its own bytes, or a flaky or byte-sensitive suite, would make every
+# mutant a kill). A deadline hit: partial, as above; exit 4, 5, 126, 127: non-zero, as a mutant run.
 # 8.1.0 (#75): every test run is a sandbox.py run (bwrap; no network, HOME, the worktree and its git dir
 # hidden), each in a fresh sandbox (the copy a fresh overlay each run, so no run leaves state for the next);
 # the base re-run follows a reset of the test database. No sandbox (no bwrap, a failed self-check,
@@ -361,6 +367,26 @@ try:
             emit('not_run', 'tree red, base green: the judged tree fails test_cmd in the scratch copy (exit %d)' % code)
         emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
     bound = max(10.0, 4 * (time.monotonic() - t0) + 5)
+    # 8.3.4 (#79): the placebo mutant, a random-token comment line on every file to mutate; restored before any result
+    pf, pc = sorted({m[0] for m in sel}), None
+    tok = ('\n# fleet placebo %s\n' % os.urandom(16).hex()).encode('ascii')
+    try:
+        for p in pf:
+            b = orig[p][0]
+            put(os.path.join(tmp, p), b + (tok if b and not b.endswith(b'\n') else tok[1:]), orig[p][1])
+        try:
+            pc = run(run_argv, tmp, env, log, bound)
+        except Late:
+            pass
+    finally:
+        for p in pf:
+            put(os.path.join(tmp, p), *orig[p])
+    if pc is None:
+        late(M)
+    if pc in (4, 5, 126, 127):
+        sys.exit('a placebo mutant run could not run the test_cmd: exit %d (a usage error or no runner)' % pc)
+    if pc != 0:
+        emit('not_run', 'placebo mutant killed: the suite fails on a comment-only change (exit %d); no mutant run' % pc)
     try:
         for k, (p, l, c0, c1, new, op) in enumerate(sel):
             f = os.path.join(tmp, p)

@@ -161,7 +161,8 @@ test("8.0.0 G5: the operators: comparison flip, boolean swap, boundary +-1, drop
       ["m10", 9, "bool: False -> True"],
     ],
   );
-  assert.equal(y.calls.length, 11, "the baseline and one run per mutant");
+  // 8.3.4 (#79): plus the placebo run
+  assert.equal(y.calls.length, 12, "the baseline, the placebo and one run per mutant");
 });
 
 test("8.0.0 G5: at most 200 mutants, spread evenly over the changed lines (every line gets one before any gets a second)", { skip: !HAVE_PY }, () => {
@@ -231,8 +232,8 @@ test("8.0.0 G5: unsupported: a non-pytest test_cmd or no python source gives not
 });
 
 test("8.0.0 G5-4: a budget hit gives partial with 'N of M not run'; budget_hit; the copy is restored and removed", { skip: !HAVE_PY }, () => {
-  // the baseline is quick; each mutant run sleeps past the 3 s deadline
-  const y = once({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then ' + SLEEP + " 30; fi\necho run >> \"$LOG\"\nexit 0\n" }, { deadline: 3 });
+  // the baseline and the placebo (8.3.4, #79; its own deadline case: v834_placebo) are quick; each mutant run sleeps past the 3 s deadline
+  const y = once({ add: WEAK, pytest: 'if [ -f "$LOG.p" ]; then ' + SLEEP + ' 30; fi\nif [ -f "$LOG" ]; then : > "$LOG.p"; fi\necho run >> "$LOG"\nexit 0\n' }, { deadline: 3 });
   assert.equal(y.r.status, 0, y.r.stderr);
   assert.equal(y.out.status, "partial");
   assert.equal(y.out.budget_hit, true);
@@ -248,20 +249,24 @@ test("8.0.0 G5-4: a budget hit gives partial with 'N of M not run'; budget_hit; 
 
 test("8.0.0 G5-5: a mutant never remains after a killed runner: each run sees exactly one mutated line; a planted symlink or a directory never takes the restore", { skip: !HAVE_PY }, () => {
   // the runner kills itself (SIGKILL) on every mutant run: each is killed, and each run sees the tree plus one mutant
-  const y = once({ add: WEAK, pytest: "echo ---- >> \"$LOG\"\n" + CAT + ' pkg/mod.py >> "$LOG"\nif [ -f "$LOG.base" ]; then kill -9 $$; fi\n: > "$LOG.base"\nexit 0\n' });
+  // 8.3.4 (#79): the 2nd run is the placebo (green); the kills start at the 3rd
+  const y = once({ add: WEAK, pytest: "echo ---- >> \"$LOG\"\n" + CAT + ' pkg/mod.py >> "$LOG"\nif [ -f "$LOG.p" ]; then kill -9 $$; fi\nif [ -f "$LOG.base" ]; then : > "$LOG.p"; fi\n: > "$LOG.base"\nexit 0\n' });
   assert.equal(y.r.status, 0, y.r.stderr);
   assert.equal(y.out.killed, 3);
   assert.deepEqual(y.out.survived, []);
   const runs = y.calls.join("\n").split("----\n").filter(Boolean).map((t) => t.trimEnd().split("\n"));
-  assert.equal(runs.length, 4);
+  assert.equal(runs.length, 5);
   const orig = (BASE_MOD + WEAK).split("\n").filter(Boolean);
   assert.deepEqual(runs[0], orig, "the baseline sees the judged tree");
-  for (const r of runs.slice(1)) assert.equal(r.filter((l, i) => l !== orig[i]).length, 1, "one mutated line: " + r.join("|"));
+  assert.deepEqual(runs[1].slice(0, -1), orig, "the placebo: the judged tree");
+  assert.match(runs[1][orig.length], /^# fleet placebo [0-9a-f]{32}$/, "plus one comment line");
+  for (const r of runs.slice(2)) assert.equal(r.filter((l, i) => l !== orig[i]).length, 1, "one mutated line: " + r.join("|"));
   // a test run that swaps the module for a symlink to a file outside the copy: the restore replaces the link
   const victim = join(tmpdir(), "fleet-g5-victim-" + process.pid);
   writeFileSync(victim, "keep\n");
   try {
-    const z = once({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then ' + RM + " pkg/mod.py; " + LN + " -s '" + victim + "' pkg/mod.py; fi\necho run >> \"$LOG\"\nexit 0\n" });
+    // 8.3.4 (#79): from the 3rd run (a mutant run; the 2nd is the placebo)
+    const z = once({ add: WEAK, pytest: 'if [ -f "$LOG.p" ]; then ' + RM + " pkg/mod.py; " + LN + " -s '" + victim + "' pkg/mod.py; fi\nif [ -f \"$LOG\" ]; then : > \"$LOG.p\"; fi\necho run >> \"$LOG\"\nexit 0\n" });
     assert.equal(z.r.status, 0, z.r.stderr);
     assert.equal(readFileSync(victim, "utf8"), "keep\n", "nothing written through the link");
     assert.ok(z.same);
@@ -270,7 +275,8 @@ test("8.0.0 G5-5: a mutant never remains after a killed runner: each run sees ex
     rmSync(victim, { force: true });
   }
   // a test run that makes the module a directory: the restore cannot hold; fail closed (non-zero exit)
-  const w = once({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then ' + RM + " pkg/mod.py; " + MKDIR + " pkg/mod.py; fi\necho run >> \"$LOG\"\nexit 0\n" });
+  // 8.3.4 (#79): from the 3rd run (a mutant run); the placebo restore case: v834_placebo
+  const w = once({ add: WEAK, pytest: 'if [ -f "$LOG.p" ]; then ' + RM + " pkg/mod.py; " + MKDIR + " pkg/mod.py; fi\nif [ -f \"$LOG\" ]; then : > \"$LOG.p\"; fi\necho run >> \"$LOG\"\nexit 0\n" });
   assert.notEqual(w.r.status, 0);
   assert.equal(w.out, null);
   assert.match(w.r.stderr, /restore/);
@@ -279,7 +285,8 @@ test("8.0.0 G5-5: a mutant never remains after a killed runner: each run sees ex
 });
 
 test("8.0.0 G5-5: a runner killed mid-mutant (SIGTERM) restores and removes its copy; a SIGKILLed one's copy is swept by the next run", { skip: !HAVE_PY }, () => {
-  const x = repo({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then ' + SLEEP + " 30; fi\necho run >> \"$LOG\"\nexit 0\n" });
+  // 8.3.4 (#79): the placebo run is quick; the mutant runs sleep
+  const x = repo({ add: WEAK, pytest: 'if [ -f "$LOG.p" ]; then ' + SLEEP + ' 30; fi\nif [ -f "$LOG" ]; then : > "$LOG.p"; fi\necho run >> "$LOG"\nexit 0\n' });
   try {
     const t = prog(x, { killAfter: 2500 });
     assert.notEqual(t.r.status, 0);
@@ -288,6 +295,7 @@ test("8.0.0 G5-5: a runner killed mid-mutant (SIGTERM) restores and removes its 
     const k = prog(x, { killAfter: 2500, signal: "SIGKILL" });
     assert.ok(k.leftovers.length >= 1, "KILL: the copy stays behind");
     rmSync(x.log, { force: true });
+    rmSync(x.log + ".p", { force: true });
     const n = prog(x, { deadline: 2 });
     assert.equal(n.r.status, 0, n.r.stderr);
     assert.deepEqual(n.leftovers, [], "the next run sweeps the stale copy");
@@ -311,11 +319,11 @@ test("8.0.0 G5 security: no result cache: a forged cache entry with the right ke
     writeFileSync(join(x.d, "scratch", "mutants-cache.json"), JSON.stringify({ key, out: forged }));
     const a = prog(x);
     assert.equal(a.r.status, 0, a.r.stderr);
-    assert.equal(a.calls.length, 4, "the baseline and the three mutants ran");
+    assert.equal(a.calls.length, 5, "the baseline, the placebo (8.3.4, #79) and the three mutants ran");
     assert.equal(a.out.survived.length, 3, "the real survivors");
     assert.ok(!existsSync(join(x.d, "scratch", "mutants-cache.json")), "the leftover file is deleted");
     const b = prog(x);
-    assert.equal(b.calls.length, 8, "a retry runs the gate again");
+    assert.equal(b.calls.length, 10, "a retry runs the gate again");
     assert.deepEqual(b.out, a.out);
     assert.ok(!existsSync(join(x.d, "scratch", "mutants-cache.json")), "nothing is written");
     assert.doesNotMatch(readFileSync(PROG, "utf8"), /mutants-cache\.json'\)\s*\n.*open\(/);
@@ -325,17 +333,18 @@ test("8.0.0 G5 security: no result cache: a forged cache entry with the right ke
 });
 
 test("8.0.0 G5: a mutant run that never starts (the runner is gone) or a runner usage error is an error, never a kill", { skip: !HAVE_PY }, () => {
-  // the stub deletes itself after the baseline: every mutant run fails to start
-  const y = once({ add: WEAK, pytest: RM + ' "$0"\nexit 0\n' });
+  // the stub deletes itself in the placebo run (8.3.4, #79; the baseline writes $LOG): every mutant run fails to start
+  const y = once({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then ' + RM + ' "$0"; fi\necho run >> "$LOG"\nexit 0\n' });
   assert.notEqual(y.r.status, 0);
   assert.equal(y.out, null);
   assert.match(y.r.stderr, /mutant run could not run the test_cmd/);
   assert.ok(y.same);
   assert.deepEqual(y.leftovers, []);
   for (const code of [4, 5]) {
-    const z = once({ add: WEAK, pytest: 'if [ -f "$LOG" ]; then exit ' + code + '; fi\necho run >> "$LOG"\nexit 0\n' });
+    // 8.3.4 (#79): a mutant run (the 3rd); the placebo case: v834_placebo
+    const z = once({ add: WEAK, pytest: 'if [ -f "$LOG.p" ]; then exit ' + code + '; fi\nif [ -f "$LOG" ]; then : > "$LOG.p"; fi\necho run >> "$LOG"\nexit 0\n' });
     assert.notEqual(z.r.status, 0, "exit " + code);
-    assert.match(z.r.stderr, new RegExp("exit " + code));
+    assert.match(z.r.stderr, new RegExp("^a mutant run could not run the test_cmd: exit " + code, "m"));
   }
 });
 
@@ -486,6 +495,9 @@ test("8.0.0 G5: the code-judge schema has mutant_rulings [{id, target: tests|cod
   assert.match(role, /script_findings\.mutation/);
   assert.match(role, /mutant_rulings/);
   assert.match(role, /every survivor/);
+  // 8.3.4 (#79): step 9 "Dodges" names the gate-tampering signatures (advisory)
+  const dodges = /\n9\. \*\*Dodges\.\*\*[^\n]*/.exec(role)[0];
+  for (const k of ["`os._exit`", "`coverage`", "`sys.settrace`", "`__file__`"]) assert.ok(dodges.includes(k), "step 9 names " + k);
   assert.ok(!/kill rate/i.test(SOURCE.replace(/\/\/.*$/gm, "")), "no kill-rate stop in the script");
 });
 

@@ -137,7 +137,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.3.3";
+const FLEET_VERSION = "8.3.4";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1703,7 +1703,7 @@ const PROGRAM_SHA256 = {
   "hasher": "b7470772776a9866b0a6cb7c319d8c8abcb9d039907b47b675a3a8042e37a9bd",
   "held_out": "bf0a828f8463a1029b29430e2e27c1d55b1df0cdb06bf193051a7d018103c8f0",
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-  "mutants": "430e1bb6aa9de51d76b58bab9167a7ee6d8770ec75bf4573721456e233369b0c",
+  "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "494e97658c92d03f229436aec1179f6d43cd7ea8ac69fabace0e3216cf88cdb3",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1744,7 +1744,7 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "97be586c1fd16588732c66c6afc6ed665fee02df6ef2ebf6e7a734bbd642a684",
+  "fleet-code-judge": "b5d6dddad50a7867978fa1e43f82357cf83329b3ae679c6d31b0a0fdec7a3db2",
   "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
   "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
   "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
