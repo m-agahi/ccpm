@@ -446,8 +446,8 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "..", "src", "build-engine.js"), "utf8");
   const ro = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
-  // 6.2.2 re-review D-N1: the default-agent (write) form infra(..., undefined, "<id>") too
-  const writes = [...src.matchAll(/,\s*undefined,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
+  // 6.2.2 re-review D-N1: the write form infra(..., undefined, "<id>") too (8.4.0 #25: infra(..., INFRA_AGENT, "<id>"))
+  const writes = [...src.matchAll(/,\s*(?:undefined|INFRA_AGENT),\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
   // 8.0.0 (#62 B2): a surfaces step (the read-only ccpmcwf:judge agent) retries the programs it lists with retry: true
   assert.match(src, /\nasync function surfaces\([^]*?dispatch\(label, surfacesPrompt\(inputs, progs\), \{ schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, /);
   ro.push(...[...src.matchAll(/\{ name: "([a-z_]+)", args: [^{}]*?, retry: true \}/g)].map((m) => m[1]));

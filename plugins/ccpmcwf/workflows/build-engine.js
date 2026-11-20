@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.3.5";
+const FLEET_VERSION = "8.4.0";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -191,6 +191,24 @@ const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
 const JUDGE_AGENT = "ccpmcwf:judge"; // read-only: Write/Edit/NotebookEdit disallowed
+const BUILDER_AGENT = "ccpmcwf:builder"; // the plan doc, tests, code: Write and Edit
+const INFRA_AGENT = "ccpmcwf:infra-writer"; // write steps and the PR opener: Write (chunk and body files), no Edit
+const YAADGAAR_AGENT = "ccpmcwf:yaadgaar-writer"; // the yaadgaar write-back: edit_task, no Bash, no file writes
+const AGENT_TYPES = [JUDGE_AGENT, BUILDER_AGENT, INFRA_AGENT, YAADGAAR_AGENT];
+const ROLE_AGENT = {
+"scope-and-plan": BUILDER_AGENT,
+"fleet-test-writer": BUILDER_AGENT,
+"fleet-coder": BUILDER_AGENT,
+"fleet-pr-opener": INFRA_AGENT,
+"plan-audit": JUDGE_AGENT,
+"fleet-test-judge": JUDGE_AGENT,
+"fleet-code-judge": JUDGE_AGENT,
+"fleet-intent-judge": JUDGE_AGENT,
+"pr-review": JUDGE_AGENT,
+"gate-change-nonweakening-sweep": JUDGE_AGENT,
+"fleet-ci-classifier": JUDGE_AGENT,
+"fleet-held-out-runner": JUDGE_AGENT,
+};
 const LEDGER_PROJECT_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PUSH_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9._-]{1,100}$/;
 const MAX_AGENTS = 100;
@@ -2595,7 +2613,7 @@ function strsOf(v) {
 return Array.isArray(v) && v.every((s) => typeof s === "string");
 }
 async function formatFiles(label, worktree, select, frozenList, allowed, phaseName, scratchDir) {
-const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName, undefined, "format_files");
+const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName, INFRA_AGENT, "format_files");
 if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
 halt("failed", label + " returned no ran/stable/files/changed/refused");
 if (typeof r.hook_failed !== "boolean" || typeof r.hook_head !== "string" || typeof r.hook_sha256 !== "string" || !strsOf(r.hook_timeout) || typeof r.fix_timeout !== "boolean" || !strsOf(r.unknown_hooks) ||
@@ -2680,7 +2698,7 @@ async function writeChunksParallel(prefix, chunkDir, c, ids, phaseName, round, w
 const groups = [];
 for (let i = 0; i < ids.length; i += CHUNKS_PER_WRITER) groups.push(ids.slice(i, i + CHUNKS_PER_WRITER));
 if (!soft && !tailWriter(prefix)) reserve(groups.length, "the " + what + " chunk writers");
-const res = await parallel(groups.map((g, b) => () => softDispatch(prefix + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g, what === "plan ref" ? null : "the " + what), { schema: INFRA_SCHEMA, phase: phaseName })));
+const res = await parallel(groups.map((g, b) => () => softDispatch(prefix + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g, what === "plan ref" ? null : "the " + what), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: phaseName })));
 res.forEach((w, b) => {
 if (!w || w.status !== "ok") gate(prefix + ":r" + round + "w" + b + " returned " + (w ? w.status + ": " + (w.reason || "no reason") : "no result") + "; the program step checks every chunk file");
 });
@@ -3010,7 +3028,7 @@ const chk = site === undefined ? tag : site;
 state.buildResets++;
 const token = "reset-" + state.buildResets + ":" + state.nonce + ":" + chk;
 state.agents++;
-const ic = infraCall(label, buildDirPrompt({ args, repo: state.repo, token }), { schema: INFRA_SCHEMA, phase: phaseName });
+const ic = infraCall(label, buildDirPrompt({ args, repo: state.repo, token }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: phaseName });
 const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
 if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
 requireProgram(r, "build_dir", label);
@@ -3031,7 +3049,7 @@ const label = "infra:build-clean";
 const args = ["clean", sc];
 try {
 state.agents++;
-const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Cleanup" });
 const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
 if (r && r.status === "ok" && relayDigestOk(r, progKeys("build_dir:clean"), "build_dir") && canonical(r.args) === canonical(args) && Number.isInteger(r.bytes))
 gate("build dirs " + sc + "/build " + (r.removed ? "removed (" + r.bytes + " bytes)" : "already gone"));
@@ -3052,7 +3070,7 @@ progCmd("purge", [inputs.worktree]) +
 );
 }
 async function purgeBytecode(label, worktree, phaseName) {
-const r = await infra(label, purgePrompt({ worktree }), phaseName);
+const r = await infra(label, purgePrompt({ worktree }), phaseName, INFRA_AGENT);
 if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
 requireProgram(r, "purge", label);
 if (canonical(r.args) !== canonical([worktree]) || !relayDigestOk(r, progKeys("purge"), "purge")) halt("failed", label + ": the relayed purge result does not match the program's digest", "contract");
@@ -3438,6 +3456,7 @@ const TOK = {};
 let tokAt = null;
 const tokOn = () => typeof budget === "object" && !!budget && typeof budget.spent === "function";
 async function agentT(prompt, opts) {
+if (!opts || AGENT_TYPES.indexOf(opts.agentType) < 0) halt("failed", "agent " + (opts && opts.label) + " has no ccpmcwf agent type (" + JSON.stringify(opts && opts.agentType) + ")", "contract");
 if (tokOn() && tokAt === null) tokAt = budget.spent();
 const r = await agent(prompt, opts);
 if (tokOn()) {
@@ -3516,6 +3535,9 @@ if (r == null) gate(label + " returned no result");
 return digestRetry(label, prompt, opts, r, softDispatch);
 }
 async function roleAgent(role, label, prompt, opts) {
+const at = ROLE_AGENT[role];
+if (!at || (opts.agentType && opts.agentType !== at)) halt("failed", "role " + role + " (" + label + "): agent type " + opts.agentType + " is not its ROLE_AGENT type " + at, "contract");
+opts = Object.assign({}, opts, { agentType: at });
 const tier = state.models[role];
 if (!tier) halt("needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
 gate("model used: " + label + " -> " + tier.model);
@@ -4067,6 +4089,7 @@ settings_local_json: settingsFor(lay.mainWt),
 gh_args: [repo],
 }, wopt && wopt.frozenResume ? { frozen_resume: true } : {}, wopt && wopt.ffReused ? { ff_reused: true } : {})),
 "Workspace",
+INFRA_AGENT,
 );
 if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
 if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
@@ -4100,7 +4123,7 @@ const lockOk = (r, m, a) => relayDigestOk(r, progKeys("parked:" + m), "parked") 
 async function lockClaim(repo, task, ph) {
 if (state.lock) return;
 const a = [repo, task, state.nonce, state.mode];
-const r = await infra("infra:run-lock", lockStep("claim", a), ph);
+const r = await infra("infra:run-lock", lockStep("claim", a), ph, INFRA_AGENT);
 requireProgram(r, "parked", "infra:run-lock");
 if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
 if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("failed", "infra:run-lock: relay off its digest or args");
@@ -4116,7 +4139,7 @@ const label = "infra:run-lock:release";
 let r = null;
 try {
 state.agents++;
-const ic = infraCall(label, lockStep("release", l.a), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+const ic = infraCall(label, lockStep("release", l.a), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Cleanup" });
 r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
 } catch (e) {}
 gate((r && r.status === "ok" && lockOk(r, "release", l.a) && (r.released || r.absent) ? "" : "warning: not confirmed: ") + "run lock " + l.path + " released");
@@ -5199,7 +5222,7 @@ const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : C
 if (component !== plan.component) gate("planner component " + JSON.stringify(plan.component === undefined ? null : plan.component) + " unusable; component " + component);
 const fmtLabel = "infra:format-plan" + sfx;
 await pathRecheck("format-plan" + sfx, "Plan");
-const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath, scratch_dir: ctx.common.scratch_dir }), "Plan");
+const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath, scratch_dir: ctx.common.scratch_dir }), "Plan", INFRA_AGENT);
 if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
 const ff = fmt.format;
 requireProgram(ff, "format_files", fmtLabel);
@@ -5310,7 +5333,7 @@ const sfx = ctx.suffix || "";
 const refName = planRefName(ctx.fields.taskId);
 const base = { worktree: ctx.worktree, branch: ctx.branch, plan_path: ctx.fields.planPath };
 const stLabel = "infra:stage-plan" + sfx;
-const st = await infra(stLabel, stagePlanPrompt(base), ctx.phaseName);
+const st = await infra(stLabel, stagePlanPrompt(base), ctx.phaseName, INFRA_AGENT);
 requireProgram(st.plan_hash, "plan_hash", stLabel);
 const stagedSha = st.plan_hash.plan_sha256;
 if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
@@ -5341,7 +5364,7 @@ const r = await chunkRounds(
 label, pfx, chunkDir, c, ctx.phaseName,
 async (lbl, round) => {
 await pathRecheck("commit-plan" + sfx + (round ? ":rewrite-" + round : ""), ctx.phaseName);
-return dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, phase: ctx.phaseName });
+return dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: ctx.phaseName });
 },
 "plan ref", "nothing was sealed", "commit",
 );
@@ -5433,7 +5456,7 @@ INFRA_STEP + "store the held-out examples; never decode the chunks.\n" +
 inputsLine({ task_id: args[1], chunk_dir: dir }) + "a. " + CHUNK_WRITE(dir) + "\nb. " + RUN_EXACT + progCmd("held_out", ["write"].concat(args)) +
 "\nIt prints one JSON object " + printsKeys("held_out:write") + COPY_DIGEST + "Return {status, reason, " + returnKeys("held_out:write") + "}.\n" +
 c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join(""),
-{ schema: INFRA_SCHEMA, phase: ctx.phaseName },
+{ schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: ctx.phaseName },
 );
 const ok = r && r.status === "ok" && relayDigestOk(r, progKeys("held_out:write"), "held_out") && canonical(r.args) === canonical(args);
 if (ok && r.dropped.length) gate("held-out: dropped " + JSON.stringify(r.dropped));
@@ -5897,6 +5920,7 @@ await writeChunksParallel("infra:park-chunks", findings.chunk_dir, findings.c, f
 }
 pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, scratch: lay.scratch, run: state.nonce }, findings), {
 schema: INFRA_SCHEMA,
+agentType: INFRA_AGENT,
 phase: "Plan",
 });
 } catch (err) {
@@ -6180,7 +6204,7 @@ function prTestsPrompt(inputs) {
 return INFRA_STEP + "write the test block into the fleet's own PR body; only the block between its markers changes.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("pr_test_block", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_test_block") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_test_block") + "}.";
 }
 async function prTestsStep(label, args, block, prUrl, supplied) {
-const r = await infra(label, prTestsPrompt({ args }), "PR", undefined, "pr_test_block", args);
+const r = await infra(label, prTestsPrompt({ args }), "PR", INFRA_AGENT, "pr_test_block", args);
 requireProgram(r, "pr_test_block", label, "needs_human", "stats");
 if (!relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
 if (!Array.isArray(r.claims) || r.claims.some((x) => typeof x !== "string")) halt("needs_human", label + ": claims is not a list of strings", "stats");
@@ -6193,9 +6217,10 @@ const own = ownClaims(r.claims, supplied);
 if (own.length < r.claims.length) gate(label + ": ignored " + (r.claims.length - own.length) + " claim(s) found in workflow-supplied text");
 return own;
 }
+const PR_STATE_READS = ["view", "logs"];
 async function prState(label, args, what, stopGate) {
 const prompt = INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\nIt prints one JSON object " + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.";
-let r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: "PR" });
+let r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, agentType: PR_STATE_READS.indexOf(args[0]) >= 0 ? JUDGE_AGENT : INFRA_AGENT, phase: "PR" });
 if (r.status !== "ok" && !programErrorRelay(r, "pr_state:" + args[0], args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
 if (r.status !== "ok") {
 gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
@@ -6791,11 +6816,11 @@ const c = chunked(json + "\n");
 let r;
 state.tailWriters = !!(pr && pr.pr_number != null);
 try {
-if (c.chunks.length <= CHUNKS_PER_WRITER) r = await infra(label, writeStatePrompt(si, json), "PR");
+if (c.chunks.length <= CHUNKS_PER_WRITER) r = await infra(label, writeStatePrompt(si, json), "PR", INFRA_AGENT);
 else {
 const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
 await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
-r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written", "resume");
+r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "PR" }), "run-state", "no run-state was written", "resume");
 if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
 }
 } finally {
@@ -6848,6 +6873,7 @@ const push = await infra(
 pushLabel,
 pushPrompt(Object.assign(pin, { args: pushArgs })),
 "PR",
+INFRA_AGENT,
 );
 requireProgram(push, "push", pushLabel);
 if (!relayDigestOk(push, progKeys("push:push"), "push") || canonical(push.args) !== canonical(pushArgs))
@@ -7269,7 +7295,7 @@ ci: state.ci ? { verdict: state.ci.verdict, fixRounds: state.rounds.ci || 0, wai
 const bc = ref.plan_facts.conventions.body;
 const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify(((bc && bc.required_sections) || []).concat(state.unattended ? [UNATT_HEAD] : []))];
 const label = tag ? "infra:pr-stats:" + tag : "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : "");
-const r = await infra(label, prStatsPrompt({ args }), "PR", undefined, undefined, args, "pr_body_block");
+const r = await infra(label, prStatsPrompt({ args }), "PR", INFRA_AGENT, undefined, args, "pr_body_block");
 requireProgram(r, "pr_body_block", label, "needs_human", "stats");
 if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
 if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
@@ -7476,7 +7502,7 @@ async function writerStop(n, post, msg, sg) {
 if (sg !== "ownership" || freezeTree !== null || aug) halt("needs_human", msg, sg);
 const fp = post.fingerprint;
 const ref = "refs/fleet/" + lay.key + "/stopped-" + safeName(state.nonce) + "-r" + n + "-tree";
-const r = await softDispatch("infra:stop-save:r" + n, stopSavePrompt({ main_worktree: mainWt, expected_head: fp.head, expected_tree: fp.tree, ref }), { schema: INFRA_SCHEMA, phase: "Tests" });
+const r = await softDispatch("infra:stop-save:r" + n, stopSavePrompt({ main_worktree: mainWt, expected_head: fp.head, expected_tree: fp.tree, ref }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Tests" });
 const ok = !!r && r.status === "ok" && r.ref_target === fp.tree && r.head === fp.head && r.clean === true;
 halt("needs_human", msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " and clean not confirmed (" + (r ? r.status + ": " + r.reason : "no result") + ")"), sg);
 }
@@ -7679,7 +7705,7 @@ freezeTree = h.fingerprint.tree;
 if (!codeBaseRef) codeBaseRef = freezeRef;
 last = h;
 gate("freeze f" + freezes + " at tree " + freezeTree + " (HEAD " + freezeRef + "): " + countKeys(frozen) + " hashed keys");
-const fr = await infra("infra:freeze-ref:f" + freezes, freezeRefPrompt({ main_worktree: mainWt, ref: freezeRefName, tree: freezeTree }), "Freeze");
+const fr = await infra("infra:freeze-ref:f" + freezes, freezeRefPrompt({ main_worktree: mainWt, ref: freezeRefName, tree: freezeTree }), "Freeze", INFRA_AGENT);
 if (fr.ref_target !== freezeTree) halt("failed", "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_target === undefined ? null : fr.ref_target) + ", not the freeze tree " + freezeTree);
 frozen.git[FLEETREF + freezeRefName] = freezeTree;
 setFreezeDigest();
@@ -8012,6 +8038,7 @@ hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UN
 hook_env: hookEnv("commit-r" + m),
 }, prParent ? { parent: prParent } : {})),
 "Code",
+INFRA_AGENT,
 );
 if (cs.staged_tree !== codeTree)
 halt("needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
@@ -8173,7 +8200,7 @@ try {
 const c = await softDispatch(
 "infra:review-cleanup:v" + k,
 reviewCleanupPrompt({ main_worktree: ctx.mainWt, scratch_dir: ctx.lay.scratch }),
-{ schema: INFRA_SCHEMA, phase: "Review" },
+{ schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Review" },
 );
 if (!c || c.status !== "ok") gate("review cleanup v" + k + " did not finish: " + ((c && c.reason) || "no result"));
 } catch (e) {
@@ -8202,6 +8229,7 @@ plan_commit: ref.plan_commit,
 settings_local_json: settingsFor(replanWt),
 }),
 "Re-plan",
+INFRA_AGENT,
 );
 if (rw.head !== ref.plan_commit) halt("failed", "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit);
 const findingsText = ctx.findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n");
@@ -8258,6 +8286,7 @@ plan_base: ref.plan_base,
 replan_worktree: replanWt,
 }),
 "Re-plan",
+INFRA_AGENT,
 );
 if (rs.head !== ref.plan_base) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base);
 if (rs.superseded_head !== ctx.expectedHead) halt("needs_human", "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead);
@@ -8384,7 +8413,7 @@ section_body: "## " + heading + "\n\n" + sectionText,
 section_sha256: sha256Hex("## " + heading + "\n\n" + sectionText),
 marker,
 }),
-{ schema: INFRA_SCHEMA, phase: "Write-back" },
+{ schema: INFRA_SCHEMA, agentType: YAADGAAR_AGENT, phase: "Write-back" },
 );
 const got = r && Array.isArray(r.results) ? r.results : [];
 for (const t of toEdit) {
@@ -8450,7 +8479,7 @@ if (toPost.length) {
 const p = await softDispatch(
 "infra:comments-post" + sfx,
 commentsPostPrompt({ posts: toPost.map((s) => Object.assign({ key: s.key, kind: s.kind, ref: s.ref, url: s.url, text: s.text }, s.kind === "github" ? { gh_cmd: ghFor(ghSlug(s)).gh_cmd } : {})) }),
-{ schema: INFRA_SCHEMA, phase: "Write-back" },
+{ schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Write-back" },
 );
 for (const s of toPost) {
 const hit = p && Array.isArray(p.results) ? p.results.find((x) => x.key === s.key) : null;
@@ -8569,7 +8598,7 @@ JSON.stringify(inputs) +
 );
 }
 async function dbDispatch(label, prompt, phaseName) {
-const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: phaseName });
+const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: phaseName });
 if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"), "db");
 return r;
 }
@@ -8642,7 +8671,7 @@ if (!db) return;
 const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
 try {
 state.agents++;
-const ic = infraCall("infra:db-down", dbDownPrompt({ name: db.name, nonce: state.nonce }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+const ic = infraCall("infra:db-down", dbDownPrompt({ name: db.name, nonce: state.nonce }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Cleanup" });
 const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label: "infra:db-down", model: infraModel("infra:db-down") }));
 const d = r && typeof r === "object" ? r.down : null;
 if (r && r.status === "ok" && d && relayDigestOk(d, progKeys("db_down"), "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))

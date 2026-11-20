@@ -15,14 +15,14 @@ import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, readFileSync, re
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE_TEXT, ROLES_SRC, SCRIPTS_SRC, SCRIPTS_DIR, scriptsProbe, noUnscripted, sha256, canon, PROGRAMS, PREFLIGHT_PROBE } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE_TEXT, ROLES_SRC, SCRIPTS_SRC, AGENT_TYPES, SCRIPTS_DIR, scriptsProbe, noUnscripted, sha256, canon, PROGRAMS, PREFLIGHT_PROBE } from "./harness.mjs";
 
 // The preflight probe run for real by bash over a plugin cache under a temp
 // HOME, its lines fed to the workflow as the preflight agent's relay.
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.3.5");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.4.0");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -257,7 +257,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.3.5");
+  assert.equal(p.fleet_version, "8.4.0");
   assert.deepEqual(p.role_sha256, PIN);
 });
 
@@ -353,19 +353,22 @@ const fileOf = (role) => ROLES_DIR + "/" + role + ".md";
 test("review 1: a role prompt hashes with sha256sum, reads the file with the Read tool (no cat), and every role agent type can Read", async () => {
   const out = await run(happy(), ARGS);
   const roleCalls = out.calls.filter((c) => c.label.startsWith("role:"));
-  // every role dispatch in the source names ccpmcwf:judge or no agent type (the default agent)
+  // no role dispatch in the source names a retired agent type
   for (const m of SOURCE.matchAll(/callRole\([^;]*?\)/gs)) assert.doesNotMatch(m[0], /WRITER_AGENT|ledger-writer/, m[0]);
   assert.ok(roleCalls.length >= 6);
-  const judge = readFileSync(join(SCRIPTS_SRC, "..", "agents", "judge.md"), "utf8");
-  const denied = (/^disallowedTools: (.*)$/m.exec(judge) || [, ""])[1].split(",").map((x) => x.trim());
-  assert.ok(!denied.includes("Read") && !/^tools:/m.test(judge), "ccpmcwf:judge can use Read");
+  // 8.4.0 (#25): every ccpmcwf agent type can Read
+  for (const t of AGENT_TYPES) {
+    const a = readFileSync(join(SCRIPTS_SRC, "..", "agents", t.split(":")[1] + ".md"), "utf8");
+    const denied = (/^disallowedTools: (.*)$/m.exec(a) || [, ""])[1].split(",").map((x) => x.trim());
+    assert.ok(!denied.includes("Read") && !/^tools:/m.test(a), t + " can use Read");
+  }
   for (const c of roleCalls) {
     const role = c.label.split(":")[1];
     assert.ok(c.prompt.includes("sha256sum -- '" + fileOf(role) + "'"), c.label);
     assert.doesNotMatch(c.prompt, /&& cat |\bcat '/, c.label + ": no cat");
     assert.ok(c.prompt.includes("Read tool") && c.prompt.includes(fileOf(role)), c.label + ": reads with the Read tool");
     assert.match(c.prompt, /no offset and no limit/, c.label);
-    assert.ok([undefined, "ccpmcwf:judge"].includes(c.opts.agentType), c.label + " runs as " + c.opts.agentType);
+    assert.ok(AGENT_TYPES.includes(c.opts.agentType), c.label + " runs as " + c.opts.agentType);
   }
 });
 

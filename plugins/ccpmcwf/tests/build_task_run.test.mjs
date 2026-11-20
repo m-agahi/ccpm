@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.3\.5 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.4\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6329,7 +6329,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.3\.5; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.4\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7028,7 +7028,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.3\.5\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.3\.5 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.4\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.4\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7689,7 +7689,7 @@ test("3.0.0 fixers: writers' test files are formatted before the ownership hash 
   assert.equal(out.result.status, "ok", out.result.reason);
   const l = out.labels;
   const ft = call(out, "infra:format-tests:r1");
-  assert.equal(ft.opts.agentType, undefined, "the fixers write: default agent, not ccpmcwf:judge");
+  assert.equal(ft.opts.agentType, "ccpmcwf:infra-writer", "the fixers write: ccpmcwf:infra-writer (8.4.0 #25), not ccpmcwf:judge");
   assert.deepEqual(inputsOf(ft.prompt).select, { paths: ["tests/test_a.py", "tests/test_b.py"] });
   assert.deepEqual(inputsOf(ft.prompt).frozen, []);
   assert.ok(l.indexOf("role:fleet-test-writer:AC2:r1") < l.indexOf("infra:format-tests:r1"));
@@ -7930,7 +7930,7 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.labels.includes("infra:ledger-writeback"));
   const c = call(out, "infra:yaadgaar-writeback");
-  assert.equal(c.opts.agentType, undefined, "default agent: ccpmcwf:judge must never write to a ledger");
+  assert.equal(c.opts.agentType, "ccpmcwf:yaadgaar-writer", "ccpmcwf:yaadgaar-writer (8.4.0 #25): ccpmcwf:judge must never write to a ledger");
   const i = inputsOf(c.prompt);
   assert.deepEqual(i.tasks, [{ key: "s0", id: YURN, number: 622, version: 3 }]);
   assert.equal(i.marker, "fleet:y622");
@@ -8740,7 +8740,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.3\.5/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.4\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

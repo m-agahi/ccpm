@@ -23,6 +23,29 @@ import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
+// 8.4.0 (#25): the agent types the engine may dispatch under
+export const AGENT_TYPES = ["ccpmcwf:judge", "ccpmcwf:builder", "ccpmcwf:infra-writer", "ccpmcwf:yaadgaar-writer"];
+// 8.4.0 (#25): the expected agent type of every agent label (first match wins; no catch-all);
+// the agent stub refuses a call under any other type, so every scenario checks the mapping
+export const WANT_AGENT = [
+  [/^role:(scope-and-plan|fleet-test-writer|fleet-coder)(:|$)/, "ccpmcwf:builder"],
+  [/^role:fleet-pr-opener(:|$)/, "ccpmcwf:infra-writer"],
+  [/^role:(plan-audit|fleet-test-judge|fleet-code-judge|fleet-intent-judge|pr-review|gate-change-nonweakening-sweep|fleet-ci-classifier|fleet-held-out-runner)(:|$)/, "ccpmcwf:judge"],
+  [/^infra:yaadgaar-writeback/, "ccpmcwf:yaadgaar-writer"],
+  [/^infra:comments-post/, "ccpmcwf:infra-writer"],
+  [/^infra:push-probe/, "ccpmcwf:judge"],
+  [/^(preflight|intake|hasher:)/, "ccpmcwf:judge"],
+  [
+    /^infra:(role-read|path-check|branch-scan|verify-plan|read-state|policy|pr-view|ci-logs|orch-scan|ci-watch|callers|check-scripts|precommit-ids|review-paths|remote-head|load-parked|fleet-branch|load-ref|tf-gate|hook-surface|ruleset-surface|surfaces|gates|fleet-scan|hash-diff|gh-identity|yaadgaar-read|comments-list)(:|$|-)/,
+    "ccpmcwf:judge",
+  ],
+  [/^workspace$/, "ccpmcwf:infra-writer"],
+  [
+    /^infra:(build-|format-|stage-plan|commit-plan|plan-chunks|state-chunks|park-chunks|park-plan|held-out|state:|freeze-ref|stop-save|commit:|push|pr-stats|pr-tests|pr-ready|pr-merge|pr-update|pr-fetch|ci-rerun|fleet-cleanup|review-cleanup|replan-|run-lock|db-up|db-down|purge-bytecode)/,
+    "ccpmcwf:infra-writer",
+  ],
+];
+export const wantAgent = (label) => (WANT_AGENT.find(([re]) => re.test(label)) || [null, null])[1];
 // 8.0.0 G8: the temp dirs sec_scan.py refuses as a mount source (the agent podman shim refuses them)
 export const TEMP_ROOTS = ["/tmp", "/var/tmp", "/dev/shm"];
 export const underTemp = (p) => TEMP_ROOTS.some((t) => [t, existsSync(t) ? realpathSync(t) : t].some((r) => p === r || p.startsWith(r + "/")));
@@ -333,6 +356,9 @@ export async function runOne(script, args0) {
   // 4.0.0 (1993): every prompt runs shipped programs by path; none pastes one
   const agent = async (prompt, opts = {}) => {
     const label = opts.label;
+    // 8.4.0 (#25): every agent runs under a ccpmcwf agent type (agents/*.md, each with omitClaudeMd)
+    if (!AGENT_TYPES.includes(opts.agentType)) throw new Error("8.4.0 #25: agent " + label + " has no ccpmcwf agent type: " + JSON.stringify(opts.agentType));
+    if (opts.agentType !== wantAgent(label)) throw new Error("8.4.0 #25: agent " + label + " runs as " + opts.agentType + ", not its WANT_AGENT type " + wantAgent(label));
     if (typeof prompt === "string" && (prompt.includes("python3 -I -c") || prompt.includes("<<'FLEET_") || prompt.includes("python3 -I - ")))
       throw new Error("AC-1993-1: prompt " + label + " pastes a program");
     // 5.0.7 (ledger 2020): an unscripted digest retry replays its step's script
@@ -1243,7 +1269,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.3.5/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.4.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
