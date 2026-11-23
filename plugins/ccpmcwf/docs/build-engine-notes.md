@@ -4507,7 +4507,7 @@ fails the digest, the args [repo, AUDIT_IMAGE] or the shape check sets state.gat
 and logs one line. AUDIT_IMAGE is an argument, not a constant of the program, so the args check
 proves which image the census looked at; any image that is not name@sha256:<64 hex> is never
 passed to the runtime. The program uses which() on clean_path((repo,)) so a runtime or tool
-planted inside the repo is never found or run. runGate has no caller in G1: G2, G5 and G7 add
+planted inside the repo is never found or run; the python coverage row also reads <repo>/uv.lock, and a uv or tool planted inside the repo is still never found on PATH. The uv tier credits a coverage entry only when every coverage entry has exactly source = { registry = "https://pypi.org/simple" }; a directory, editable, path, git, url, virtual or other-registry source, or no source, is not credited, so a coverage package from inside the repo is never reported. Limit: the census does not know test_cmd, and cover_diff.py runs `uv run ... coverage` only for a `uv run` pytest test_cmd; a repo with a PyPI-locked coverage and a plain pytest test_cmd gets the uv row from the census but cover_diff probes plain coverage. runGate has no caller in G1: G2, G5 and G7 add
 the gate steps (PROGRAM_SLOTS and INFRA_TIER rows come with them). gatesNotRun keeps the
 judge-list union; state.gates entries carry the code round, so a result of an earlier round
 never removes a gate, and a replan resets state.gates.

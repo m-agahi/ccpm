@@ -1,5 +1,30 @@
 # Changelog
 
+## [8.5.1] - 2026-11-23
+
+ccpmcwf 8.5.1: the gate tool census reads the repo's `uv.lock` for the python coverage tool (yaadgaar `#106`).
+
+### Fixed
+
+- yaadgaar `#106`: the python coverage row of `gate_tools.py` now has tiers. When `<repo>/uv.lock`
+  lists a `[[package]]` named exactly `coverage` from the PyPI registry and `uv` is on the
+  cleaned PATH, the row is
+  `uv run --frozen coverage`. Else it is PATH `coverage` when found, else `unsupported`. The
+  census reads the lock and never runs `uv` or `coverage`.
+- PR #106 review (S1): the uv tier credits `coverage` only from the PyPI registry. Every
+  `[[package]]` named `coverage` must have exactly `source = { registry = "https://pypi.org/simple" }`.
+  A `directory`, `editable`, `path`, `git`, `url` or `virtual` source, another registry, extra
+  source keys or no source falls through to the PATH tier, so a coverage package from inside the
+  repo is never reported (Max's ruling, 2026-11-23).
+- Known limit (S2): the census does not know test_cmd. `cover_diff.py` runs `uv run ... coverage`
+  only for a `uv run` pytest test_cmd, so the census row can say `uv run --frozen coverage` while
+  the gate probes plain `coverage`.
+- The lock is read only when it is a regular file of at most 16 MiB (16777216 bytes). A symlink,
+  a FIFO, a directory, a file that is not UTF-8 and any parse or shape error fall through to the
+  PATH tier; the program still exits 0.
+- The venv tier (`.venv/bin/coverage`) is not built. The coverage gate run (`cover_diff.py`) is
+  unchanged: it keeps the `--frozen` flags of a `uv run` test command.
+
 ## [8.5.0] - 2026-11-23
 
 ccpmcwf 8.5.0: the intake relaunch gate passes a general delegation on a delegated launch (yaadgaar `#105`).

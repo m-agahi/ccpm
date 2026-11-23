@@ -131,6 +131,7 @@ const SCENARIOS = {
 // 8.3.4 (yaadgaar #79): the mutants program pin, the code-judge role sha and the version move; all three are masked, so no pin moves (probe unchanged)
 // 8.4.0 (yaadgaar #25): no prompt changes; opts.agentType does: every call names a ccpmcwf type, and plan-audit, the plan-mode sweep, pr-view and ci-logs run as ccpmcwf:judge. Checked: with agentType put back to 8.3.5's (ccpmcwf:judge where it was, else absent) every pin is 8.3.5's; same call counts: the three plan/build pins move, probe unchanged
 // 8.5.0 (yaadgaar #105): the intake prompt gains the relay rule and its return shape names relay, and INTAKE_SCHEMA requires the relay property; same call counts: the plan and build pins move, probe unchanged. Checked: with the prompt and schema edits reverted every pin is 8.4.0's
+// 8.5.1 (yaadgaar #106): no prompt change; the gate_tools program pin and the version move, both masked; same call counts.
 const PINS = {
   "plan then build (confirm ask)": { calls: 89, sha256: "99277c8163d0a0075275f24144ac940aab335d3f54fc0d12e20cdc916f1803b9" },
   "confirm auto (gates, then build in one run)": { calls: 89, sha256: "340658f9ba1e1ae48a67cd72ffda8e1a1b331d7262da590a89df56353a5cd1fc" },
