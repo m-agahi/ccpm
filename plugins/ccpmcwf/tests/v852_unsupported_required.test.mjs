@@ -3,8 +3,10 @@
 // - Text in quotes ("…", '…', `…`, “…”, ‘…’) is a quotation or example: the check ignores it.
 //   A single-quoted span counts only when both quotes sit next to a non-word char, so an
 //   apostrophe ("don't", "task's") never swallows text.
-// - An opt-out sentence (gate term, requirement word, negation) for a gate suppresses the
-//   stop for that gate only.
+// - An explicit opt-out sentence for a gate (its term and an opt-out phrase: "does not require",
+//   "not required", "no need for", "optional") is no requirement source for that gate. Any other
+//   negation ("must not be skipped", "must never drop") still states a requirement. An opt-out
+//   and a real requirement for the same gate conflict: the run stops (fail closed).
 // - A real requirement still stops with today's reason.
 // - Under --auto (args.unattended) the run records an auto_decisions entry and goes on;
 //   the gate then shows in gates_not_run. Attended and policy-only runs keep the stop.
@@ -77,10 +79,32 @@ test("8.5.2 (#107): a real requirement still stops with today's reason", async (
   await stops('The old note said "coverage is optional". This change requires the mutation gate.', "mutation");
 });
 
-test("8.5.2 (#107): an opt-out sentence for a gate suppresses the stop for that gate only", async () => {
-  await passes("Intake then stops every task that requires the coverage gate. This build does not require the coverage gate.");
-  await passes("This build does not require the coverage gate. Intake stops a task that requires coverage.");
-  await stops("Intake stops every task that requires the coverage gate. This build does not require the coverage gate. Mutation testing is required.", "mutation");
+test("8.5.2 (#107): an explicit opt-out with only describing text for the gate passes", async () => {
+  await passes('Its body held the sentence "Intake then stops every task that requires the coverage gate." This build does not require the coverage gate.');
+  await passes("This build does not require the coverage gate.");
+  await passes("The coverage gate is not required here. There is no need for mutation testing. A security scan is optional.");
+});
+
+test("8.5.2 (#107): a negation that is no opt-out still states a requirement", async () => {
+  await stops("The coverage gate must not be skipped. Coverage must be 100%.", "coverage");
+  await stops("The coverage gate must not be skipped.", "coverage");
+  await stops("Coverage must never drop below 90%.", "coverage");
+  await stops("No PR may merge without the coverage gate; coverage is required.", "coverage");
+});
+
+test("8.5.2 (#107): an opt-out and a real requirement for the same gate conflict and stop (fail closed)", async () => {
+  await stops("Coverage must be 100%. This build does not require the coverage gate.", "coverage");
+  await stops("This build does not require the coverage gate. Intake stops a task that requires coverage.", "coverage");
+});
+
+test("8.5.2 (#107): an opt-out clears no other gate's requirement in the same sentence", async () => {
+  await stops("This build does not require the coverage gate. Coverage is optional but mutation testing is required.", "coverage");
+  const g = gateToolsOut("/r");
+  g.languages = ["python"];
+  g.matrix = Object.assign({}, g.matrix, { python: { coverage: "coverage", mutation: "unsupported", security: "unsupported" } });
+  const out = await runOne(scen("Coverage is optional, but mutation testing is required.", g), ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /requires the mutation gate/);
 });
 
 test("8.5.2 (#107): a quoted opt-out does not cancel a real requirement", async () => {

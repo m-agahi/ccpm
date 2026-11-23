@@ -4422,19 +4422,22 @@ function censusLine(g, l) {
 // census marks unsupported in every detected language; null when none or with no usable census
 const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
-const REQ_NEG_RE = /\b(?:not|no|never|without|optional)\b|n't\b/i;
+// 8.5.2 (#107): an explicit opt-out phrase; any other negation ("must not be skipped") still requires
+const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
 // 8.5.2 (#107): quoted text is a quotation or example, not a requirement; a single-quoted span needs a
 // non-word char outside both quotes, so an apostrophe (don't, task's) never opens or closes one, and it
 // never crosses a sentence end, so a stray quote and a plural possessive (users') hide no requirement
 const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /‘(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)’(?!\w)/g, /(?<!\w)'(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)'(?!\w)/g];
-// {gate, reason} or null; an opt-out sentence for a gate (its term, a requirement word, a negation) clears that gate (#107)
+// {gate, reason} or null. A sentence with a requirement word requires each gate it names, unless it names one
+// gate and holds an opt-out phrase (#107); an opt-out never cancels a requirement elsewhere (fail closed)
 function unsupportedRequired(text) {
   const g = state.gateTools;
   if (!g || !g.languages.length) return null;
-  const sents = REQ_QUOTE_RES.reduce((t, q) => t.replace(q, " "), String(text)).split(/(?<=[.!?;])\s+|\n+/).filter((x) => REQ_WORD_RE.test(x));
+  const sents = REQ_QUOTE_RES.reduce((t, q) => t.replace(q, " "), String(text))
+    .split(/(?<=[.!?;])\s+|\n+/)
+    .filter((x) => REQ_WORD_RE.test(x) && (!REQ_OPTOUT_RE.test(x) || REQ_GATES.filter((r) => r[1].test(x)).length > 1));
   for (const [k, re] of REQ_GATES) {
-    const hit = sents.filter((x) => re.test(x));
-    if (hit.length && hit.every((x) => !REQ_NEG_RE.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
+    if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
       return { gate: k, reason: "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run" };
   }
   return null;

@@ -12,17 +12,21 @@ ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsu
 - Text in quotes is ignored: `"…"`, `'…'`, `` `…` ``, `“…”`, `‘…’`. A single-quoted span counts only when
   a non-word char (or the start or end of the line) sits outside both quotes, so an apostrophe in
   `don't` or `task's` never opens or closes a span. A span never crosses a line.
-- An opt-out sentence for a gate (its term, a requirement word and a negation, for example "This build
-  does not require the coverage gate.") suppresses the stop for that gate only.
+- An explicit opt-out sentence for a gate (it names that one gate and holds an opt-out phrase:
+  "does/do/is/are not require(d)/need(ed)", "not required", "no need for", "optional"; for example
+  "This build does not require the coverage gate.") is no requirement source for that gate. A sentence
+  that names two gates and holds an opt-out phrase still requires each gate it names.
+- Any other negation now states a requirement: "The coverage gate must not be skipped.", "Coverage must
+  never drop below 90%." stop (before 8.5.2 a sentence with any negation word was ignored).
+- An opt-out and a real requirement for the same gate conflict: the run stops (fail closed). An opt-out
+  never cancels a requirement in another sentence. A sentence that describes a gate without quotes
+  ("Intake stops every task that requires the coverage gate.") reads as a requirement; quote it.
 - A real requirement ("Coverage must be 100%.", "This change requires the mutation gate.") still stops
   with the same reason.
 - Under `--auto` (`args.unattended: true`) the run does not stop: it records the auto decision
   `gates: continue` (the gate is unsupported and will not run) and goes on; the gate's own program
   reports `not_run`, so the gate is in `gates_not_run`. Attended runs and policy-only unattended runs
   keep the stop (the policy is read after intake).
-- Known limit: the opt-out rule is literal. Any sentence with the gate term, a requirement word and a
-  negation counts as an opt-out, so "The coverage gate must not be skipped. Coverage must be 100%." no
-  longer stops (before 8.5.2 the negated sentence was only ignored).
 
 ## [8.5.1] - 2026-11-23
 
