@@ -10,13 +10,16 @@ ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsu
   only describes a gate, for example a quoted earlier stop reason or "a real requirement such as
   'coverage must be 100%' still stops".
 - A quoted requirement is ignored: a span in `"…"`, `'…'`, `` `…` ``, `“…”` or `‘…’` that holds both a gate
-  term and a requirement word. A span with only one of them stays in the text, so "The `coverage` gate
-  is required." and "Mutation gate: `required`." still stop. The text is split into sentences first and
-  spans are matched inside one sentence, so a span never joins two sentences and an unmatched quote
-  (`5" screen`, an odd backtick) hides nothing. A span never holds a quote char of its own kind, so the
-  patterns are linear. A single-quoted span needs a non-word char (or the line start or end) outside both
-  quotes, so an apostrophe in `don't` or `task's` never opens or closes a span; a quoted contraction
-  keeps its span in the text (fail closed).
+  term and a requirement word is cut down to the gate terms it names, so a requirement word outside the
+  span still binds ("The rule "coverage must be 100%" must hold." stops). A span with only one of them
+  stays in the text, so "The `coverage` gate is required." and "Mutation gate: `required`." still stop.
+  The text is split into sentences first and spans are matched inside one sentence, so a span never
+  joins two sentences. Every quote needs a non-word char (or the line start or end) outside it, so an
+  apostrophe (`don't`, `task's`) or an inch mark (`5"`) never opens or closes a span, and a span never
+  holds a quote char of its own kind, so the patterns are linear. Two stray quote chars of one kind
+  that each sit next to a non-word char can still pair up inside one sentence; the span is cut only
+  when it holds a gate term and a requirement word, and its gate terms stay. A quoted contraction keeps
+  its span in the text (fail closed).
 - An explicit opt-out sentence for a gate (it names that one gate and holds an opt-out phrase:
   "does/do/is/are not require(d)/need(ed)", "not required", "no need for", "optional"; for example
   "This build does not require the coverage gate.") is no requirement source for that gate. A sentence

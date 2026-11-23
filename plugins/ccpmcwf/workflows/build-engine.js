@@ -3952,8 +3952,8 @@ return "gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) 
 const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
 const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
-const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
-const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " : q);
+const REQ_QUOTE_RES = [/(?<!\w)"[^"\n]*"(?!\w)/g, /(?<!\w)“[^“”\n]*”(?!\w)/g, /(?<!\w)`[^`\n]*`(?!\w)/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
+const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " + REQ_GATES.filter((r) => r[1].test(q)).map((r) => r[1].exec(q)[0]).join(" ") + " " : q);
 function unsupportedRequired(text) {
 const g = state.gateTools;
 if (!g || !g.languages.length) return null;

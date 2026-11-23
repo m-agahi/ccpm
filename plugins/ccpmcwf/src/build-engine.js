@@ -4425,11 +4425,12 @@ const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|mu
 // 8.5.2 (#107): an explicit opt-out phrase; any other negation ("must not be skipped") still requires
 const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
 // 8.5.2 (#107): a quoted span that holds a gate term and a requirement word is a quoted requirement (a quotation or
-// example), not one of this build; a span with only one of them stays. Spans are matched inside one sentence and
-// never span a quote char of their own kind (linear); a single-quoted span needs a non-word char outside both
-// quotes, so an apostrophe (don't, task's) never opens or closes one. An unmatched quote hides nothing.
-const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
-const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " : q);
+// example), not one of this build: it is cut down to the gate terms it names, so a requirement word outside it still
+// binds (the matched term: "security" alone is no gate term); a span with only one of them stays. Spans are matched inside one sentence, never hold a quote char of their
+// own kind (linear), and need a non-word char outside both quotes, so an apostrophe (don't, task's) or an inch mark
+// (5") never opens or closes one.
+const REQ_QUOTE_RES = [/(?<!\w)"[^"\n]*"(?!\w)/g, /(?<!\w)“[^“”\n]*”(?!\w)/g, /(?<!\w)`[^`\n]*`(?!\w)/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
+const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " + REQ_GATES.filter((r) => r[1].test(q)).map((r) => r[1].exec(q)[0]).join(" ") + " " : q);
 // {gate, reason} or null. A sentence with a requirement word requires each gate it names, unless it names one
 // gate and holds an opt-out phrase (#107); an opt-out never cancels a requirement elsewhere (fail closed)
 function unsupportedRequired(text) {

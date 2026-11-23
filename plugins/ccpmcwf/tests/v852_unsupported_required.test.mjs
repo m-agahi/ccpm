@@ -111,6 +111,20 @@ test("8.5.2 (#107) review: the quote patterns are linear (200 KB adversarial tex
   }
 });
 
+test("8.5.2 (#107) re-review 1: a dropped quoted span keeps its gate term, so a requirement word outside it binds", async () => {
+  await stops('"coverage must" be 100%.', "coverage");
+  await stops('"Coverage must be 100%" is required.', "coverage");
+  await stops('The rule "coverage must be 100%" must hold.', "coverage");
+  await stops('The rule "a security scan is required" must hold.', "security");
+  await passes('Intake summary: "coverage must be 100%" was the stop reason.');
+});
+
+test("8.5.2 (#107) re-review 2: stray quote chars in one sentence never pair up", async () => {
+  await stops('Use 5" screens and coverage must be 100% on 7" ones.', "coverage");
+  await stops("Run `make test and coverage must be 100% then `lint`.", "coverage");
+  await stops("Use 5” screens and coverage must be 100% on 7“ ones.", "coverage");
+});
+
 test("8.5.2 (#107): a real requirement still stops with today's reason", async () => {
   await stops("Coverage must be 100%.", "coverage");
   await stops("This change requires the mutation gate.", "mutation");
