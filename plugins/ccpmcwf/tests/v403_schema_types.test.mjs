@@ -652,6 +652,8 @@ const READS = {
   },
   // #94: a sentence the script split from the brief
   unsupportedRequired: { "x string-re": [PARSED_TOKEN, 2] },
+  // 8.5.2 (#107): a quoted span the script cut from one of those sentences
+  quotedReq: { "q string-re": PARSED_TOKEN },
   sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
   // 6.0.0 (ledger 2042)
   prConvention: {

@@ -3952,12 +3952,14 @@ return "gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) 
 const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
 const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
-const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /‘(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)’(?!\w)/g, /(?<!\w)'(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)'(?!\w)/g];
+const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
+const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " : q);
 function unsupportedRequired(text) {
 const g = state.gateTools;
 if (!g || !g.languages.length) return null;
-const sents = REQ_QUOTE_RES.reduce((t, q) => t.replace(q, " "), String(text))
+const sents = String(text)
 .split(/(?<=[.!?;])\s+|\n+/)
+.map((x) => REQ_QUOTE_RES.reduce((t, q) => t.replace(q, quotedReq), x))
 .filter((x) => REQ_WORD_RE.test(x) && (!REQ_OPTOUT_RE.test(x) || REQ_GATES.filter((r) => r[1].test(x)).length > 1));
 for (const [k, re] of REQ_GATES) {
 if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))

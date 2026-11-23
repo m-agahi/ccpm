@@ -9,9 +9,14 @@ ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsu
 - yaadgaar `#107`: `unsupportedRequired` (the `#94` intake stop, stop gate `gates`) fired on text that
   only describes a gate, for example a quoted earlier stop reason or "a real requirement such as
   'coverage must be 100%' still stops".
-- Text in quotes is ignored: `"…"`, `'…'`, `` `…` ``, `“…”`, `‘…’`. A single-quoted span counts only when
-  a non-word char (or the start or end of the line) sits outside both quotes, so an apostrophe in
-  `don't` or `task's` never opens or closes a span. A span never crosses a line.
+- A quoted requirement is ignored: a span in `"…"`, `'…'`, `` `…` ``, `“…”` or `‘…’` that holds both a gate
+  term and a requirement word. A span with only one of them stays in the text, so "The `coverage` gate
+  is required." and "Mutation gate: `required`." still stop. The text is split into sentences first and
+  spans are matched inside one sentence, so a span never joins two sentences and an unmatched quote
+  (`5" screen`, an odd backtick) hides nothing. A span never holds a quote char of its own kind, so the
+  patterns are linear. A single-quoted span needs a non-word char (or the line start or end) outside both
+  quotes, so an apostrophe in `don't` or `task's` never opens or closes a span; a quoted contraction
+  keeps its span in the text (fail closed).
 - An explicit opt-out sentence for a gate (it names that one gate and holds an opt-out phrase:
   "does/do/is/are not require(d)/need(ed)", "not required", "no need for", "optional"; for example
   "This build does not require the coverage gate.") is no requirement source for that gate. A sentence

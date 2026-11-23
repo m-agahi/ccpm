@@ -4424,17 +4424,20 @@ const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bm
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
 // 8.5.2 (#107): an explicit opt-out phrase; any other negation ("must not be skipped") still requires
 const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
-// 8.5.2 (#107): quoted text is a quotation or example, not a requirement; a single-quoted span needs a
-// non-word char outside both quotes, so an apostrophe (don't, task's) never opens or closes one, and it
-// never crosses a sentence end, so a stray quote and a plural possessive (users') hide no requirement
-const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /‘(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)’(?!\w)/g, /(?<!\w)'(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)'(?!\w)/g];
+// 8.5.2 (#107): a quoted span that holds a gate term and a requirement word is a quoted requirement (a quotation or
+// example), not one of this build; a span with only one of them stays. Spans are matched inside one sentence and
+// never span a quote char of their own kind (linear); a single-quoted span needs a non-word char outside both
+// quotes, so an apostrophe (don't, task's) never opens or closes one. An unmatched quote hides nothing.
+const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
+const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " : q);
 // {gate, reason} or null. A sentence with a requirement word requires each gate it names, unless it names one
 // gate and holds an opt-out phrase (#107); an opt-out never cancels a requirement elsewhere (fail closed)
 function unsupportedRequired(text) {
   const g = state.gateTools;
   if (!g || !g.languages.length) return null;
-  const sents = REQ_QUOTE_RES.reduce((t, q) => t.replace(q, " "), String(text))
+  const sents = String(text)
     .split(/(?<=[.!?;])\s+|\n+/)
+    .map((x) => REQ_QUOTE_RES.reduce((t, q) => t.replace(q, quotedReq), x))
     .filter((x) => REQ_WORD_RE.test(x) && (!REQ_OPTOUT_RE.test(x) || REQ_GATES.filter((r) => r[1].test(x)).length > 1));
   for (const [k, re] of REQ_GATES) {
     if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))

@@ -1,8 +1,10 @@
 // ccpmcwf 8.5.2 (yaadgaar #107): the intake check for a required gate the census
 // reports unsupported (#94) fired on text that only describes a gate.
-// - Text in quotes ("…", '…', `…`, “…”, ‘…’) is a quotation or example: the check ignores it.
-//   A single-quoted span counts only when both quotes sit next to a non-word char, so an
-//   apostrophe ("don't", "task's") never swallows text.
+// - A quoted span ("…", '…', `…`, “…”, ‘…’) that holds both a gate term and a requirement word is a
+//   quoted requirement (a quotation or example): the check ignores it. A span with only one of them
+//   stays in the text. The text is split into sentences first, so a span never crosses a sentence.
+//   A single-quoted span needs a non-word char outside both quotes, so an apostrophe ("don't",
+//   "task's") never opens or closes one.
 // - An explicit opt-out sentence for a gate (its term and an opt-out phrase: "does not require",
 //   "not required", "no need for", "optional") is no requirement source for that gate. Any other
 //   negation ("must not be skipped", "must never drop") still states a requirement. An opt-out
@@ -58,7 +60,6 @@ test("8.5.2 (#107): every quote kind hides a requirement: \"…\", '…', `…`,
     "The old note said `mutation testing must kill every mutant`.",
     "The old note said “mutation testing must kill every mutant”.",
     "The old note said ‘mutation testing must kill every mutant’.",
-    "The old note said ‘mutants don’t survive, coverage must be 100%’ and nothing more.",
   ])
     await passes(t);
 });
@@ -71,6 +72,43 @@ test("8.5.2 (#107): an apostrophe in a contraction or possessive never swallows 
   // a single-quoted span never crosses a sentence end: a stray opening quote and a plural possessive
   await stops("Use the 'strict mode. Coverage must be 100% for the users' code.", "coverage");
   await stops("Use the ‘strict mode. Coverage must be 100% for the users’ code.", "coverage");
+});
+
+test("8.5.2 (#107) review B1: a quoted gate term or requirement word alone hides nothing", async () => {
+  await stops("The `coverage` gate is required.", "coverage");
+  await stops("`coverage` must be 100%.", "coverage");
+  await stops("We require 'coverage'.", "coverage");
+  await stops("Mutation gate: `required`.", "mutation");
+  await stops("## Requirements\n- `coverage`: 100% required\n- mutation: optional", "coverage");
+  await stops('The "coverage" gate must be green.', "coverage");
+  await stops('Mutation gate is "required".', "mutation");
+});
+
+test("8.5.2 (#107) review B2: a quoted span never joins two sentences", async () => {
+  await stops('Coverage must be 100% "in src. Docs" are optional.', "coverage");
+  await stops("Coverage must be 100% 'see docs. ok' fine.", "coverage");
+  await stops("Coverage must be “100%. ok” lint optional.", "coverage");
+});
+
+test("8.5.2 (#107) review B3: an unbalanced quote or backtick hides nothing", async () => {
+  await stops('Use a 5" screen. Coverage must be 100%. Use a 7" screen.', "coverage");
+  await stops("Run `make test. Coverage must be 100%. Then `make lint`.", "coverage");
+});
+
+test("8.5.2 (#107) review: the quote patterns are linear (200 KB adversarial text under 50 ms each)", async () => {
+  const { SOURCE } = await import("./harness.mjs");
+  const m = /\nconst REQ_QUOTE_RES = (\[.*\]);\n/.exec(SOURCE);
+  assert.ok(m, "REQ_QUOTE_RES not found");
+  const res = new Function("return " + m[1])();
+  const N = 200 * 1024;
+  for (const t of [" 'a".repeat(N / 3), " ‘a".repeat(N / 3), '"a '.repeat(N / 3), "`a ".repeat(N / 3) + "`", " 'x" + " word".repeat(N / 5), " 'ab x".repeat(N / 6), " “a".repeat(N / 3)]) {
+    for (const re of res) {
+      const t0 = performance.now();
+      t.replace(re, " ");
+      const ms = performance.now() - t0;
+      assert.ok(ms < 50, re + " took " + ms.toFixed(0) + " ms on " + JSON.stringify(t.slice(0, 12)));
+    }
+  }
 });
 
 test("8.5.2 (#107): a real requirement still stops with today's reason", async () => {
