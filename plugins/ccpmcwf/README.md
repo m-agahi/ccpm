@@ -772,7 +772,8 @@ longer stops the build.
   `plan_wrong` re-plan (built in the same run) without asking. It never bypasses a safety stop
   (hook surface, IaC, work-owner merge, orchestrator PR, intent refusal, scope fence, command
   allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift,
-  DSN, relaunch). Each decision is recorded as `{gate, decision, reason}` in the result
+  DSN, and relaunch when the relayed message is a request; a general delegation in an unattended
+  run passes as an `auto_decisions` entry with gate `relaunch`, decision `pass`). Each decision is recorded as `{gate, decision, reason}` in the result
   (`auto_decisions`, with `unattended_source`), the run-state and the PR body's
   `### Unattended run` section under Risks, which the stats step checks in the real body. Plan
   mode reads the policy too (`infra:policy:plan`).
@@ -794,7 +795,8 @@ hook, because the example turns on auto-merge for the personal owners. Instead:
   ask ONE AskUserQuestion: "Create as shown", "Create with merge never everywhere", "Not now",
   "Not now, don't ask again". They show the path written. In `/build-task` the Build question
   then follows as a separate AskUserQuestion: the workflow reads the policy only in build mode,
-  and a policy answer before the plan launch would make intake stop with `relaunch`.
+  and a policy answer before the plan launch would make an attended intake (confirm ask) stop with `relaunch`;
+  with `--auto` or confirm auto or default, a general delegation like that answer passes intake (8.5.0).
 - "Create with merge never everywhere" sets every profile's `merge` and every `repos` override's
   `merge` to `never`. `update_branch` and every other value stay as the example has them.
 - "Not now, don't ask again" writes the marker `policy.json.dont-ask` next to the policy path

@@ -1,5 +1,35 @@
 # Changelog
 
+## [8.5.0] - 2026-11-23
+
+ccpmcwf 8.5.0: the intake relaunch gate passes a general delegation on a delegated launch (yaadgaar `#105`).
+
+### Changed
+
+- yaadgaar `#105` (Max's ruling A): the intake prompt classifies the launching turn's relayed human
+  message and every answer carries a required `relay: {kind, text}` (`none`, `names_input`,
+  `delegation`, `request`); `INTAKE_SCHEMA` requires it. The script decides in the new
+  `relayDecision`, in plan mode and in the `intake:rulings` re-read: a missing or malformed relay
+  halts with `relaunch` in every mode and on every status; a `request` halts in every mode; a
+  `delegation` passes when `args.unattended` is true or `confirm` is auto or default (the re-read
+  always), with a gate line and, in an unattended run, an `auto_decisions` entry (gate `relaunch`,
+  decision `pass`); an attended launch (confirm ask, no `unattended`) still halts. The text is
+  sanitised and cut to 200 characters. The `RELAUNCH_REASON` answer still halts first.
+
+### Deploy
+
+- Update the plugin to 8.5.0 and start a new session.
+
+### Tests
+
+- Nine new files `v850_relay_*` (prompt, pass, attended, missing, malformed, request, absent,
+  hijack, rulings).
+- The harness `fillPrograms` gives an `intake` or `intake:rulings` stub with no own `relay` key
+  `{kind: "none", text: ""}`.
+- v5010 prompt snapshot: PINS re-printed (plan and build pins move, probe unchanged). Checked:
+  with the prompt and schema edits reverted every pin is 8.4.0's.
+- v403 READS gains a `relayDecision` block; the version mirrors move to 8.5.0.
+
 ## [8.4.0] - 2026-11-20
 
 ccpmcwf 8.4.0: every agent under a ccpmcwf agent type with omitClaudeMd; the safety rules in the agent bodies (yaadgaar `#25`, steps 2-5).
