@@ -42,6 +42,9 @@ test("AC5: relay that is a string, null or an array halts with relaunch", async 
 test("AC5: delegation relay with missing or empty text halts with relaunch", async () => {
   await assertHalts({ kind: "delegation" }, "delegation no text");
   await assertHalts({ kind: "delegation", text: "" }, "delegation empty text");
+  // PR #105 review R2: whitespace-only text is empty after trim
+  await assertHalts({ kind: "delegation", text: "   " }, "delegation blank text");
+  await assertHalts({ kind: "delegation", text: "\t\n " }, "delegation tab-newline text");
 });
 
 // AC5: text missing or not a string

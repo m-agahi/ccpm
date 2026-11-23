@@ -6502,7 +6502,7 @@ function relayDecision(it, tag, input, phase) {
   const r = it.relay;
   const again = "; re-launch the workflow once in a turn whose latest human message is the build request";
   if (phase === "valid") {
-    if (!Object.prototype.hasOwnProperty.call(it, "relay") || !r || typeof r !== "object" || Array.isArray(r) || ["none", "names_input", "delegation", "request"].indexOf(r.kind) < 0 || typeof r.text !== "string" || (r.kind === "delegation" && !r.text)) {
+    if (!Object.prototype.hasOwnProperty.call(it, "relay") || !r || typeof r !== "object" || Array.isArray(r) || ["none", "names_input", "delegation", "request"].indexOf(r.kind) < 0 || typeof r.text !== "string" || (r.kind === "delegation" && !r.text.trim())) {
       state.relaunch = "intake";
       halt("needs_human", tag + ": missing or malformed relay field (want {kind: none | names_input | delegation | request, text: <string>})" + again, "relaunch");
     }
@@ -6510,7 +6510,7 @@ function relayDecision(it, tag, input, phase) {
   }
   if (r.kind !== "delegation" && r.kind !== "request") return null;
   const t = Array.from(r.text)
-    .map((c) => (c.codePointAt(0) < 32 || c.codePointAt(0) === 127 ? " " : c))
+    .map((c) => (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(c) ? " " : c))
     .slice(0, 200)
     .join("");
   if (r.kind === "request") {
@@ -7066,7 +7066,13 @@ async function rereadBrief(brief, project, repo) {
     agentType: JUDGE_AGENT,
     phase: "Auto-confirm",
   });
+  // PR #105 review R1: the RELAUNCH_REASON answer halts first, as in plan mode; a request relay halts on any status
+  if (typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
+    state.relaunch = "intake";
+    halt("needs_human", "intake:rulings: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
+  }
   relayDecision(it, "intake:rulings", null, "valid");
+  if (it.relay.kind === "request") relayDecision(it, "intake:rulings", null, "kind");
   const nl = LEDGER_KINDS.indexOf(src.kind) >= 0 ? noLedgerStop(it, project) : null;
   if (nl) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + nl + "; run build with confirm \"ask\"");
   if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + intakeHaltReason(it, input));

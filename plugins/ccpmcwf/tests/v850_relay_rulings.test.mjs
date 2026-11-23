@@ -130,3 +130,49 @@ test("AC9: triangulation: another relayed request text reaches the halt reason",
   assertRelaunch(out);
   assert.ok(out.result.reason.startsWith("intake:rulings: relayed message is a request, not the build input: do task 140 instead"), out.result.reason);
 });
+
+// PR #105 review R1: the RELAUNCH_REASON answer the intake prompt asks for on a request
+// halts the re-read with relaunch, before the relay check, as in plan mode.
+test("R1: a RELAUNCH_REASON needs_human answer halts the re-read with relaunch", async () => {
+  const out = await build(
+    { status: "needs_human", reason: "relayed user request does not reference args.input: fix the login page", tried: [], relay: { kind: "request", text: "fix the login page" }, __raw: true },
+    { confirm: "auto" },
+  );
+  assertRelaunch(out);
+  assert.ok(out.result.reason.startsWith("intake:rulings: relayed user request does not reference args.input: fix the login page"), out.result.reason);
+});
+
+test("R1: triangulation: a RELAUNCH_REASON answer with no relay field still halts with relaunch", async () => {
+  // the prefix check runs first, so the relay check does not decide the stop
+  const out = await build({ status: "needs_human", reason: "relayed user request does not reference args.input: do task 140 instead", tried: [], __raw: true }, { confirm: "auto" });
+  assertRelaunch(out);
+  assert.ok(out.result.reason.startsWith("intake:rulings: relayed user request does not reference args.input: do task 140 instead"), out.result.reason);
+});
+
+test("R1: a relay kind request on a non-ok answer with another reason halts with relaunch", async () => {
+  // a request relay halts with relaunch on any status
+  const out = await build({ status: "needs_human", reason: "unsure", tried: [], relay: { kind: "request", text: "fix the login page" }, __raw: true }, { confirm: "auto" });
+  assertRelaunch(out);
+  assert.ok(out.result.reason.startsWith("intake:rulings: relayed message is a request, not the build input: fix the login page"), out.result.reason);
+});
+
+test("R1: fail-closed: a non-ok answer with a none relay still halts, not with relaunch", async () => {
+  const out = await build({ status: "needs_human", reason: "task not found", tried: [], relay: { kind: "none", text: "" }, __raw: true }, { confirm: "auto" });
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.notEqual(out.result.stop_gate, "relaunch");
+  assert.ok(!out.labels.includes("role:fleet-intent-judge:rerun"), out.labels.join(", "));
+});
+
+// PR #105 review R2: a delegation text that is blank after trim is malformed.
+test("R2: a delegation relay with whitespace-only text halts the re-read with relaunch", async () => {
+  const out = await build(RS({ kind: "delegation", text: "   " }), { confirm: "auto" });
+  assertRelaunch(out);
+  assert.ok(out.result.reason.startsWith(PREFIX), out.result.reason);
+});
+
+// PR #105 review (sanitiser): C1 controls and U+2028/U+2029 in the relay text become a space.
+test("sanitiser: C1 and line separators in a delegation text become spaces in the gate line", async () => {
+  const out = await build(RS({ kind: "delegation", text: "run the\u0085loop now" }), { confirm: "auto" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.gate_log.includes("intake:rulings: relayed message passes as a general delegation (confirm auto): run the loop now"), JSON.stringify(out.result.gate_log));
+});

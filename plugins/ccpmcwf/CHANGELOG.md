@@ -15,6 +15,10 @@ ccpmcwf 8.5.0: the intake relaunch gate passes a general delegation on a delegat
   always), with a gate line and, in an unattended run, an `auto_decisions` entry (gate `relaunch`,
   decision `pass`); an attended launch (confirm ask, no `unattended`) still halts. The text is
   sanitised and cut to 200 characters. The `RELAUNCH_REASON` answer still halts first.
+- PR #105 review R1, R2: the `intake:rulings` re-read halts with `relaunch` first on a
+  `RELAUNCH_REASON` answer (as plan mode does) and on a `request` relay on any status; a
+  `delegation` relay whose text is empty after trim is malformed; the relay text sanitiser also
+  replaces C1 controls and U+2028/U+2029 with a space.
 
 ### Deploy
 
@@ -29,6 +33,8 @@ ccpmcwf 8.5.0: the intake relaunch gate passes a general delegation on a delegat
 - v5010 prompt snapshot: PINS re-printed (plan and build pins move, probe unchanged). Checked:
   with the prompt and schema edits reverted every pin is 8.4.0's.
 - v403 READS gains a `relayDecision` block; the version mirrors move to 8.5.0.
+- `v850_relay_rulings` and `v850_relay_malformed` gain the review R1, R2 and sanitiser cases; v403
+  READS gains a `rereadBrief` block (`it.reason`).
 
 ## [8.4.0] - 2026-11-20
 

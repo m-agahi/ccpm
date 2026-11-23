@@ -814,6 +814,8 @@ const READS = {
     "r.text string": "intake:relay.text",
     "input.unattended boolean": [PARSED_ARGS, 2],
   },
+  // PR #105 review R1: the rulings re-read checks the RELAUNCH_REASON prefix first, as plan mode does
+  rereadBrief: { "it.reason string": "intake:reason" },
   planMode: {
     // 6.3.0 (ADR-1239)
     "input.unattended boolean": PARSED_ARGS,
