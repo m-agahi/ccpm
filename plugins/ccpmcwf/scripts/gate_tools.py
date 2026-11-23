@@ -36,7 +36,10 @@ except Exception:
     _PROG = {'name': None, 'sha256': None}
 # fleet 8.0.0 (G1, ADR-1315, ADR-1316): the gate tool census. Args: <repo> <image>.
 # Languages come from marker files at the repo root; coverage tools from which()
-# on PATH (no entry inside the repo). Mutation is the built-in mutator for the
+# on PATH (no entry inside the repo); the python row first reads <repo>/uv.lock
+# (a regular file of at most 16 MiB, no symlink) and, when it lists a coverage
+# package and uv is on PATH, reports 'uv run --frozen coverage', else PATH
+# coverage, else unsupported (yaadgaar #106). Mutation is the built-in mutator for the
 # supported languages (8.0.0 G7: python with pytest only). The security scan is
 # the pinned container image only: the runtime is podman, else docker; for an
 # image pinned by digest it runs the runtime's image check and, when the image
@@ -83,9 +86,30 @@ else:
             reason = None if present else reason + ('; pull exit 0, still missing' if pull == 0 else '; pull failed (exit %d)' % pull)
     except Exception as e:
         present, reason = False, '%s image check or pull failed: %s' % (runtime, type(e).__name__)
+def uv_coverage():
+    # the lock is read, never run; any refusal or parse error falls through (None)
+    try:
+        if not os.path.isabs(repo) or not shutil.which('uv'):
+            return None
+        import stat, tomllib
+        fd = os.open(os.path.join(repo, 'uv.lock'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            with os.fdopen(fd, 'rb', closefd=False) as fh:
+                raw = fh.read(16777217)
+        finally:
+            os.close(fd)
+        if len(raw) > 16777216:
+            return None
+        pk = tomllib.loads(raw.decode('utf-8')).get('package')
+        ok = isinstance(pk, list) and any(isinstance(e, dict) and e.get('name') == 'coverage' for e in pk)
+        return 'uv run --frozen coverage' if ok else None
+    except Exception:
+        return None
 matrix = {}
 for n in ('python', 'node', 'go', 'rust', 'other'):
-    cov = next((t for t in COVER[n] if shutil.which(t)), None)
+    cov = (n == 'python' and uv_coverage()) or next((t for t in COVER[n] if shutil.which(t)), None)
     matrix[n] = {'coverage': cov or 'unsupported', 'mutation': 'builtin' if n == 'python' else 'unsupported', 'security': 'container' if present else 'unsupported'}
 out = {'languages': langs, 'matrix': matrix, 'container': {'runtime': runtime, 'image': image, 'present': present, 'reason': reason}, 'args': sys.argv[1:]}
 out['program'] = _PROG

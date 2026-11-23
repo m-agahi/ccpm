@@ -4498,7 +4498,7 @@ fails the digest, the args [repo, AUDIT_IMAGE] or the shape check sets state.gat
 and logs one line. AUDIT_IMAGE is an argument, not a constant of the program, so the args check
 proves which image the census looked at; any image that is not name@sha256:<64 hex> is never
 passed to the runtime. The program uses which() on clean_path((repo,)) so a runtime or tool
-planted inside the repo is never found or run. runGate has no caller in G1: G2, G5 and G7 add
+planted inside the repo is never found or run; the python coverage row also reads <repo>/uv.lock, and a uv or tool planted inside the repo is still never found on PATH. runGate has no caller in G1: G2, G5 and G7 add
 the gate steps (PROGRAM_SLOTS and INFRA_TIER rows come with them). gatesNotRun keeps the
 judge-list union; state.gates entries carry the code round, so a result of an earlier round
 never removes a gate, and a replan resets state.gates.

@@ -1,5 +1,21 @@
 # Changelog
 
+## [8.4.1] - 2026-11-23
+
+ccpmcwf 8.4.1: the gate tool census reads the repo's `uv.lock` for the python coverage tool (yaadgaar `#106`).
+
+### Fixed
+
+- yaadgaar `#106`: the python coverage row of `gate_tools.py` now has tiers. When `<repo>/uv.lock`
+  lists a `[[package]]` named exactly `coverage` and `uv` is on the cleaned PATH, the row is
+  `uv run --frozen coverage`. Else it is PATH `coverage` when found, else `unsupported`. The
+  census reads the lock and never runs `uv` or `coverage`.
+- The lock is read only when it is a regular file of at most 16 MiB (16777216 bytes). A symlink,
+  a FIFO, a directory, a file that is not UTF-8 and any parse or shape error fall through to the
+  PATH tier; the program still exits 0.
+- The venv tier (`.venv/bin/coverage`) is not built. The coverage gate run (`cover_diff.py`) is
+  unchanged: it keeps the `--frozen` flags of a `uv run` test command.
+
 ## [8.4.0] - 2026-11-20
 
 ccpmcwf 8.4.0: every agent under a ccpmcwf agent type with omitClaudeMd; the safety rules in the agent bodies (yaadgaar `#25`, steps 2-5).
