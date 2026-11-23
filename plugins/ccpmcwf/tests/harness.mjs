@@ -1269,7 +1269,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.4.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.5.1/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1557,6 +1557,8 @@ function stagedShaOf(label) {
 export function fillPrograms(label, r, prompt) {
   if (!r || typeof r !== "object") return r;
   const isPre = label === "preflight";
+  // 8.5.0 (#105 OB7): the intake relay field is required; a stub of any status with no own relay key reports none
+  if ((label === "intake" || label === "intake:rulings") && !Object.prototype.hasOwnProperty.call(r, "relay")) r.relay = { kind: "none", text: "" };
   if (!isPre && r.status !== "ok") return r;
   if (isPre) {
     if (!("scripts_dir" in r)) r.scripts_dir = SCRIPTS_DIR;

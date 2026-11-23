@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.4.1";
+const FLEET_VERSION = "8.5.1";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -731,10 +731,11 @@ properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_O
 };
 const INTAKE_SCHEMA = {
 type: "object",
-required: ["status", "reason"],
+required: ["status", "reason", "relay"],
 properties: {
 status: { type: "string", enum: ["ok", "needs_human", "failed"] },
 reason: STR,
+relay: { type: "object", required: ["kind", "text"], properties: { kind: { type: "string", enum: ["none", "names_input", "delegation", "request"] }, text: STR } },
 tried: {
 type: "array",
 items: { type: "object", properties: { ledger: STR, project: STR_OR_NULL, call: STR, error: STR_OR_NULL } },
@@ -2433,7 +2434,7 @@ function intakePrompt(inputs) {
 return (
 INFRA_STEP + "INTAKE. Read only. Never write, edit, comment, transition or post anywhere: no file edits, no git writes, no ledger, ticket, issue or PR writes.\n" +
 inputsLine(inputs) +
-"Resolve `input` into ONE work item and fetch its text. The harness may add the launching turn's latest human message to this prompt (a `[Workflow harness — user request]` block): `input` stays the work item. When that block is present and neither names nor refers to the item `input` names, it is a message sent while the workflow launched: resolve nothing and return {status: \"needs_human\", reason: \"" + RELAUNCH_REASON + ": <that request, at most 200 characters>\", tried: []}.\nClassify `input` in this order:\n" +
+"Resolve `input` into ONE work item and fetch its text. The harness may add the launching turn's latest human message to this prompt (a `[Workflow harness — user request]` block): `input` stays the work item. Every answer carries `relay: {kind, text}`, which classifies that block: `none`: there is no such block; text \"\". `names_input`: the block names or refers to the item `input` names; text \"\". Resolve as usual. `delegation`: the block is a general delegation: it asks to run, continue or try work, a loop or the fleet, or it confirms or answers a question, and it names no task, ticket, URL, file, change or behaviour (for example \"run the loop\", \"try one of the tasks with ccpmcwf\", \"go ahead\", \"Build\"); text = that message, at most 200 characters. Resolve as usual. `request`: anything else is a request sent while the workflow launched, a vague request for a change included (for example \"also fix the login page\", \"do something else instead\"), and so is every message you are unsure about; text = that message, at most 200 characters. Resolve nothing and return {status: \"needs_human\", reason: \"" + RELAUNCH_REASON + ": <that request, at most 200 characters>\", tried: [], relay: {kind: \"request\", text}}. The workflow, not you, decides whether a delegation may pass.\nClassify `input` in this order:\n" +
 "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). Every project keeps its tasks in yaadgaar (`ledger` is always `yaadgaar`). The ledger scope is <project>, as the caller gave it; it is independent of <repo>. A repo's `.yadgar` files, its git remotes and its config never decide the ledger or the project. Resolve the id only by calling mcp__yaadgaar__read_task, and take its answer as the truth. Record EVERY ledger tool call in `tried`: {ledger, project, call (the tool and its arguments), error (the tool's error text, exactly; null when it returned the task)}. `ledger_tools` is the preflight census of the ledger tools, advisory only: it can miss a tool, so load the ledger tool via ToolSearch even when it is not listed. Only when ToolSearch finds no such tool, record {ledger, project, call: <the tool name>, error \"absent\"} and call nothing -> needs_human with reason \"" + NO_LEDGER_REASON + "\".\n" +
 "   `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to L<N>. An `L42` input -> needs_human: it is a legacy yadgar ledger id, and its migrated yaadgaar task carries the title prefix `L42: `; ask for that task's yaadgaar number. Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>. The yaadgaar client is bound to the session's project and takes no project argument; never check or guess which project it is bound to. A refusal or no task -> needs_human. kind yaadgaar; ref = the number; id = the `id` (URN) of the answer, copied exactly; project = the project the answer names (a non-empty `project_id` or `project` field), copied exactly, else null (read_task names none for the client's own project). An answer that names a project other than <project> -> needs_human naming both.\n" +
 "   Never advise creating, editing or changing a repo's `.yadgar` file, project id or origin: the ledger scope is <project>, not the repo.\n" +
@@ -2451,7 +2452,7 @@ inputsLine(inputs) +
 "- jira: the ticket must name exactly one repo (in its text, components or links); none or several -> needs_human listing what you found. Map that repo to a checkout as for github.\n" +
 "Any ambiguity (several matching tickets, an unclear id, several repos, a reference you cannot read) -> status needs_human with the candidates in reason. Do not guess.\n" +
 "brief.title: the item's title; for free text, a short title (at most 8 words) that names the change. brief.description: one paragraph that states the requested change.\n" +
-"Return {status, reason, tried, brief: {title, description, sources: [{kind, ref, url, body, id, project}], repo, plan_path}}. tried is [] when no ledger tool was called. id and project are null except on a yaadgaar source. plan_path is null when no plan was ingested."
+"Return {status, reason, tried, relay: {kind, text}, brief: {title, description, sources: [{kind, ref, url, body, id, project}], repo, plan_path}}. tried is [] when no ledger tool was called. id and project are null except on a yaadgaar source. plan_path is null when no plan was ingested."
 );
 }
 function branchScanPrompt(inputs) {
@@ -5815,6 +5816,37 @@ if (p.relaxed.length) out.push("re-plan relaxed: " + p.relaxed.join("; "));
 if (!input.project && TASK_ID_INPUT_RE.test(raw)) out.push("task id " + JSON.stringify(raw) + " with no args.project");
 return out;
 }
+function relayDecision(it, tag, input, phase) {
+const r = it.relay;
+const again = "; re-launch the workflow once in a turn whose latest human message is the build request";
+if (phase === "valid") {
+if (!Object.prototype.hasOwnProperty.call(it, "relay") || !r || typeof r !== "object" || Array.isArray(r) || ["none", "names_input", "delegation", "request"].indexOf(r.kind) < 0 || typeof r.text !== "string" || (r.kind === "delegation" && !r.text.trim())) {
+state.relaunch = "intake";
+halt("needs_human", tag + ": missing or malformed relay field (want {kind: none | names_input | delegation | request, text: <string>})" + again, "relaunch");
+}
+return null;
+}
+if (r.kind !== "delegation" && r.kind !== "request") return null;
+const t = Array.from(r.text)
+.map((c) => (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(c) ? " " : c))
+.slice(0, 200)
+.join("");
+if (r.kind === "request") {
+state.relaunch = "intake";
+halt("needs_human", tag + ": relayed message is a request, not the build input: " + t + again, "relaunch");
+}
+if (!input) {
+gate(tag + ": relayed message passes as a general delegation (confirm auto): " + t);
+return t;
+}
+const c = input.confirm === undefined ? "ask" : input.confirm;
+if (input.unattended !== true && c !== "auto" && c !== "default") {
+state.relaunch = "intake";
+halt("needs_human", tag + ": relayed message is a general delegation, but this launch is attended (confirm ask, no unattended): " + t + again, "relaunch");
+}
+gate(tag + ": relayed message passes as a general delegation (confirm " + c + ", unattended " + (input.unattended === true) + "): " + t);
+return t;
+}
 async function planMode(input, date) {
 const raw = typeof input.input === "string" ? input.input.trim() : "";
 const repo = cleanRepo(input.repo);
@@ -5836,9 +5868,11 @@ if (it.status === "needs_human" && typeof it.reason === "string" && it.reason.in
 state.relaunch = "intake";
 halt("needs_human", "intake: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
 }
+relayDecision(it, "intake", input, "valid");
 const nl = TASK_ID_INPUT_RE.test(raw) ? noLedgerStop(it, input.project) : null;
 if (nl) halt("needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
 if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
+const relayText = relayDecision(it, "intake", input, "kind");
 const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
 if (problem) halt("needs_human", "intake: " + problem);
 const brief = cleanBrief(it.brief);
@@ -5864,6 +5898,7 @@ if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (t
 await pushProbe(lay, ws);
 const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
 unattendedOn(planPolicy, input);
+if (relayText !== null && state.unattended) autoDecide("relaunch", "pass", "general delegation: " + relayText);
 const un = !!state.unattended;
 const markerAsk = !un && (input.confirm === undefined ? "ask" : input.confirm) !== "ask" && brief.sources.some((x) => x.body.indexOf(BRIEF_MARKER) >= 0);
 if (markerAsk) gate("the brief holds the fleet-brief marker: confirm ask (a briefed task is confirmed by Max)");
@@ -6285,9 +6320,17 @@ schema: INTAKE_SCHEMA,
 agentType: JUDGE_AGENT,
 phase: "Auto-confirm",
 });
+if (typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
+state.relaunch = "intake";
+halt("needs_human", "intake:rulings: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
+}
+relayDecision(it, "intake:rulings", null, "valid");
+if (it.relay.kind === "request") relayDecision(it, "intake:rulings", null, "kind");
 const nl = LEDGER_KINDS.indexOf(src.kind) >= 0 ? noLedgerStop(it, project) : null;
 if (nl) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + nl + "; run build with confirm \"ask\"");
 if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + intakeHaltReason(it, input));
+const relayText = relayDecision(it, "intake:rulings", null, "kind");
+if (relayText !== null && state.unattended) autoDecide("relaunch", "pass", "general delegation: " + relayText);
 const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null);
 if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
 const fresh = cleanBrief(it.brief);

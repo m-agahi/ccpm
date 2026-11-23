@@ -130,11 +130,12 @@ const SCENARIOS = {
 // 8.3.3 (yaadgaar #97): the plan-ref chunks are PLAN_CHUNK_CHARS (2000) long, so the infra:plan-chunks writer prompt says "(2000 characters each at most)" and carries more, shorter chunks (each with its sha256), and commit-plan's plan_ref_write command carries a longer chunk sha256 list. Checked: with PLAN_CHUNK_CHARS put back to 4000 every pin is 8.3.2's (the #102 role-file edits only move masked role shas; the preflight PATH-check retry runs only on a bad relay); same call counts: the three build pins move, probe unchanged
 // 8.3.4 (yaadgaar #79): the mutants program pin, the code-judge role sha and the version move; all three are masked, so no pin moves (probe unchanged)
 // 8.4.0 (yaadgaar #25): no prompt changes; opts.agentType does: every call names a ccpmcwf type, and plan-audit, the plan-mode sweep, pr-view and ci-logs run as ccpmcwf:judge. Checked: with agentType put back to 8.3.5's (ccpmcwf:judge where it was, else absent) every pin is 8.3.5's; same call counts: the three plan/build pins move, probe unchanged
-// 8.4.1 (yaadgaar #106): no prompt change; the gate_tools program pin and the version move, both masked; same call counts.
+// 8.5.0 (yaadgaar #105): the intake prompt gains the relay rule and its return shape names relay, and INTAKE_SCHEMA requires the relay property; same call counts: the plan and build pins move, probe unchanged. Checked: with the prompt and schema edits reverted every pin is 8.4.0's
+// 8.5.1 (yaadgaar #106): no prompt change; the gate_tools program pin and the version move, both masked; same call counts.
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "8596cf3e612374fcf9fb6c8b21120448f89b6e49a36e1cee8aec70909ff2a4e5" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "81c9426fc1d6ecdcae05833ab429e8caf7166f4a22ec23f513a7b71a1b0b9363" },
-  "short path (one test writer)": { calls: 88, sha256: "1d9045ae506bfebdc013ed609a882ad3c05bc85ac7083b2bd3bae461f86d7b7c" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "99277c8163d0a0075275f24144ac940aab335d3f54fc0d12e20cdc916f1803b9" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "340658f9ba1e1ae48a67cd72ffda8e1a1b331d7262da590a89df56353a5cd1fc" },
+  "short path (one test writer)": { calls: 88, sha256: "fd82a38fbb3d699e45e54b9a814d19db480220b2d28c82e0d85eb6e44c13a744" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

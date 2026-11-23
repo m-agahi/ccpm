@@ -137,8 +137,9 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
    treats the marker's ask as a ruling and records it. A `confirm: "ask"` the user named
    (`user_confirm: "ask"`, with or without the marker) always asks. Unattended mode never bypasses a safety stop: hook surface, IaC or terraform,
    work-owner merge, orchestrator PR, intent-judge refusal, scope fence, command allowlist, hash,
-   freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift, DSN and relaunch
-   stop as before. Report `auto_decisions` (each `gate`, `decision`, `reason`) in step 9; the PR
+   freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift and DSN stop as
+   before; so does relaunch when the relayed message is a request (a general delegation in an unattended run
+   passes and is recorded as an `auto_decisions` entry: gate `relaunch`, decision `pass`). Report `auto_decisions` (each `gate`, `decision`, `reason`) in step 9; the PR
    body carries them in its `### Unattended run` section under Risks.
 
 5. **Workflow tool.** Check that `Workflow` is among the tools you can call now. If it is not, say
@@ -154,6 +155,12 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
    `relaunch`) means intake saw a relayed request that is not the build request: re-launch the
    same Workflow call once, with a fresh `run_nonce`, on the next turn whose latest human message
    is the build request or its confirmation. A second `relaunch` stop: report it as in step 9.
+
+   A general delegation (8.5.0, yaadgaar #105: for example "run the loop" or "try one of the tasks
+   with ccpmcwf"), or no human message at all, passes intake when the launch carries `--auto` or
+   `confirm` auto or default. In an attended launch (`confirm` ask, no `--auto`) a bare confirmation
+   or a question answer (for example "go ahead" or "Build") still stops with `relaunch`: re-launch
+   it as above. A relayed message that asks for a different build or change always stops.
 
 6. **Plan.**
 

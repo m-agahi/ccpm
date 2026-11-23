@@ -4348,6 +4348,15 @@ code, the script stops with stop_gate relaunch and relaunch: "intake", and the /
 skill re-launches once from a turn whose latest human message is the build request.
 ```
 
+yaadgaar #105 (8.5.0): a loop launch has no human message that names the task, so every launch
+stopped. Intake now returns a required `relay: {kind, text}` (`none`, `names_input`, `delegation`,
+`request`) in plan mode and in the `intake:rulings` re-read. The script decides in `relayDecision`:
+a missing or malformed relay halts with relaunch in every mode; a `request` halts in every mode; a
+`delegation` passes when the launch is delegated (args.unattended true, or confirm auto or default;
+the rulings re-read always) and halts an attended launch. A pass writes a gate line and, in an
+unattended run, an `auto_decisions` entry (gate `relaunch`, decision `pass`). The agent never sees
+the launch mode. The `RELAUNCH_REASON` answer still halts first.
+
 ### `shipFix`, `planBase` (2043)
 
 ```text
