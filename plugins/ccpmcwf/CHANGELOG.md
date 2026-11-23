@@ -1,5 +1,41 @@
 # Changelog
 
+## [8.5.2] - 2026-11-23
+
+ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsupported ignores quoted and opted-out text (yaadgaar `#107`).
+
+### Fixed
+
+- yaadgaar `#107`: `unsupportedRequired` (the `#94` intake stop, stop gate `gates`) fired on text that
+  only describes a gate, for example a quoted earlier stop reason or "a real requirement such as
+  'coverage must be 100%' still stops".
+- A quoted requirement is ignored: a span in `"…"`, `'…'`, `` `…` ``, `“…”` or `‘…’` that holds both a gate
+  term and a requirement word is cut down to the gate terms it names, so a requirement word outside the
+  span still binds ("The rule "coverage must be 100%" must hold." stops). A span with only one of them
+  stays in the text, so "The `coverage` gate is required." and "Mutation gate: `required`." still stop.
+  The text is split into sentences first and spans are matched inside one sentence, so a span never
+  joins two sentences. Every quote needs a non-word char (or the line start or end) outside it, so an
+  apostrophe (`don't`, `task's`) or an inch mark (`5"`) never opens or closes a span, and a span never
+  holds a quote char of its own kind, so the patterns are linear. Two stray quote chars of one kind
+  that each sit next to a non-word char can still pair up inside one sentence; the span is cut only
+  when it holds a gate term and a requirement word, and its gate terms stay. A quoted contraction keeps
+  its span in the text (fail closed).
+- An explicit opt-out sentence for a gate (it names that one gate and holds an opt-out phrase:
+  "does/do/is/are not require(d)/need(ed)", "not required", "no need for", "optional"; for example
+  "This build does not require the coverage gate.") is no requirement source for that gate. A sentence
+  that names two gates and holds an opt-out phrase still requires each gate it names.
+- Any other negation now states a requirement: "The coverage gate must not be skipped.", "Coverage must
+  never drop below 90%." stop (before 8.5.2 a sentence with any negation word was ignored).
+- An opt-out and a real requirement for the same gate conflict: the run stops (fail closed). An opt-out
+  never cancels a requirement in another sentence. A sentence that describes a gate without quotes
+  ("Intake stops every task that requires the coverage gate.") reads as a requirement; quote it.
+- A real requirement ("Coverage must be 100%.", "This change requires the mutation gate.") still stops
+  with the same reason.
+- Under `--auto` (`args.unattended: true`) the run does not stop: it records the auto decision
+  `gates: continue` (the gate is unsupported and will not run) and goes on; the gate's own program
+  reports `not_run`, so the gate is in `gates_not_run`. Attended runs and policy-only unattended runs
+  keep the stop (the policy is read after intake).
+
 ## [8.5.1] - 2026-11-23
 
 ccpmcwf 8.5.1: the gate tool census reads the repo's `uv.lock` for the python coverage tool (yaadgaar `#106`).

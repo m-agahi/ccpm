@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.5.1";
+const FLEET_VERSION = "8.5.2";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -3951,14 +3951,20 @@ return "gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) 
 }
 const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
-const REQ_NEG_RE = /\b(?:not|no|never|without|optional)\b|n't\b/i;
+const REQ_OPTOUT_RE = /\b(?:does|do|is|are)\s*(?:not|n't)\s+(?:require|required|need|needed)\b|\bnot\s+required\b|\bno\s+need\s+for\b|\boptional\b/i;
+const REQ_QUOTE_RES = [/(?<!\w)"[^"\n]*"(?!\w)/g, /(?<!\w)“[^“”\n]*”(?!\w)/g, /(?<!\w)`[^`\n]*`(?!\w)/g, /(?<!\w)‘[^‘’\n]*’(?!\w)/g, /(?<!\w)'[^'\n]*'(?!\w)/g];
+const quotedReq = (q) => (REQ_WORD_RE.test(q) && REQ_GATES.some((r) => r[1].test(q)) ? " " + REQ_GATES.filter((r) => r[1].test(q)).map((r) => r[1].exec(q)[0]).join(" ") + " " : q);
 function unsupportedRequired(text) {
 const g = state.gateTools;
 if (!g || !g.languages.length) return null;
-const sents = String(text).split(/(?<=[.!?;])\s+|\n+/).filter((x) => REQ_WORD_RE.test(x) && !REQ_NEG_RE.test(x));
-for (const [k, re] of REQ_GATES)
+const sents = String(text)
+.split(/(?<=[.!?;])\s+|\n+/)
+.map((x) => REQ_QUOTE_RES.reduce((t, q) => t.replace(q, quotedReq), x))
+.filter((x) => REQ_WORD_RE.test(x) && (!REQ_OPTOUT_RE.test(x) || REQ_GATES.filter((r) => r[1].test(x)).length > 1));
+for (const [k, re] of REQ_GATES) {
 if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
-return "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run";
+return { gate: k, reason: "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run" };
+}
 return null;
 }
 function gatePrompt(slots) {
@@ -5879,7 +5885,8 @@ const brief = cleanBrief(it.brief);
 const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
 if (lp) halt("needs_human", "intake: " + lp);
 const ug = unsupportedRequired([brief.title, brief.description].concat(brief.sources.map((x) => x.body)).join("\n"));
-if (ug) halt("needs_human", "intake: " + ug, "gates");
+if (ug && input.unattended !== true) halt("needs_human", "intake: " + ug.reason, "gates");
+if (ug) autoDecide("gates", "continue", "the task requires the " + ug.gate + " gate, but the gate census reports it unsupported; the " + ug.gate + " gate will not run (gates_not_run lists it)");
 const names = namesFor(brief, raw);
 if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
 await lockClaim(brief.repo, names.taskId, "Intake");
