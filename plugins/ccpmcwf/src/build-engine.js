@@ -137,7 +137,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.5.1";
+const FLEET_VERSION = "8.5.2";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -4423,13 +4423,20 @@ function censusLine(g, l) {
 const REQ_GATES = [["coverage", /\bcoverage\b/i], ["mutation", /\bmutation\b|\bmutants?\b/i], ["security", /\bsec(?:urity)?[ _-]?scan|\bsecurity gate\b/i]];
 const REQ_WORD_RE = /\b(?:enforce[sd]?|enforcing|requires?|required|requiring|must|mandatory)\b|\b100 ?%/i;
 const REQ_NEG_RE = /\b(?:not|no|never|without|optional)\b|n't\b/i;
+// 8.5.2 (#107): quoted text is a quotation or example, not a requirement; a single-quoted span needs a
+// non-word char outside both quotes, so an apostrophe (don't, task's) never opens or closes one, and it
+// never crosses a sentence end, so a stray quote and a plural possessive (users') hide no requirement
+const REQ_QUOTE_RES = [/"[^"\n]*"/g, /“[^“”\n]*”/g, /`[^`\n]*`/g, /‘(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)’(?!\w)/g, /(?<!\w)'(?=\S)(?:(?![.!?;]\s)[^\n])*?(?<=\S)'(?!\w)/g];
+// {gate, reason} or null; an opt-out sentence for a gate (its term, a requirement word, a negation) clears that gate (#107)
 function unsupportedRequired(text) {
   const g = state.gateTools;
   if (!g || !g.languages.length) return null;
-  const sents = String(text).split(/(?<=[.!?;])\s+|\n+/).filter((x) => REQ_WORD_RE.test(x) && !REQ_NEG_RE.test(x));
-  for (const [k, re] of REQ_GATES)
-    if (sents.some((x) => re.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
-      return "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run";
+  const sents = REQ_QUOTE_RES.reduce((t, q) => t.replace(q, " "), String(text)).split(/(?<=[.!?;])\s+|\n+/).filter((x) => REQ_WORD_RE.test(x));
+  for (const [k, re] of REQ_GATES) {
+    const hit = sents.filter((x) => re.test(x));
+    if (hit.length && hit.every((x) => !REQ_NEG_RE.test(x)) && g.languages.every((l) => g.matrix[l][k] === "unsupported"))
+      return { gate: k, reason: "the task requires the " + k + " gate, but the gate census reports it unsupported (" + g.languages.map((l) => censusLine(g, l)).join("; ") + "); drop the requirement or install a " + k + " tool, then re-run" };
+  }
   return null;
 }
 // 8.0.0 (G1): one agent runs a code round's gate programs, one slot per gate ([gate, program id, args]); each prints
@@ -6566,7 +6573,9 @@ async function planMode(input, date) {
   const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
   if (lp) halt("needs_human", "intake: " + lp);
   const ug = unsupportedRequired([brief.title, brief.description].concat(brief.sources.map((x) => x.body)).join("\n"));
-  if (ug) halt("needs_human", "intake: " + ug, "gates");
+  // 8.5.2 (#107): --auto goes on; the gate's own program reports not_run and lands in gates_not_run
+  if (ug && input.unattended !== true) halt("needs_human", "intake: " + ug.reason, "gates");
+  if (ug) autoDecide("gates", "continue", "the task requires the " + ug.gate + " gate, but the gate census reports it unsupported; the " + ug.gate + " gate will not run (gates_not_run lists it)");
   const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   await lockClaim(brief.repo, names.taskId, "Intake");

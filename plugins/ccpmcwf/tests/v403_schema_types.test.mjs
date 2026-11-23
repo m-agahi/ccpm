@@ -817,8 +817,8 @@ const READS = {
   // PR #105 review R1: the rulings re-read checks the RELAUNCH_REASON prefix first, as plan mode does
   rereadBrief: { "it.reason string": "intake:reason" },
   planMode: {
-    // 6.3.0 (ADR-1239)
-    "input.unattended boolean": PARSED_ARGS,
+    // 6.3.0 (ADR-1239); 8.5.2 (#107): + --auto goes on past an unsupported required gate
+    "input.unattended boolean": [PARSED_ARGS, 2],
     "size number-literal": PARSED_LOCAL,
     // 6.3.0: the sealed plan ref a branch with build commits resumes with
     "e.ref_ok boolean": "prog:branch_scan:refs[].ref_ok",
@@ -1273,7 +1273,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.1\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.2\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

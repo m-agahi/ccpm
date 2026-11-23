@@ -1,5 +1,29 @@
 # Changelog
 
+## [8.5.2] - 2026-11-23
+
+ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsupported ignores quoted and opted-out text (yaadgaar `#107`).
+
+### Fixed
+
+- yaadgaar `#107`: `unsupportedRequired` (the `#94` intake stop, stop gate `gates`) fired on text that
+  only describes a gate, for example a quoted earlier stop reason or "a real requirement such as
+  'coverage must be 100%' still stops".
+- Text in quotes is ignored: `"…"`, `'…'`, `` `…` ``, `“…”`, `‘…’`. A single-quoted span counts only when
+  a non-word char (or the start or end of the line) sits outside both quotes, so an apostrophe in
+  `don't` or `task's` never opens or closes a span. A span never crosses a line.
+- An opt-out sentence for a gate (its term, a requirement word and a negation, for example "This build
+  does not require the coverage gate.") suppresses the stop for that gate only.
+- A real requirement ("Coverage must be 100%.", "This change requires the mutation gate.") still stops
+  with the same reason.
+- Under `--auto` (`args.unattended: true`) the run does not stop: it records the auto decision
+  `gates: continue` (the gate is unsupported and will not run) and goes on; the gate's own program
+  reports `not_run`, so the gate is in `gates_not_run`. Attended runs and policy-only unattended runs
+  keep the stop (the policy is read after intake).
+- Known limit: the opt-out rule is literal. Any sentence with the gate term, a requirement word and a
+  negation counts as an opt-out, so "The coverage gate must not be skipped. Coverage must be 100%." no
+  longer stops (before 8.5.2 the negated sentence was only ignored).
+
 ## [8.5.1] - 2026-11-23
 
 ccpmcwf 8.5.1: the gate tool census reads the repo's `uv.lock` for the python coverage tool (yaadgaar `#106`).
