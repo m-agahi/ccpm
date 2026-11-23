@@ -1,5 +1,5 @@
 // ccpmcwf 8.4.1 (yaadgaar #106), AC1: the gate census python row, uv tier.
-// A python repo whose root uv.lock has a [[package]] named "coverage", with `uv` on the cleaned
+// A python repo whose root uv.lock has a [[package]] named "coverage" from the PyPI registry, with `uv` on the cleaned
 // PATH, reports `uv run --frozen coverage`. It wins over PATH coverage. The census runs no process
 // for it (the stub call log stays empty).
 import { test } from "node:test";
@@ -39,7 +39,8 @@ function census({ markers = ["pyproject.toml"], lock, stubs = {} }) {
   }
 }
 
-const MAIN_LOCK = "[[package]]" + LF + 'name = "coverage"' + LF + 'version = "7.17.4"' + LF;
+const PYPI = 'source = { registry = "https://pypi.org/simple" }' + LF;
+const MAIN_LOCK = "[[package]]" + LF + 'name = "coverage"' + LF + 'version = "7.17.4"' + LF + PYPI;
 
 test("8.4.1 AC1: uv.lock locks coverage and uv is on PATH -> uv run --frozen coverage; no stub ran", { skip: !HAVE_PY }, () => {
   // AC1: main example
@@ -52,7 +53,7 @@ test("8.4.1 AC1: uv.lock locks coverage and uv is on PATH -> uv run --frozen cov
 
 test("8.4.1 AC1: the uv tier wins over PATH coverage; a different lock still gives the same value", { skip: !HAVE_PY }, () => {
   // AC1: triangulation, coverage stub present, no version key, other package first
-  const lock = "[[package]]" + LF + 'name = "attrs"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF;
+  const lock = "[[package]]" + LF + 'name = "attrs"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF + PYPI;
   const { out, calls } = census({ lock, stubs: { uv: 0, coverage: 0 } });
   assert.equal(out.matrix.python.coverage, UV_RUN);
   // AC1: property, calls.log stays empty
@@ -61,21 +62,21 @@ test("8.4.1 AC1: the uv tier wins over PATH coverage; a different lock still giv
 
 test("8.4.1 AC1: coverage is the 2nd of 3 packages", { skip: !HAVE_PY }, () => {
   // AC1: boundary example
-  const lock = "[[package]]" + LF + 'name = "pytest"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF + LF + "[[package]]" + LF + 'name = "pluggy"' + LF;
+  const lock = "[[package]]" + LF + 'name = "pytest"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF + PYPI + LF + "[[package]]" + LF + 'name = "pluggy"' + LF;
   const { out } = census({ lock, stubs: { uv: 0 } });
   assert.equal(out.matrix.python.coverage, UV_RUN);
 });
 
 test("8.4.1 AC1: coverage is the last of 3 packages (triangulation)", { skip: !HAVE_PY }, () => {
   // AC1: triangulation of the boundary example
-  const lock = "[[package]]" + LF + 'name = "pluggy"' + LF + LF + "[[package]]" + LF + 'name = "pytest"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF;
+  const lock = "[[package]]" + LF + 'name = "pluggy"' + LF + LF + "[[package]]" + LF + 'name = "pytest"' + LF + LF + "[[package]]" + LF + 'name = "coverage"' + LF + PYPI;
   const { out } = census({ lock, stubs: { uv: 0 } });
   assert.equal(out.matrix.python.coverage, UV_RUN);
 });
 
 test("8.4.1 AC1: a lock of exactly 16777216 bytes is read", { skip: !HAVE_PY }, () => {
   // AC1: boundary example, cap
-  const head = "[[package]]" + LF + 'name = "coverage"' + LF + "#";
+  const head = "[[package]]" + LF + 'name = "coverage"' + LF + PYPI + "#";
   const k = 16777216 - head.length - 1;
   const lock = head + "x".repeat(k) + LF;
   assert.equal(Buffer.byteLength(lock), 16777216);
@@ -92,7 +93,7 @@ test("8.4.1 AC1: no python marker (only package.json) still fills the python row
 
 test("8.4.1 AC1: package as an inline list mixing a non-table and a table named coverage", { skip: !HAVE_PY }, () => {
   // AC1: a top-level package list holding a table named exactly coverage, after a non-table entry
-  const lock = 'package = [1, {name = "coverage"}]' + LF;
+  const lock = 'package = [1, {name = "coverage", source = { registry = "https://pypi.org/simple" }}]' + LF;
   const { out, calls } = census({ lock, stubs: { uv: 0 } });
   assert.equal(out.matrix.python.coverage, UV_RUN);
   // AC1: the census runs no process

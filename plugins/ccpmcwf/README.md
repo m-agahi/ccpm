@@ -1086,7 +1086,8 @@ agent). It finds the repo's languages from marker files at its root (python, nod
 else other) and prints one row per language: `coverage` (a host tool found by `which()` on a
 PATH with no entry inside the repo: python `coverage`; node `jest`, `c8`, `nyc`; go `go`; rust
 `cargo-llvm-cov`; else `unsupported`; the python row has one tier before this: when the root `uv.lock`
-lists a `coverage` package and `uv` is on the cleaned PATH, it is `uv run --frozen coverage`; the
+lists a `coverage` package whose every entry comes from the PyPI registry
+(`source = { registry = "https://pypi.org/simple" }`) and `uv` is on the cleaned PATH, it is `uv run --frozen coverage`; the
 census reads the lock and never runs `uv`), `mutation` (`builtin` for python, the fleet's own
 mutator, which needs pytest; `unsupported` for the others) and `security` (`container` only when
 the pinned image is present, else `unsupported`). The security scan runs only in the audit-lab

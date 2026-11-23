@@ -103,7 +103,9 @@ def uv_coverage():
         if len(raw) > 16777216:
             return None
         pk = tomllib.loads(raw.decode('utf-8')).get('package')
-        ok = isinstance(pk, list) and any(isinstance(e, dict) and e.get('name') == 'coverage' for e in pk)
+        # PyPI only: every coverage entry must come from exactly { registry = "https://pypi.org/simple" }
+        cov = [e for e in pk if isinstance(e, dict) and e.get('name') == 'coverage'] if isinstance(pk, list) else []
+        ok = bool(cov) and all(e.get('source') == {'registry': 'https://pypi.org/simple'} for e in cov)
         return 'uv run --frozen coverage' if ok else None
     except Exception:
         return None

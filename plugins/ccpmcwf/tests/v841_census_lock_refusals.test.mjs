@@ -1,7 +1,7 @@
 // ccpmcwf 8.4.1 (yaadgaar #106), AC3: gate_tools.py refuses an unsafe or non-matching uv.lock and
 // falls through to the PATH tier. Every case: exit 0, no traceback, no hang, and the python
 // coverage value is 'coverage' (a coverage stub is on the stub dir) or 'unsupported' (none is),
-// never the uv string. These are guards: the shipped code never reads uv.lock.
+// never the uv string. The census reads uv.lock as data and never runs it; these cases must fall through.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +14,10 @@ const PROG = join(HERE, "..", "scripts", "gate_tools.py");
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
 const IMG = "openfantasy/audit-lab@sha256:" + "ab".repeat(32);
 const LF = String.fromCharCode(10);
-const COV = "[[package]]" + LF + 'name = "coverage"' + LF;
+// COV is a lock the census would credit (PyPI source), so each guard below is what refuses it
+const PYPI = 'source = { registry = "https://pypi.org/simple" }' + LF;
+const COV_NAME = "[[package]]" + LF + 'name = "coverage"' + LF;
+const COV = COV_NAME + PYPI;
 const UVSTR = "uv run --frozen coverage";
 const skip = !HAVE_PY;
 
@@ -199,4 +202,45 @@ test("AC3: FIFO uv.lock that already holds coverage data is refused", { skip }, 
   for (const fd of fds2) closeSync(fd);
   assert.equal(res2.r.signal, null, "process exited before the timeout");
   expectCov(res2, "unsupported");
+});
+
+// S1 (PR #106 review, Max 2026-11-23: PyPI only): a coverage entry counts only when its source is
+// exactly { registry = "https://pypi.org/simple" }. Any other source falls through; with no
+// coverage on PATH the row is unsupported, as on base 7392bd1.
+const SOURCES = {
+  directory: 'source = { directory = "vendor/coverage" }',
+  editable: 'source = { editable = "." }',
+  path: 'source = { path = "wheels/coverage-0.0.1-py3-none-any.whl" }',
+  git: 'source = { git = "https://example.invalid/evil/coverage?rev=main#0123456789abcdef0123456789abcdef01234567" }',
+  url: 'source = { url = "https://example.invalid/coverage-0.0.1.tar.gz" }',
+  virtual: 'source = { virtual = "." }',
+  "other registry": 'source = { registry = "https://evil.example/simple" }',
+  "registry with a trailing slash": 'source = { registry = "https://pypi.org/simple/" }',
+  "registry plus an extra key": 'source = { registry = "https://pypi.org/simple", path = "x" }',
+  "source not a table": 'source = "https://pypi.org/simple"',
+  "missing source": "",
+};
+for (const [kind, src] of Object.entries(SOURCES)) {
+  test("S1: a coverage entry with " + kind + " is not credited", { skip }, () => {
+    // S1: no coverage stub, so a refused entry gives unsupported
+    expectCov(run(lock(COV_NAME + 'version = "0.0.1"' + LF + src + LF), { noCov: true }), "unsupported");
+    // S1: with a coverage stub on PATH the PATH tier is used
+    expectCov(run(lock(COV_NAME + 'version = "0.0.1"' + LF + src + LF)), "coverage");
+  });
+}
+
+test("S1: one PyPI and one non-PyPI coverage entry is not credited", { skip }, () => {
+  const two = COV_NAME + 'version = "7.15.0"' + LF + PYPI + LF + COV_NAME + 'version = "0.0.1"' + LF + 'source = { directory = "vendor/coverage" }' + LF;
+  expectCov(run(lock(two), { noCov: true }), "unsupported");
+  // S1: triangulation, the non-PyPI entry first
+  const two2 = COV_NAME + 'version = "0.0.1"' + LF + 'source = { editable = "." }' + LF + LF + COV_NAME + 'version = "7.15.0"' + LF + PYPI;
+  expectCov(run(lock(two2), { noCov: true }), "unsupported");
+});
+
+test("S1: a coverage entry from the PyPI registry is credited", { skip }, () => {
+  // S1: the form uv writes (checked against a real uv.lock)
+  const res = run(lock(COV_NAME + 'version = "7.15.0"' + LF + PYPI), { noCov: true });
+  assert.equal(res.r.status, 0, res.r.stderr);
+  assert.equal(res.out.matrix.python.coverage, UVSTR);
+  assert.equal(res.calls, "", "no stub ran");
 });
