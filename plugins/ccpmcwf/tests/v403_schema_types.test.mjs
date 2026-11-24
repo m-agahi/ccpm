@@ -1078,6 +1078,7 @@ const READS = {
     "input.fresh_preflight boolean": PARSED_ARGS,
     "input.date string": PARSED_ARGS,
     "input.date string-re": PARSED_ARGS,
+    "ck.run string-re": PARSED_ARGS,
     "input.run_nonce string": PARSED_ARGS,
     "input.run_nonce string-re": PARSED_ARGS,
     "input.freeze_digest string": PARSED_ARGS,

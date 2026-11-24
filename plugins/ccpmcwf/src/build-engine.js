@@ -5977,7 +5977,7 @@ async function planAndAudit(ctx0) {
   const aEnv = dbInputs("audit");
   await pathRecheck("plan-audit" + sfx, "Plan");
   if (rs && dc.plan_sha256 !== rs.sha) halt("needs_human", fmtLabel + ": the resumed plan doc hashes " + dc.plan_sha256 + ", audited " + rs.sha, "scope");
-  if (!rs) state.audits = (state.audits || 0) + 1;
+  state.audits = (state.audits || 0) + 1;
   const audit = rs ? { verdict: "approve" } : requireOk(
     "plan-audit",
     await callRole(
@@ -6081,7 +6081,7 @@ async function commitPlanAndRef(ctx) {
   // + 2: the PATH re-check before the commit and the verify step; + the first-round chunk writers
   // (6.3.4, 2176: their count depends on the message's length, which holds it; rewrite rounds are not counted)
   const sealAt = (writers) => {
-    const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
+    const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) }, ctx.from && { resumed_from: ctx.from });
     return makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase, heldOut }));
   };
   let writers = 1;
@@ -6860,6 +6860,7 @@ async function planMode(input, date) {
       expectHead: scan.head,
       auditedSha: p.auditedSha,
       held: ck ? ck.held : undefined,
+      from: ck ? ck.run : undefined,
       retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       // 8.0.0 (G3): the planner's top-level held-out list, for the store only
       heldOut: p[HELD_OUT_KEY] || [],
@@ -9952,6 +9953,10 @@ async function main(input) {
   // the caller-held digest of a freeze, for a frozen resume
   if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
     stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
+  // 8.5.6: the caller-held name of a parked plan checkpoint
+  const ck = input.checkpoint;
+  if (ck !== undefined && (mode !== "plan" || !ck || !NONCE_RE.test(ck.run) || !/^[0-9a-f]{64}$/.test(ck.sha256)))
+    stop("needs_human", "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify(ck));
   // the run's test database goes, whatever the result
   try {
     return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));

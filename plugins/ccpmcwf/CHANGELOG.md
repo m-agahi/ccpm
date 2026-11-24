@@ -28,6 +28,9 @@ ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again 
   planner and plan-audit do not run. A formatted doc with another sha256 stops at gate `scope`.
   Any other mismatch logs `checkpoint of run <run> not used (<why>): full plan`. A relaxed
   audited plan stays relaxed. The park is consumed once (moved to `parked/used` at the commit).
+  The resumed seal's history counts the audit (`audits` 1) and names the run (`resumed_from`).
+  `args.checkpoint` must be `{run, sha256}` (the run-nonce shape, 64 hex) and only in plan mode;
+  anything else stops `needs_human`, as a malformed `freeze_digest` does.
 - Round carry (P3). The park holds the round count and the last findings fingerprint. A re-run
   of the same task source continues the round count, and a first round whose findings repeat the
   parked fingerprint stops at once ("no progress") with options. A changed task source starts at
@@ -52,7 +55,9 @@ ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again 
   fallbacks; the hook gate, the command allowlist and the sweep fire on a resumed plan; P3 carry and
   reset; the budget stops and resumes in plan and build mode; the policy override; `parked.py unpark`
   and `policy.py` `run_budget` on the shipped programs; no checkpoint after the plan commit took the
-  doc; a whitespace-only body difference still resumes). Updated:
+  doc; a whitespace-only body difference still resumes; a checkpoint edited in scratch with the
+  original `args.checkpoint`, or a changed draft file, is refused; a malformed or build-mode
+  `args.checkpoint` stops; the resumed seal's history). Updated:
   `v801_run_lock` (a post-audit stop now writes the held-out store for its checkpoint; no chunk
   writer or commit runs), `v402_file_sha`, `v403_schema_types`, `v5010_prompt_snapshot` (the policy
   schema moves the three plan/build pins), `v740_readme` (30 gates), the version pins.

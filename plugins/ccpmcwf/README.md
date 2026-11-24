@@ -1040,7 +1040,10 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
   Only the planner and plan-audit do not run; a doc that formats to another sha256 than the
   audited one stops at gate `scope`. Anything else logs "checkpoint of run <run> not used (<why>):
   full plan" and runs today's path. A park is used once: the plan commit moves it to
-  `parked/used`. A relaxed audited plan stays relaxed (its prior round is in the checkpoint).
+  `parked/used`. A relaxed audited plan stays relaxed (its prior round is in the checkpoint). The
+  resumed seal's history counts the audit (`audits` 1) and names the run (`resumed_from`).
+  `args.checkpoint` must be `{run, sha256}` (the run-nonce shape, 64 hex) and only in plan mode;
+  anything else stops `needs_human`.
 - Round carry (P3). The park also holds the round count and the last findings fingerprint. A
   re-run of the same task source continues the count (it does not reset to 0), and a first round
   whose findings repeat the parked ones stops at once with options. A changed task source starts
