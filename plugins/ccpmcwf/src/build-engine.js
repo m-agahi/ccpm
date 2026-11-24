@@ -4909,13 +4909,14 @@ function confusableFindings(criteria) {
 }
 
 // testCmd: the plan's test_cmd
+const CRIT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 // out (plan mode, 8.5.5): the id and overlap problems go there as findings; a sealed ref halts
 function normCriteria(raw, testCmd, out) {
   const seen = {};
   const bad = (m) => (out ? out.push({ criterion: null, finding: m }) : halt("needs_human", m));
   const criteria = raw.map((c) => {
     const id = String((c && c.id) || "");
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(id)) bad("criterion id not usable in a branch name: " + JSON.stringify(id));
+    if (!CRIT_ID_RE.test(id)) bad("criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) bad("duplicate criterion id " + id);
     seen[id] = true;
     const ta = criterionTestArgsProblem(testCmd, c);
@@ -5724,7 +5725,8 @@ function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate,
   noteRound(r, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
   const syms = Array.from(new Set(human.map((f) => f.symbol).filter(Boolean)));
-  const named = Array.from(new Set(findings.map((f) => f.symbol || f.criterion).filter((x) => typeof x === "string"))).slice(0, 5);
+  // PR #110 review M3: only identifier-shaped names (a plan-audit finding is LLM text)
+  const named = Array.from(new Set(findings.map((f) => f.symbol || f.criterion).filter((x) => typeof x === "string" && (SYMBOL_RE.test(x) || CRIT_ID_RE.test(x))))).slice(0, 5);
   state.options = [
     human.length ? "edit the task so the plan does not change " + (syms.join(", ") || "what the findings name") + " (narrower names or a smaller scope), then run plan again" : "edit the task text to settle these findings" + (named.length ? " (" + named.join(", ") + ")" : "") + ", then run plan again",
     "make the change outside the fleet, as a direct reviewed PR",
@@ -5775,7 +5777,9 @@ async function planAndAudit(ctx0) {
   const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
   if (factsProblem) dr(factsProblem.msg.replace(/^role scope-and-plan contract drift: /, ""));
   const planPath = normPath(plan.plan_path);
-  if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path) dr("planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
+  // PR #110 review M1: a draft at another path cannot be recovered by a re-plan round
+  if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
+    halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
   if (!Array.isArray(plan.changed_symbols)) dr("changed_symbols must be an array");
   const prior = ctx.priorRound || null;
   if (prior) {
@@ -5787,9 +5791,15 @@ async function planAndAudit(ctx0) {
     for (const x of rx) if (!ws.some((w) => w.gate === "re-plan-relaxed" && w.reason === x)) ws.push({ gate: "re-plan-relaxed", criterion: (/^criterion (\S+) /.exec(x) || [])[1] || null, round: ctx.auditRound || 0, reason: x });
     ctx = Object.assign({}, ctx, { relaxed: rx });
   }
-  if (drift.length) return planFindingsStop(ctx, ctx.brief.plan_path || planPath, "role scope-and-plan contract drift", drift, plan.changed_symbols, plan, "contract");
-  const tcProblem = testCmdProblem(plan.test_cmd);
-  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
+  // PR #110 review B1: the command allowlists halt before any re-plan return, in every round
+  const tc0 = plan.test_cmd && typeof plan.test_cmd === "object" && typeof plan.test_cmd.command === "string" && plan.test_cmd.command.trim() ? plan.test_cmd : null;
+  const tcProblem = tc0 ? testCmdProblem(tc0) : null;
+  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(tc0.command), "commands");
+  for (const c of plan.criteria) {
+    const ta = criterionTestArgsProblem(tc0, c);
+    if (ta) halt("needs_human", "criterion " + String((c && c.id) || "") + " " + ta, "commands");
+  }
+  if (drift.length) return planFindingsStop(ctx, planPath, "role scope-and-plan contract drift", drift, plan.changed_symbols, plan, "contract");
   const obligations = await screenCheckCmds(plan.repo_obligations, ctx.common.worktree, "Plan", sfx);
   const critF = [];
   const criteria = normCriteria(plan.criteria, plan.test_cmd, critF);
@@ -5859,7 +5869,11 @@ async function planAndAudit(ctx0) {
     [{ name: "plan_dsn", args: [ctx.common.worktree, planPath], retry: true }, { name: "hook_surface", args: [ctx.common.worktree, "HEAD", JSON.stringify(planT)], retry: true }, { name: "ruleset_surface", args: ghA, retry: true }, { name: "pr_convention", args: ghA, retry: true }],
     "Plan",
   );
-  // 8.5.5 (#108 step 2): the DSN check on the planner's draft, before the caller and format agents (the post-format check stays)
+  const planHs = await hookSurface(surfL + " hook_surface", ctx.common.worktree, "HEAD", planT, "Plan", planGot);
+  const planRs = await rulesetSurface(surfL + " ruleset_surface", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan", planGot);
+  ctx.planRs = planRs;
+  hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
+  // 8.5.5 (#108 step 2): the DSN check on the planner's draft, after the hooks stop and before the caller and format agents (the post-format check stays)
   const ed = planGot("plan_dsn");
   requireProgram(ed, "plan_dsn", surfL);
   if (typeof ed.holds !== "boolean" || !Array.isArray(ed.lines) || !relayDigestOk(ed, progKeys("plan_dsn"), "plan_dsn") || canonical(ed.args) !== canonical([ctx.common.worktree, planPath]))
@@ -5868,10 +5882,6 @@ async function planAndAudit(ctx0) {
     planGot.settle();
     return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, ed.lines) }], plan.changed_symbols, plan, "db");
   }
-  const planHs = await hookSurface(surfL + " hook_surface", ctx.common.worktree, "HEAD", planT, "Plan", planGot);
-  const planRs = await rulesetSurface(surfL + " ruleset_surface", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan", planGot);
-  ctx.planRs = planRs;
-  hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
   // 7.4.0 (#39): with no package.json script at the worktree root npm walks up to the main checkout's
   // (npm_config_prefix and npm_config_local_prefix do not stop it; only --prefix does)
   // 8.0.0 (#62 B2): a walk-up stop skips the convention slot; a not-ok status no slot explains halts first

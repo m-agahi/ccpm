@@ -8,12 +8,15 @@ ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-finding
 
 - The planner-contract problems that the script's own checks find after the role schema are re-plan
   findings (`planFindingsStop`, inside `MAX_AUDIT_ROUNDS`), at stop gate `contract`: an empty `plan_diff`
-  or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations` entry, a
-  plan path other than the ingested plan's, and `changed_symbols` not an array. A wrong JSON type or a
+  or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations` entry,
+  and `changed_symbols` not an array. A wrong JSON type or a
   missing key is role-schema drift as before (one planner retry, then a stop). In plan mode a bad criterion id, a duplicate id
   and overlapping `test_files` are re-plan findings too (`criteria refused`). Build mode (a sealed ref)
   still halts on them. Still a halt at once: the `test_cmd` and criterion `test_args` allowlists (gate
-  `commands`), a missing `plan_path` or `criteria`, and an unusable `plan_path`.
+  `commands`), a missing `plan_path` or `criteria`, an unusable `plan_path`, and a plan path other than
+  the ingested plan's (a draft at another path stays in the worktree, so a re-plan round cannot recover).
+  The two allowlists run before any re-plan return, so a refused command halts at gate `commands` in
+  every round, also when the same round has a re-plan finding.
 - `human_only`: a finding that needs a human is tagged in script code at its producer. One producer has
   the tag: the caller check's "too common a name to check by grep" (more than 100 call-shaped hits). A
   `human_only` finding stops at once, with no re-plan round. The plan-audit findings come from an LLM;
@@ -26,18 +29,21 @@ ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-finding
   prior from an earlier run (later steps of `#108`).
 - Every plan-findings stop now has a stop gate (`plan` unless the site names one: `contract`, `audit`,
   `db`, `intent`) and an `options` list in the result: 2-3 choices the script writes. The build-task
-  skill shows them as numbered choices.
+  skill shows them as numbered choices. The first option names at most 5 findings by symbol or criterion
+  id; a name that is not identifier-shaped (a plan-audit finding is LLM text) is left out.
 - Plan mode stops before the planner when push access is a definite no (gate `push`); an unknown answer
   still goes on (ADR-1201). Before 8.5.5 plan mode only warned and the build stopped at its start.
-- The plan surfaces step runs `plan_dsn` on the planner's draft first, and the step, the hook gate and the
-  secret-like path check now run before the caller check. A DSN in the draft is a re-plan finding before
-  any caller or format agent runs. The post-format `plan_dsn` check stays: it hashes the bytes the audit
+- The plan surfaces step runs `plan_dsn` on the planner's draft, and the step, the hook gate and the
+  secret-like path check now run before the caller check. The hook gate stops first; then a DSN in the
+  draft is a re-plan finding, before any caller or format agent runs. The post-format `plan_dsn` check stays: it hashes the bytes the audit
   reads and the plan commit holds.
 - Stop gates `plan`, `push` and `refs` (29 names). `push`: no push access (plan mode, the push probe,
   build start, the PR step, the test-block step). `refs`: a refs/replace ref exists (hasher, verify).
   Still on `role`: the PR-body phrase overflow and the pr-opener mismatches. Still on `hash`: hook config
   differs from HEAD, an augmentation original touched.
-- Tests: `v855_judgment_routing`. Updated pins: `build_task_run` (each contract-drift shape pinned to its
+- Tests: `v855_judgment_routing` (also: a re-plan finding plus a refused `test_cmd` or `test_args` halts
+  at gate `commands` in round 0; the plan-path mismatch halts at once; the DSN check reads after the hook
+  gate; options drop names that are not identifier-shaped). Updated pins: `build_task_run` (each contract-drift shape pinned to its
   path: role-schema retry or re-plan round with the no-progress stop, the confusable and plan-audit round stops after round 1, the version, ARRAY_SITES), `v4_s4`
   (changing caller findings take 2 rounds, identical ones 1; the pre-round park uses a refused
   `test_cmd`), `v503_dsn_precheck` (the repeated DSN stops after round 1, gate `db`), `v508_gh_identity`

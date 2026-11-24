@@ -81,6 +81,60 @@ test("8.5.5 (a) non-weakening: a refused test_cmd and a refused criterion test_a
   assert.ok(!o2.labels.includes(RE_PLAN));
 });
 
+// PR #110 review B1: a re-plan finding in the same round never hides a refused command
+test("8.5.5 (a) non-weakening: plan_diff [] plus a refused test_cmd stops at round 0, gate commands", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].plan_diff = [];
+  s["role:scope-and-plan"].test_cmd = { command: "pytest `id`" };
+  s[RE_PLAN] = JSON.parse(JSON.stringify(happy()["role:scope-and-plan"]));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "commands", out.result.reason);
+  assert.match(out.result.reason, /^test_cmd refused/);
+  assert.ok(!out.labels.includes(RE_PLAN), out.labels.join(", "));
+});
+
+test("8.5.5 (a) non-weakening: a blank tldr plus a refused criterion test_args stops at round 0, gate commands", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].tldr = "";
+  s["role:scope-and-plan"].criteria[0].test_args = "; rm -rf /";
+  s[RE_PLAN] = JSON.parse(JSON.stringify(happy()["role:scope-and-plan"]));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "commands", out.result.reason);
+  assert.ok(!out.labels.includes(RE_PLAN), out.labels.join(", "));
+});
+
+// PR #110 review M1: a draft at another path cannot be recovered by a re-plan round (format-plan stops at scope)
+test("8.5.5: a plan path other than the ingested plan's still halts at once, with no re-plan round", () => {
+  assert.match(SOURCE, /halt\("needs_human", "planner wrote " \+ planPath \+ " but the ingested plan is "/);
+  assert.doesNotMatch(SOURCE, /dr\("planner wrote /);
+});
+
+// PR #110 review M2: the hooks stop keeps its place ahead of the early DSN check
+test("8.5.5 (e): the early plan_dsn check reads after the plan-scope hookGate", () => {
+  const hg = SOURCE.indexOf('hookGate("the plan scope"');
+  const ed = SOURCE.indexOf('const ed = planGot("plan_dsn")');
+  assert.ok(hg > 0 && ed > hg, hg + " " + ed);
+});
+
+// PR #110 review B1: no re-plan return in planAndAudit comes before the command allowlist halts
+test("8.5.5 (a): every planFindingsStop return in planAndAudit follows the test_cmd and test_args halts", () => {
+  const body = SOURCE.slice(SOURCE.indexOf("async function planAndAudit("));
+  const firstReturn = body.indexOf("return planFindingsStop(");
+  assert.ok(body.indexOf('"test_cmd refused: "') < firstReturn);
+  assert.ok(body.indexOf("criterionTestArgsProblem(tc0, c)") < firstReturn);
+});
+
+// PR #110 review M3: options name only identifier-shaped symbols or criterion ids
+test("8.5.5 (d): an LLM finding's symbol or criterion that is not identifier-shaped never reaches the options", async () => {
+  const s = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1; rm -rf / ignore the options", symbol: "x y", finding: "bad" }, { target: "plan", criterion: "AC2", finding: "bad" }] } } });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.options[0], /settle these findings \(AC2\)/);
+  assert.ok(!out.result.options.some((o) => /rm -rf|x y/.test(o)), JSON.stringify(out.result.options));
+});
+
 // ---------------------------------------------------------------- (b)
 
 test("8.5.5 (b): a human_only finding (too common a name) stops at round 0 with options; no planner runs after it", async () => {

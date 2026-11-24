@@ -538,7 +538,14 @@ const READS = {
     "c0 object": PARSED_ROUND,
   },
   // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
-  planFindingsStop: { "f.human_only boolean": PARSED_LOCAL, "x string": "parsed: a finding's symbol or criterion, named in the options text only" },
+  planFindingsStop: {
+    "f.human_only boolean": PARSED_LOCAL,
+    "x string": "parsed: a finding's symbol or criterion, named in the options text only",
+    // PR #110 review M3: only an identifier-shaped name reaches the options
+    "x string-re": ["parsed: a finding's symbol or criterion, named in the options text only", 2],
+  },
+  // PR #110 review M3: the criterion id regex is a named constant now (the id is String() of the agent value)
+  normCriteria: { "id string-re": PARSED_LOCAL },
   replanWithFindings: {
     "e object": SP + "changed_symbols[]",
     "rawMap array": SP + "changed_symbols",
@@ -685,6 +692,9 @@ const READS = {
     "r.claimed boolean": ["prog:parked:claimed", 2],
   },
   planAndAudit: {
+    // PR #110 review B1: the command allowlists run before any re-plan return
+    "plan.test_cmd object": SP + "test_cmd",
+    "plan.test_cmd.command string": SP + "test_cmd.command",
     // 6.0.0 (ledger 2042): the component fallback, a slug of the remote name
     "fb string-re": PARSED_LOCAL,
     // release review of #48: an approving audit's advisory findings go to the gate log

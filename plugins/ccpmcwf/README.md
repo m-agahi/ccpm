@@ -999,14 +999,17 @@ under `default` and `auto` ("parked prior unreadable (fail closed)").
 Since 8.5.5 (yaadgaar #108 step 2, ADR-1397) the script decides, at each site, whether a round can
 help. A planner-contract problem that the script's own checks find after the role schema (an empty
 `plan_diff` or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations`
-entry, a plan path other than the ingested plan's, `changed_symbols` not an array; in plan mode a bad or
+entry, `changed_symbols` not an array; in plan mode a bad or
 duplicate criterion id and overlapping `test_files`) is a re-plan finding. A wrong JSON type or a missing
 key is role-schema drift as before: one retry of the planner, then a stop. The `test_cmd` and `test_args`
-allowlists still stop at once (`commands`). A finding its script producer tags `human_only` (today: the
+allowlists still stop at once (`commands`), before any re-plan return, so a refused command stops in every
+round even when the same round has a re-plan finding. A plan path other than the ingested plan's also
+stops at once (the draft at the other path stays in the worktree). A finding its script producer tags `human_only` (today: the
 caller check's "too common a name to check by grep") stops at once. Each round logs `plan findings
 fingerprint round <n>: <hex>`; a round whose findings repeat the round before stops at once with "no
 progress (round n repeats round n-1)". Each of these stops has a stop gate (`plan` unless the site names
-`contract`, `audit`, `db` or `intent`) and an `options` list of 2-3 script-written choices.
+`contract`, `audit`, `db` or `intent`) and an `options` list of 2-3 script-written choices; the first
+names at most 5 findings by an identifier-shaped symbol or criterion id, and leaves any other name out.
 
 ### Push-access probe (4.0.0, ledger 1985)
 
@@ -1137,8 +1140,8 @@ reset the fleet branch past that commit before the next plan run, which does not
 earlier plan commits. Since 5.0.3, `infra:format-plan` runs `plan_dsn.py` on the plan doc first
 (the same test, any case, placeholders included): a hit is a re-plan finding before the audit,
 and with the re-plan rounds spent the run stops with `stop_gate: "db"` before any commit. Since
-8.5.5 `infra:surfaces:plan` also runs `plan_dsn.py` on the planner's draft, before the caller check
-and the format agent; the post-format check stays (it hashes the bytes the audit reads).
+8.5.5 `infra:surfaces:plan` also runs `plan_dsn.py` on the planner's draft; the script reads it after
+the hook gate and before the caller check and the format agent; the post-format check stays (it hashes the bytes the audit reads).
 Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
 `db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
 `stop_gate: "db"`.
