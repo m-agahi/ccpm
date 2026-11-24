@@ -1,5 +1,32 @@
 # Changelog
 
+## [8.5.7] - 2026-11-24
+
+ccpmcwf 8.5.7: the dist workflow shrinks from 519,132 B to 511,254 B (7,878 B freed) under the 520,000 B cap (ADR-1353), to make room for yaadgaar `#108` step 4. No behaviour change: each split string concatenates back to the same text, the v5010 prompt snapshots pass unchanged (no pin re-pinned, no prompt text shortened), the full suite passes, and no safety check's condition or order changed.
+
+### Changed
+
+- Prompt fragments built once (3,737 B): eleven more shared strings (`AS_WRITTEN`, `RECOMPUTES`,
+  `COPY_ALL`, `EXIT_STDERR`, `PRINTS_ONE`, `READ_ONLY_NO`, `ONE_CMD`, `NOT_DIGEST`, `RELAY_MISMATCH`,
+  `OTHER_ARGS`, `SAME_PLAN_REF`) join the 5.0.10 fragments; the text each prompt builds is the same.
+- Shared schema types (3,016 B): `STRS`, `BOOL` and `INT` move into the schemas section, and
+  `INT_OR_NULL`, `BOOL_OR_NULL`, `STRS_OR_NULL` and `STATUS_PROP` join them; the schemas and
+  `PROGRAM_OUT` use them, and seven inline copies of `PROGRAM_OUTPUT` use the constant. The JSON of
+  every schema is the same.
+- Trailing comments move to their own line (664 B): the build drops comment lines, not
+  comments after code.
+
+### Removed
+
+- `planRefEntryProblem` (461 B): no caller since 2.x (`2f17da3` dropped its last one).
+
+### Tests
+
+- `v403_schema_types`, `v502_relay_keys`, `build_task_run` (PATH re-check rig) and `v800_gate_tools`
+  (gate rig) load the moved and the new constants; the `planRefEntryProblem` row of the v403 READS
+  table goes with the function. `v4_s2` and `v740_role_text` match the source by the constant names
+  (`STRS`, `BOOL`) instead of the inline schema text.
+
 ## [8.5.6] - 2026-11-24
 
 ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again after a later stop, the re-plan round count survives a re-run, and a run has a budget of output tokens (yaadgaar `#108` step 3 + item 8, ADR-1397). Before 8.5.6 a re-run repeated the planner and the audit and reset the round count to 0.

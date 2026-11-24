@@ -29,7 +29,7 @@ function loadSchemas() {
   assert.ok(a >= 0 && b > a, "the constants and schemas section");
   const body =
     SOURCE.slice(a, b) +
-    ["STRS", "BOOL", "INT", "STR_LISTS"].map((n) => constBlock(n, ";\n")).join("") +
+    constBlock("STR_LISTS", ";\n") +
     constBlock("PROGRAM_OUT", "\n};") +
     constBlock("PATH_RECHECK_SCHEMA", "\n};");
   return new Function(
@@ -250,12 +250,6 @@ const READS = {
   canonical: { "v array": PARSED_LOCAL, "v object": PARSED_LOCAL },
   namesFor: { "raw string": PARSED_ARGS },
   planRefMetaProblem: { "e object": "prog:plan_ref:refs[]" },
-  planRefEntryProblem: {
-    "e object": "prog:plan_ref:refs[]",
-    "e.content string": "parsed: message text, checked against its sha256 here",
-    "e.sha256 string": "prog:plan_ref:refs[].sha256",
-    "e.sha256 string-re": "prog:plan_ref:refs[].sha256",
-  },
   relayDigestOk: {
     "r object": "parsed: any program relay (each slot is typed by PROGRAM_OUT, tested below)",
     "r.digest string": "parsed: every digest key is typed string in PROGRAM_OUT (tested below)",
@@ -1297,7 +1291,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.6\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.6\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.7\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.7\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

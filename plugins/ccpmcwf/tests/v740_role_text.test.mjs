@@ -52,7 +52,7 @@ test("7.4.0 #60: the sweep role has a plan mode; the planner may set touches_gat
   assert.match(sw, /no head copy/i);
   assert.match(sw, /criterion example/);
   assert.match(SP, /`touches_gate`/);
-  assert.match(SOURCE, /touches_gate: \{ type: "boolean" \}/);
+  assert.match(SOURCE, /touches_gate: BOOL\b/);
 });
 
 test("7.4.0 #61: the coder names a test conflict; pr-review can target the plan", () => {
