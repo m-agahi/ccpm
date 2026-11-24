@@ -996,7 +996,8 @@ stops with "(after 2 re-plan rounds)". A round that relaxed round 0 (`change_kin
 `bug_fix`, `new_behaviour` moved to false, a criterion dropped or shortened with no finding) never
 reaches the auto gates. Under `default` the run asks; under `auto` it stops `needs_human` after
 the plan commit. A run that stops before its plan commit parks its draft and findings; the next
-plan run gives them to the planner as inputs only. A parked read that is unusable fails closed
+plan run gives them to the planner as inputs only, except a checkpoint that `args.checkpoint` names
+(8.5.6, see "Plan checkpoint and run budget"). A parked read that is unusable fails closed
 under `default` and `auto` ("parked prior unreadable (fail closed)").
 
 Since 8.5.5 (yaadgaar #108 step 2, ADR-1397) the script decides, at each site, whether a round can
@@ -1016,11 +1017,17 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
 
 ### Plan checkpoint and run budget (8.5.6, yaadgaar #108 step 3 + item 8, ADR-1397)
 
-- Checkpoint. When plan-audit approves and a later plan step stops (a plan sweep agent that dies, stage-plan,
-  the plan commit, its verify, a budget stop; a plan-findings stop parks none), the park adds a checkpoint to the
+- Checkpoint. When plan-audit approves and a later plan step stops before the plan commit's program
+  commits (a plan sweep agent that dies, stage-plan, a commit step that stops before its program
+  commits, a budget stop; a plan-findings stop parks none), the park adds a checkpoint to the
   parked findings: the planner's raw plan (held-out examples stripped), the sha256 of the audited
   doc, its path, the round, the prior round, the findings fingerprint, base HEAD, a sha256 of the
-  task source (the input and each intake source's kind, ref and body), and `FLEET_VERSION`. The
+  task source (the input and each intake source's kind, ref and body, whitespace collapsed), and
+  `FLEET_VERSION`. A stop after the plan commit took the doc (for example in
+  `verify-plan-commit`) parks nothing, so it has no checkpoint: that stop already returns the
+  unverified `plan_ref`; a resume from it is open work (yaadgaar #108). The intake brief's source
+  bodies are an agent's copy: when two intake runs copy a body differently (other than whitespace),
+  the source hash differs and the run falls back to a full plan. The
   held-out examples go to their store (`held_out.py write`, as at the seal) and the checkpoint
   keeps only the store's sha256 and counts. The stop result carries `checkpoint: {run, sha256}`.
 - Resume. A plan run with `args.checkpoint` (that value, unchanged) uses the parked checkpoint only

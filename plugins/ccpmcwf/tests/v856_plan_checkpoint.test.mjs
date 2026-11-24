@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, BRIEF, PB, PC, HASHES_FLAT, H, SCRIPTS_SRC, happy, runOne, inputsOf, sha256, spawnSync, commitStub, PARK_WRITES, NONCE } from "./harness.mjs";
+import { ARGS, BRIEF, PB, PC, HASHES_FLAT, H, SCRIPTS_SRC, happy, runOne, inputsOf, sha256, spawnSync, commitStub, parkOut, PARK_WRITES, NONCE } from "./harness.mjs";
 
 const DRAFT = "# plan for thing\n\nthe audited draft\n";
 const DSHA = sha256(DRAFT);
@@ -348,4 +348,22 @@ test("8.5.6 policy.py: run_budget is an integer 10000-100000000 in a profile or 
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("8.5.6 P1 (known gap): a stop in verify-plan-commit, after the plan commit took the doc, parks no checkpoint", async () => {
+  const s = withDraft(happy());
+  s["infra:verify-plan-commit"] = { status: "failed", reason: "verify crashed" };
+  // the plan commit took the doc: parked.py park finds a clean worktree and moves nothing
+  s["infra:park-plan"] = (p) => parkOut(p, { target: null });
+  const out = await runOne(s, ARGS);
+  assert.notEqual(out.result.status, "awaiting_confirmation");
+  assert.ok(out.labels.includes("infra:commit-plan"));
+  assert.equal(out.result.checkpoint, undefined);
+});
+
+test("8.5.6 P1: the task source hash ignores whitespace-only differences in a source body (an intake relay copy)", async () => {
+  const { out, findings } = await stopAfterAudit();
+  const r = await resume(findings, { checkpoint: out.result.checkpoint }, (s) => (s.intake = Object.assign({}, s.intake, { brief: Object.assign({}, BRIEF, { sources: [Object.assign({}, BRIEF.sources[0], { body: "  task\n body \n" })] }) })));
+  assert.equal(r.result.status, "awaiting_confirmation", r.result.reason);
+  assert.deepEqual(planner(r), []);
 });

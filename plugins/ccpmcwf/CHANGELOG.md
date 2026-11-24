@@ -13,10 +13,13 @@ ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again 
   examples go to their store (`held_out.py write`), never to the park; the checkpoint keeps only
   the store's sha256 and counts, and a resumed seal uses them. The stop result carries
   `checkpoint: {run, sha256}`; the build-task skill passes it back on the re-run. A plan-findings
-  stop (including a plan sweep weakening verdict) parks no checkpoint.
+  stop (including a plan sweep weakening verdict) parks no checkpoint, and neither does a stop
+  after the plan commit took the doc (for example in `verify-plan-commit`; its `plan_ref` is
+  returned unverified as before; a resume from there is open work).
 - Resume. A plan run with `args.checkpoint` resumes only when the parked checkpoint hashes to that
   sha256 (the caller-held value is the trust anchor: the park sits in scratch), the task source
-  hash, base HEAD (the same commit; a base that moved by unrelated commits is not accepted) and
+  hash (source bodies with whitespace collapsed; the bodies are intake's copy, so a copy that differs
+  otherwise falls back to a full plan), base HEAD (the same commit; a base that moved by unrelated commits is not accepted) and
   `FLEET_VERSION` are the same, and the parked draft hashes to the audited sha256. Then
   `infra:unpark-plan` (new `parked.py unpark <worktree> <plan path> <scratch> <run> <sha256>`:
   clean worktree only, the bytes must hash to the sha256) copies the draft back, and every plan
@@ -48,7 +51,8 @@ ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again 
   the same parked plan in the harness, the two removed being the planner and plan-audit; fail-safe
   fallbacks; the hook gate, the command allowlist and the sweep fire on a resumed plan; P3 carry and
   reset; the budget stops and resumes in plan and build mode; the policy override; `parked.py unpark`
-  and `policy.py` `run_budget` on the shipped programs). Updated:
+  and `policy.py` `run_budget` on the shipped programs; no checkpoint after the plan commit took the
+  doc; a whitespace-only body difference still resumes). Updated:
   `v801_run_lock` (a post-audit stop now writes the held-out store for its checkpoint; no chunk
   writer or commit runs), `v402_file_sha`, `v403_schema_types`, `v5010_prompt_snapshot` (the policy
   schema moves the three plan/build pins), `v740_readme` (30 gates), the version pins.

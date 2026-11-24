@@ -6762,7 +6762,7 @@ async function planMode(input, date) {
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
   const parkedBad = !!(parked && parked.unreadable);
-  const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, x.body])]));
+  const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, String(x.body).replace(/\s+/g, " ").trim()])]));
   const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
   // P3: the parked round count and fingerprint go on only for the same task source
   const carry = ck || (parked && parked.src === src ? parked : null);

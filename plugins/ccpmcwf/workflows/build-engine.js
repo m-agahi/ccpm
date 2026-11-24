@@ -6035,7 +6035,7 @@ halt("needs_human", "branch " + lay.branch + " carries a plan commit of fleet 5.
 const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
 const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
 const parkedBad = !!(parked && parked.unreadable);
-const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, x.body])]));
+const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, String(x.body).replace(/\s+/g, " ").trim()])]));
 const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
 const carry = ck || (parked && parked.src === src ? parked : null);
 if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
