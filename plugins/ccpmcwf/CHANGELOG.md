@@ -2,16 +2,17 @@
 
 ## [8.8.0] - 2026-11-24
 
-ccpmcwf 8.8.0 (yaadgaar `#108` step 5, ADR-1397): a stop class on every stop site. The class is fixed in script code at each site; no agent grades it. No stop becomes a repair (step 6 adds `recover` and the skill re-run, keyed on the class). The dist grows from 471,307 B to 474,460 B (+3,153 B; cap 520,000 B, ADR-1353).
+ccpmcwf 8.8.0 (yaadgaar `#108` step 5, ADR-1397): a stop class on every stop site. The class is fixed in script code at each site; no agent grades it. No stop becomes a repair (step 6 adds `recover` and the skill re-run, keyed on the class). The dist grows from 471,307 B to 474,694 B (+3,387 B; cap 520,000 B, ADR-1353).
 
 ### Added
 
 - `halt(cls, status, msg, gate)`, `stop(cls, status, reason)` and `planFindingsStop(cls, ...)`
   take the class first: `"s"` safety, `"m"` mechanical, `"t"` transient, or a `J_<NAME>`
   judgment const that carries its 2-3 options (built in script code; symbols filtered by
-  `SYMBOL_RE`). An unknown code is safety. 341 sites: safety 309, judgment 29, transient 5,
-  mechanical 1 (a site with a condition counts in both of its classes), plus the two that pass
-  their caller's class on.
+  `SYMBOL_RE`). An unknown code is safety. 341 call sites: safety 310, judgment 29, transient 5
+  (a site with a condition counts in both of its classes), plus the two that pass their caller's
+  class on. No call site is mechanical: the hasher relay-cap stop stays safety (paging it needs a
+  `hasher.py` change, and a re-run would overflow again).
 - The result carries `stop_class` next to `stop_gate` (null on `ok` and `awaiting_confirmation`).
   The direct stops set it too: an auto-confirm check failure (safety), `resume_with: "build"`
   (mechanical) and the no-args return (safety).

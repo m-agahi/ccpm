@@ -177,6 +177,9 @@ const SAFETY = {
   "push access": /"no push access to origin for "/,
   "agent cap": /"agent cap " \+ MAX_AGENTS/,
   "budget": /"run budget: " \+ n/,
+  "secret paths": /"scope check failed: " \+ early/,
+  "version": /RELOAD_HINT/,
+  "hasher relay cap": /the hasher output is over the 65536-byte relay cap/,
   "write-step null": /"test writer " \+ cid \+ " r" \+ n \+ " returned no result"/,
   "unattended header": /" section \(the unattended run's automatic decisions\)/,
   "truncated claims": /": the PR body holds more test-count phrases/,
@@ -201,7 +204,19 @@ test("8.8.0: docs/stop-classes.md lists every site in source order with its func
     assert.equal(r[4], classNames(s), "row " + (i + 1) + " (line " + s.line + ", " + s.fn + ")");
     assert.ok(r[6] && r[6].length > 5, "row " + (i + 1) + " has no reason");
   });
-  for (const c of CLASSES) assert.ok(rows.some((r) => r[4].split(" / ").includes(c)), "no " + c + " row");
+  // the stops that return without halt: [function, class, the source text that sets the class]
+  const DIRECT = [
+    ["autoFailResult", "safety", /function autoFailResult\([^)]*\) \{\n  state\.stopGate = g\.failedCheck;\n  state\.stopClass = "safety";/],
+    ["planMode", "mechanical", /state\.stopGate = "resume";\n(?:\s*\/\/[^\n]*\n)?\s*state\.stopClass = "mechanical";/],
+    ["(top)", "safety", /status: "needs_human",\n\s*stop_class: "safety",\n\s*reason:\n\s*"build-engine was started without args/],
+  ];
+  const drows = DOC.slice(DOC.indexOf("## Stops that return without halt")).split("\n").filter((l) => /^\|\s*`[^`]+`\s*\|/.test(l)).map((l) => l.split(/(?<!\\)\|/).map((x) => x.trim()));
+  assert.equal(drows.length, DIRECT.length, "the direct-stop table has " + drows.length + " rows");
+  DIRECT.forEach(([fn, cls, re], i) => {
+    assert.match(SOURCE, re, fn);
+    assert.deepEqual([drows[i][1], drows[i][3]], ["`" + fn + "`", cls]);
+  });
+  for (const c of CLASSES) assert.ok(rows.concat(drows.map((r) => ["", "", "", "", r[3]])).some((r) => r[4].split(" / ").includes(c)), "no " + c + " row");
 });
 
 // ---------------------------------------------------------------- 5: the result carries stop_class

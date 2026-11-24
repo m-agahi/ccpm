@@ -3443,6 +3443,7 @@ const O_REPLAN="edit the task text to settle this, then run plan again";
 const J_TASK=J(O_REPLAN,O_DIRECT,O_DROP);
 const J_SYMS=(s)=>J("edit the task so the plan does not change "+([].concat(s).filter((x)=>SYMBOL_RE.test(x)).slice(0,5).join(", ")||"these symbols")+" (narrower names or a smaller scope), then run plan again",O_DIRECT,O_DROP);
 const J_GATE=(g)=>J("run again with unattended: the "+g+" gate is then listed in gates_not_run","edit the task text so it does not require the "+g+" gate, then run plan again",O_DROP);
+const J_BUILD=(b)=>J("finish the change by hand on branch "+b+", then open the PR yourself","run plan again with the judge findings in the task text",O_DROP);
 const J_PR=J("fix the PR title or body by hand, then "+SAME_PLAN_REF,"close the PR, then "+SAME_PLAN_REF,O_DROP);
 const J_FIX=J("fix the findings on the PR by hand","run plan again with the findings in the task text",O_DROP);
 const J_BASE=J("run plan again on the new base","fix the PR by hand",O_DROP);
@@ -3727,7 +3728,7 @@ const mapsOk=
 const fp=r.fingerprint;
 if(r.status!=="ok"&&typeof r.reason==="string"&&r.reason.indexOf(RELAY_CAP_MARK)>=0){
 const m=/^FLEET_HASHER_RELAY_CAP: the hasher output is over the 65536-byte relay cap \(\d+ bytes; largest: ([a-z]+ \d+ keys(?:, [a-z]+ \d+ keys){0,2})\)$/.exec(r.reason.trim());
-halt("m","needs_human","hasher "+label+": the hasher output is over the 65536-byte relay cap"+(m?" (largest: "+m[1]+")":"")+"; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it","relay-size");
+halt("s","needs_human","hasher "+label+": the hasher output is over the 65536-byte relay cap"+(m?" (largest: "+m[1]+")":"")+"; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it","relay-size");
 }
 if(r.status!=="ok"||!fp||!fp.head||!fp.tree||!mapsOk||(baseTree&&!Array.isArray(r.changed)))
 halt("s","failed","hasher "+label+" failed: "+(r.reason||"incomplete output"));
@@ -7800,7 +7801,7 @@ const hf=hookFail;
 const whole=hf.failures.filter((x)=>x[0]==="").map((x)=>x[1]);
 const listed=hf.failures.map((x)=>(x[0]===""?"the whole tree":logPath(x[0]))+" ("+x[1]+")").join(", ");
 if(i===maxTestRounds-1)
-halt(J_TASK,"needs_human","infra:format-tests:r"+n+": pre_freeze_hooks still fail after "+maxTestRounds+" test round(s): "+listed+"; a test file is never frozen while a listed hook fails on it. First output: "+hf.head,"rounds");
+halt(J_BUILD(state.branch),"needs_human","infra:format-tests:r"+n+": pre_freeze_hooks still fail after "+maxTestRounds+" test round(s): "+listed+"; a test file is never frozen while a listed hook fails on it. First output: "+hf.head,"rounds");
 const next=[];
 for(const p of pending){
 const own=hf.failures.filter((x)=>x[0]!==""&&p.criterion.test_files.indexOf(x[0])>=0);
@@ -7868,7 +7869,7 @@ jt=await judged("fleet-test-judge",tl,"test-judge:r"+n+":again",Object.assign({}
 }
 gate("test-judge r"+n+": revise -> "+pending.map((p)=>p.criterion.id).join(", "));
 }
-halt(J_TASK,"needs_human","test rounds exhausted ("+maxTestRounds+") without test-judge approval","rounds");
+halt(J_BUILD(state.branch),"needs_human","test rounds exhausted ("+maxTestRounds+") without test-judge approval","rounds");
 }
 let freezes=0;
 let freezeRef=null;
@@ -7969,7 +7970,7 @@ const m0=state.rounds.code;
 try{
 for(;;){
 if(state.rounds.code>=MAX_CODE_ROUNDS)
-halt(updRound?J_BASE:J_TASK,
+halt(updRound?J_BASE:J_BUILD(state.branch),
 "needs_human",
 "code rounds exhausted ("+MAX_CODE_ROUNDS+") without code-judge approval"+
 (updRound?" in the code rounds after update-branch":"")+
@@ -8042,7 +8043,7 @@ requireOk("fleet-coder",coder);
 collect("fleet-coder",coder);
 if(coder.status==="ok")state.followUps=followUpsOf(coder);
 if(augAt&&augAt+1===m&&coder.status==="ok"&&coder.frozen_tests_red_at_start)
-halt(J_TASK,"needs_human","code round "+m+": the frozen tests are red at the start of the round after the augmentation round; its new tests must pass on the approved tree","gates");
+halt(J_BUILD(state.branch),"needs_human","code round "+m+": the frozen tests are red at the start of the round after the augmentation round; its new tests must pass on the approved tree","gates");
 last=h;
 if(coderDriftOk){
 lastRoundGate="contract";
@@ -8165,7 +8166,7 @@ const mutF=mutantsLeft(cj.mutant_rulings,m);
 const mutT=mutF.unruled?[]:mutF.filter((f)=>f.mutant);
 if(mutT.length){
 if(updRound||augAt)
-halt(updRound?J_BASE:J_TASK,
+halt(updRound?J_BASE:J_BUILD(state.branch),
 "needs_human",
 "code round "+m+": the code judge ruled surviving mutant(s) "+mutT.map((f)=>f.mutant.id).join(", ")+" target tests "+(updRound?"after update-branch":"after the augmentation round of this run")+"; one round per run",
 updRound?"review":"gates",

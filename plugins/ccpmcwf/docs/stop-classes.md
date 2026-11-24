@@ -5,12 +5,12 @@ script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No L
 changes a class at run time. The run result carries the class as `stop_class`, next to
 `stop_gate` (null on `ok` and `awaiting_confirmation`).
 
-| Code       | Class      | Meaning (ADR-1397)                                                                    |
-| ---------- | ---------- | ------------------------------------------------------------------------------------- |
-| `"s"`      | safety     | Always stops. Never repaired or re-run automatically.                                 |
-| `"m"`      | mechanical | A deterministic script repair exists in principle (record it with autoDecide, go on). |
-| `"t"`      | transient  | One retry is reasonable.                                                              |
-| `J_<NAME>` | judgment   | One bounded repair round, then needs_human with the 2-3 options the const carries.    |
+| Code       | Class      | Meaning (ADR-1397)                                                                                          |
+| ---------- | ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `"s"`      | safety     | Always stops. Never repaired or re-run automatically.                                                       |
+| `"m"`      | mechanical | A deterministic script repair with no judgment. No call site uses it in 8.8.0; `resume_with` is mechanical. |
+| `"t"`      | transient  | One retry is reasonable.                                                                                    |
+| `J_<NAME>` | judgment   | One bounded repair round, then needs_human with the 2-3 options the const carries.                          |
 
 Rules:
 
@@ -28,7 +28,8 @@ Rules:
 - `tests/v880_stop_class.test.mjs` fails when a site has no class, when this table does not list
   every site in source order with its function and class, or when a safety category is not safety.
 
-Counts (a two-class site counts in both): safety 309, judgment 29, transient 5, mechanical 1, per caller 2; 341 sites.
+Counts of the call sites (a two-class site counts in both): safety 310, judgment 29, transient 5, mechanical 0, per caller 2; 341 sites. The three stops that return without
+`halt` are listed after the table.
 
 | #   | Function           | Gate                                                      | Class              | Site                                                                                                           | Reason                                                                                                                                                 |
 | --- | ------------------ | --------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -73,7 +74,7 @@ Counts (a two-class site counts in both): safety 309, judgment 29, transient 5, 
 | 39  | `checkRole`        | role                                                      | safety             | roleStatusText(role, r) + " (also: " + drift + ")"                                                             | a role or step reported a stop, or its output is unusable; cause unknown                                                                               |
 | 40  | `checkRole`        | contract                                                  | safety             | drift                                                                                                          | a role, program or agent identity or contract mismatch                                                                                                 |
 | 41  | `requireOk`        | role                                                      | safety             | who + " returned " + r.status + ": " + (r.reason \|\| "no reason")                                             | a role or step reported a stop, or its output is unusable; cause unknown                                                                               |
-| 42  | `hasher`           | relay-size                                                | mechanical         | "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : | the hasher output is over the relay cap: paging the relay repairs it with no judgment (no repair is wired yet; step 6 must not re-run it blindly)      |
+| 42  | `hasher`           | relay-size                                                | safety             | "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : | the hasher view is unusable (hash rule)                                                                                                                |
 | 43  | `hasher`           | -                                                         | safety             | "hasher " + label + " failed: " + (r.reason \|\| "incomplete output")                                          | the hasher view is unusable (hash rule)                                                                                                                |
 | 44  | `hasher`           | -                                                         | safety             | "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed | the hasher view is unusable (hash rule)                                                                                                                |
 | 45  | `hasher`           | hash                                                      | safety             | "hasher " + label + ": " + sm                                                                                  | the hasher view is unusable (hash rule)                                                                                                                |
@@ -373,3 +374,13 @@ Counts (a two-class site counts in both): safety 309, judgment 29, transient 5, 
 | 339 | `main`             | (stop)                                                    | safety             | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust)                                                                                            |
 | 340 | `main`             | (stop)                                                    | safety             | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust)                                                                                            |
 | 341 | `main`             | (stop)                                                    | safety             | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust)                                                                                            |
+
+## Stops that return without halt
+
+These three stops return a result directly; each sets its class next to its stop gate.
+
+| Function         | Stop                                        | Class      | Reason                                                                              |
+| ---------------- | ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| `autoFailResult` | auto-confirm: a check failed                | safety     | an auto-confirm gate (intent, scope, commands, hooks) failed: Max confirms the plan |
+| `planMode`       | branch has build commits; resume_with build | mechanical | the skill runs build with the sealed plan_ref: a deterministic hop with no judgment |
+| `(top)`          | build-engine was started without args       | safety     | an argument check                                                                   |
