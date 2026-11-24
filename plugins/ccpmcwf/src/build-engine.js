@@ -5724,8 +5724,9 @@ function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate,
   noteRound(r, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
   const syms = Array.from(new Set(human.map((f) => f.symbol).filter(Boolean)));
+  const named = Array.from(new Set(findings.map((f) => f.symbol || f.criterion).filter((x) => typeof x === "string"))).slice(0, 5);
   state.options = [
-    human.length ? "edit the task so the plan does not change " + (syms.join(", ") || "what the findings name") + " (narrower names or a smaller scope), then run plan again" : "edit the task text to settle these findings, then run plan again",
+    human.length ? "edit the task so the plan does not change " + (syms.join(", ") || "what the findings name") + " (narrower names or a smaller scope), then run plan again" : "edit the task text to settle these findings" + (named.length ? " (" + named.join(", ") + ")" : "") + ", then run plan again",
     "make the change outside the fleet, as a direct reviewed PR",
     "drop the task",
   ];

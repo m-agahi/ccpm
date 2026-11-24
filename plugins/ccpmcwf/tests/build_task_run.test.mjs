@@ -1972,16 +1972,17 @@ test("plan_diff is forwarded to plan-audit as an array", async () => {
 });
 
 test("plan_diff that is not an array of strings is contract drift", async () => {
-  for (const bad of ["new", "new plan", [], [1], null]) {
+  // the generic type check (an array) fires first for non-arrays: one retry, then a stop. 8.5.5 (#108 step 2):
+  // the script's own check (an empty array, a non-string entry) is a re-plan round, then a no-progress stop
+  for (const [bad, replan] of [["new", false], ["new plan", false], [[], true], [[1], true], [null, false]]) {
     const s = happy();
     s["role:scope-and-plan"].plan_diff = bad;
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    // the generic type check (an array) fires first for non-arrays; 8.5.5 (#108 step 2): a script
-    // contract check is a re-plan round, then a no-progress stop (gate contract either way)
-    assert.match(out.result.reason, /contract drift: (no progress \(round 1 repeats round 0\): )?(scope-and-plan )?plan_diff/);
+    assert.match(out.result.reason, replan ? /^role scope-and-plan contract drift: no progress \(round 1 repeats round 0\): plan_diff must be a non-empty array of strings/ : /^contract drift: scope-and-plan plan_diff type/);
+    assert.equal(out.labels.includes("role:scope-and-plan:audit-fix"), replan, JSON.stringify(bad));
     assert.equal(out.result.stop_gate, "contract");
-    assert.ok(!out.labels.includes("role:plan-audit"));
+    assert.ok(!out.labels.some((l) => l.startsWith("role:plan-audit")));
   }
 });
 
@@ -3439,21 +3440,24 @@ test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", a
 });
 
 test("2.0.3 scope-and-plan: wrong types for repo_obligations or test_cmd are contract drift", async () => {
-  for (const [k, v, re] of [
-    ["repo_obligations", "[]", /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations type/],
-    ["test_cmd", "pytest", /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd type/],
-    ["test_cmd", { paths_placeholder: "<paths>" }, /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd\.command/],
-    ["test_cmd", { command: "  " }, /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd\.command/],
-    ["repo_obligations", [{ id: "OB1", kind: "bogus", instruction: "x" }], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
-    ["repo_obligations", [{ kind: "other", instruction: "x" }], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
-    ["repo_obligations", [OB_LOG, OB_LOG], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
+  // a wrong JSON type is role-schema drift (one retry, then a stop); 8.5.5 (#108 step 2): the script's own
+  // checks (planFactsProblem) are a re-plan round, then a no-progress stop; gate contract either way
+  const RP = "^role scope-and-plan contract drift: no progress \\(round 1 repeats round 0\\): scope-and-plan ";
+  for (const [k, v, re, replan] of [
+    ["repo_obligations", "[]", /^contract drift: scope-and-plan repo_obligations type/, false],
+    ["test_cmd", "pytest", /^contract drift: scope-and-plan test_cmd type/, false],
+    ["test_cmd", { paths_placeholder: "<paths>" }, new RegExp(RP + "test_cmd\\.command"), true],
+    ["test_cmd", { command: "  " }, new RegExp(RP + "test_cmd\\.command"), true],
+    ["repo_obligations", [{ id: "OB1", kind: "bogus", instruction: "x" }], new RegExp(RP + "repo_obligations: OB1 kind"), true],
+    ["repo_obligations", [{ kind: "other", instruction: "x" }], new RegExp(RP + "repo_obligations: an entry has no id"), true],
+    ["repo_obligations", [OB_LOG, OB_LOG], new RegExp(RP + "repo_obligations: duplicate id"), true],
   ]) {
-    // 8.5.5 (#108 step 2): a re-plan round first, then the no-progress stop at gate contract
     const s = happy();
     s["role:scope-and-plan"][k] = v;
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", k + " " + JSON.stringify(v));
     assert.match(out.result.reason, re);
+    assert.equal(out.labels.includes("role:scope-and-plan:audit-fix"), replan, k + " " + JSON.stringify(v));
     assert.equal(out.result.stop_gate, "contract");
   }
 });

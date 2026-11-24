@@ -6,9 +6,11 @@ ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-finding
 
 ### Changed
 
-- Planner-contract problems are re-plan findings (`planFindingsStop`, inside `MAX_AUDIT_ROUNDS`), at stop
-  gate `contract`: `plan_diff`, `tldr`, the `test_cmd`/`repo_obligations` types, a plan path other than
-  the ingested plan's, and `changed_symbols` not an array. In plan mode a bad criterion id, a duplicate id
+- The planner-contract problems that the script's own checks find after the role schema are re-plan
+  findings (`planFindingsStop`, inside `MAX_AUDIT_ROUNDS`), at stop gate `contract`: an empty `plan_diff`
+  or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations` entry, a
+  plan path other than the ingested plan's, and `changed_symbols` not an array. A wrong JSON type or a
+  missing key is role-schema drift as before (one planner retry, then a stop). In plan mode a bad criterion id, a duplicate id
   and overlapping `test_files` are re-plan findings too (`criteria refused`). Build mode (a sealed ref)
   still halts on them. Still a halt at once: the `test_cmd` and criterion `test_args` allowlists (gate
   `commands`), a missing `plan_path` or `criteria`, and an unusable `plan_path`.
@@ -19,7 +21,9 @@ ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-finding
 - Progress fingerprint: each plan-findings round logs `plan findings fingerprint round <n>: <hex>` (the
   stop reason, symbol or criterion, and the finding text, normalised and sorted). When a round's
   fingerprint equals the round before it, the run stops at once: "<reason>: no progress (round n repeats
-  round n-1)". The plan-audit refusal goes through the same function.
+  round n-1)". The plan-audit refusal goes through the same function. The fingerprint covers the plan
+  rounds of one run only: not the test and code rounds, the build-mode `plan_wrong` re-plan, or a parked
+  prior from an earlier run (later steps of `#108`).
 - Every plan-findings stop now has a stop gate (`plan` unless the site names one: `contract`, `audit`,
   `db`, `intent`) and an `options` list in the result: 2-3 choices the script writes. The build-task
   skill shows them as numbered choices.
@@ -33,8 +37,8 @@ ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-finding
   build start, the PR step, the test-block step). `refs`: a refs/replace ref exists (hasher, verify).
   Still on `role`: the PR-body phrase overflow and the pr-opener mismatches. Still on `hash`: hook config
   differs from HEAD, an augmentation original touched.
-- Tests: `v855_judgment_routing`. Updated pins: `build_task_run` (contract-drift texts gain the no-progress
-  form, the confusable and plan-audit round stops after round 1, the version, ARRAY_SITES), `v4_s4`
+- Tests: `v855_judgment_routing`. Updated pins: `build_task_run` (each contract-drift shape pinned to its
+  path: role-schema retry or re-plan round with the no-progress stop, the confusable and plan-audit round stops after round 1, the version, ARRAY_SITES), `v4_s4`
   (changing caller findings take 2 rounds, identical ones 1; the pre-round park uses a refused
   `test_cmd`), `v503_dsn_precheck` (the repeated DSN stops after round 1, gate `db`), `v508_gh_identity`
   and `v600_s1` (no push stops plan mode; gate `push`), `v600_s2`, `v622_fixes`, `v630_unattended` (gate

@@ -997,9 +997,11 @@ plan run gives them to the planner as inputs only. A parked read that is unusabl
 under `default` and `auto` ("parked prior unreadable (fail closed)").
 
 Since 8.5.5 (yaadgaar #108 step 2, ADR-1397) the script decides, at each site, whether a round can
-help. A planner-contract problem (`plan_diff`, `tldr`, the `test_cmd` and `repo_obligations` types, a
-plan path other than the ingested plan's, `changed_symbols` not an array; in plan mode a bad or duplicate
-criterion id and overlapping `test_files`) is a re-plan finding; the `test_cmd` and `test_args`
+help. A planner-contract problem that the script's own checks find after the role schema (an empty
+`plan_diff` or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations`
+entry, a plan path other than the ingested plan's, `changed_symbols` not an array; in plan mode a bad or
+duplicate criterion id and overlapping `test_files`) is a re-plan finding. A wrong JSON type or a missing
+key is role-schema drift as before: one retry of the planner, then a stop. The `test_cmd` and `test_args`
 allowlists still stop at once (`commands`). A finding its script producer tags `human_only` (today: the
 caller check's "too common a name to check by grep") stops at once. Each round logs `plan findings
 fingerprint round <n>: <hex>`; a round whose findings repeat the round before stops at once with "no

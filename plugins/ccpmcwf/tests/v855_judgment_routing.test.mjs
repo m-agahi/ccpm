@@ -115,6 +115,8 @@ test("8.5.5 (c): identical findings in 2 rounds stop with no progress after roun
   assert.match(out.result.reason, /^plan-audit verdict plan_defect: no progress/);
   assert.ok(out.labels.includes(RE_PLAN) && !out.labels.includes(RE_PLAN_2), out.labels.join(", "));
   assert.ok(out.result.agents < OLD_AGENTS, String(out.result.agents));
+  assert.equal(out.result.agents, 24);
+  assert.match(out.result.options[0], /settle these findings \(AC1\)/);
   const f = fps(out);
   assert.equal(f.length, 2, out.result.gate_log.join("\n"));
   assert.equal(f[0].split(": ")[1], f[1].split(": ")[1]);

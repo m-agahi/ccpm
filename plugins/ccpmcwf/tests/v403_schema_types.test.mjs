@@ -538,7 +538,7 @@ const READS = {
     "c0 object": PARSED_ROUND,
   },
   // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
-  planFindingsStop: { "f.human_only boolean": PARSED_LOCAL },
+  planFindingsStop: { "f.human_only boolean": PARSED_LOCAL, "x string": "parsed: a finding's symbol or criterion, named in the options text only" },
   replanWithFindings: {
     "e object": SP + "changed_symbols[]",
     "rawMap array": SP + "changed_symbols",
