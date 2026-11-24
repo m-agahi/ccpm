@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.5.2";
+const FLEET_VERSION = "8.5.3";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -4682,7 +4682,7 @@ const live = part.filter((s) => r.capped.indexOf(s) < 0);
 const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
 const sumOf = (xs, k) => xs.reduce((a, s) => a + sm[s][k], 0);
 const unread = (xs, p) => {
-for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, auto_count: sm[s].auto_count, path_count: sm[s].path_count, file: r.file };
+for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, path_count: sm[s].path_count };
 };
 if (disk.pathLevel) {
 const P = {};
@@ -4719,8 +4719,6 @@ all.auto_dont_care[s] = [];
 }
 if (autoSet.length) {
 const got = await callerReadParts(lb, r.file, "auto", autoSet, sumOf(autoSet, "auto_count"), disk);
-if (!got) unread(autoSet, "auto");
-else
 for (const s of autoSet) {
 const A = got[s] || [];
 if (A.length !== sm[s].auto_count) halt("failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
@@ -4756,11 +4754,11 @@ return [];
 async function callerReadParts(lb, file, part, syms, total, disk) {
 const sorted = syms.slice().sort(codePointCompare);
 const pages = Math.max(1, Math.ceil(total / CALLER_PAGE));
-if (pages > disk.left) {
+if (part === "auto") gate(lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) take " + pages + " read(s) outside the caller read budget");
+else if (pages > disk.left) {
 gate(lb + ": the " + part + " lists of " + sorted.join(", ") + " need " + pages + " read(s); " + disk.left + " of the caller read budget (" + CALLER_READ_BUDGET + ") left; not read");
 return null;
-}
-disk.left -= pages;
+} else disk.left -= pages;
 const sj = JSON.stringify(sorted);
 const out = {};
 for (let k = 0; k < pages; k++) {
@@ -4819,10 +4817,7 @@ if (un) {
 findings.push({
 criterion: null,
 symbol: s.symbol,
-finding:
-un.part === "auto"
-? s.symbol + ": " + un.auto_count + " doc or lock hit(s) left to auto dont_care are over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map them in changed_symbols (dont_care with a reason); the hit list is in " + logPath(un.file)
-: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
+finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
 });
 continue;
 }
