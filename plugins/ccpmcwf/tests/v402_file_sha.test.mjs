@@ -49,6 +49,7 @@ const SAMPLES = [
   // 7.3.0 (#9)
   "infra:purge-bytecode:code-r1",
   "infra:park-plan",
+  "infra:unpark-plan",
   "infra:stage-plan",
   "infra:format-tests:r1",
   // 5.0.3 (ledger 2010)

@@ -101,6 +101,8 @@ const INFRA_TIER = [
   ["infra:state-chunks", "sonnet"],
   ["infra:park-chunks", "sonnet"],
   ["infra:park-plan", "sonnet"],
+  // 8.5.6 (#108 step 3): the audited draft back into the worktree
+  ["infra:unpark-plan", "sonnet"],
   ["infra:format-", "sonnet"],
   ["infra:commit:", "sonnet"],
   ["infra:push", "sonnet"],
@@ -137,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.5.5";
+const FLEET_VERSION = "8.5.6";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -224,7 +226,7 @@ const CALLER_LIMITS = [
   "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs", "budget"];
 // 8.5.4 (#108): the one refusal for a plan_ref from fleet 2.1.3 or earlier (no 2.0.3 plan facts, no plan_diff, a ref_path)
 const LEGACY_REF = "plan_ref from an unsupported fleet version; re-run plan";
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
@@ -1733,14 +1735,14 @@ const PROGRAM_SHA256 = {
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
   "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "494e97658c92d03f229436aec1179f6d43cd7ea8ac69fabace0e3216cf88cdb3",
+  "parked": "f30a4a7cc8b4efe72bb564c5fe8d20aa0d605b9f49e2e424837fa85da610a6e1",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
   "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "283e77c031913136cc0ea9eeeea49db9d0897473dcc0e26721e638a8b2cb37a2",
   "plan_ref_write": "2b5b028ead902f1614cbff58e15c0e2bd07604ce3f4b6e606f8106676f4741a8",
-  "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
+  "policy": "cc6e2915dfb969338e46d0dc114c870739727db275e513d63b2c0e71c49dae43",
   "pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
   "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
   "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
@@ -1859,6 +1861,7 @@ const PROGRAM_SLOTS = [
   [/^infra:fleet-branch/, [[null, "fleet_branch"]]],
   [/^infra:run-lock/, [[null, "parked"]]],
   [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
+  [/^infra:unpark-plan$/, [[null, "parked"]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
   [/^infra:format-(tests|code):/, [[null, "format_files"]]],
   [/^infra:format-plan/, [["format", "format_files"], ["dsn_check", "plan_dsn"]]],
@@ -1935,6 +1938,8 @@ const PROGRAM_KEYS = {
   "parked:park": ["target", "clean", "dirty", "args"],
   // 7.3.0 (#9)
   "parked:retire": ["moved", "args"],
+  // 8.5.6 (#108 step 3)
+  "parked:unpark": ["sha256", "args"],
   // 8.0.1 (#76)
   "parked:claim": ["claimed", "again", "stale", "held_by", "lock", "args"],
   "parked:release": ["released", "absent", "held_by", "lock", "args"],
@@ -2158,7 +2163,7 @@ const PROGRAM_OUT = {
     profile: STR_OR_NULL,
     file: STR,
     policy_sha256: STR_OR_NULL,
-    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL } },
+    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL, run_budget: INT } },
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
     now: INT,
@@ -2864,6 +2869,8 @@ async function loadParked(scratch, tip) {
       out.unreadable = "findings of run " + k.run + " unparseable";
       gate("parked findings ignored (" + out.unreadable + ")");
     }
+    // 8.5.6 (#108 step 3): the round count, fingerprint and task source hash (P3), and the audited checkpoint (P1)
+    if (f && typeof f === "object") Object.assign(out, { round: Number.isInteger(f.round) && f.round > 0 ? Math.min(f.round, MAX_AUDIT_ROUNDS) : 0, fp: /^[0-9a-f]{16}$/.test(f.fp) ? f.fp : null, src: f.src, ckpt: typeof f.ckpt === "string" ? f.ckpt : null });
     const rounds = f && typeof f === "object" && Array.isArray(f.rounds) ? f.rounds.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : [];
     if (rounds.length) {
       const crit = (c) => (Array.isArray(c) ? c.filter((x) => x && typeof x === "object").map((x) => ({ id: String(x.id || ""), text: String(x.text || "") })) : []);
@@ -3810,6 +3817,7 @@ function unattendedOn(p, input) {
   const b = input.unattended === true;
   state.unattended = a && b ? "both" : a ? "policy" : b ? "arg" : null;
   state.unattendedSha = p ? p.policy_sha256 : null;
+  state.runBudget = p && p.caps && p.caps.run_budget;
   if (state.unattended) gate("unattended mode on (" + state.unattended + ")");
 }
 function halt(status, msg, stopGate) {
@@ -3829,6 +3837,15 @@ function tailWriter(l) {
   return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l));
 }
 
+// 8.5.6 (#108 item 8, ADR-1397): the output tokens (budget.spent() growth, TOK) a run may spend; checked between steps only
+const RUN_BUDGET = 600000;
+function budgetStop(at) {
+  const n = Object.values(TOK).reduce((a, b) => a + b, 0);
+  const cap = state.runBudget || RUN_BUDGET;
+  if (n < cap) return;
+  state.options = ["run again with the result's checkpoint or freeze_digest (when it has one): it resumes there", "raise run_budget in the policy file", "drop the task"];
+  halt("needs_human", "run budget: " + n + " output tokens of " + cap + " spent before " + at, "budget");
+}
 function reserve(n, what) {
   if (capped() + n > MAX_AGENTS)
     halt(
@@ -4328,6 +4345,7 @@ function finish(status, reason) {
 function finishStop(status, reason) {
   const out = finish(status, reason);
   if (state.relaunch) out.relaunch = state.relaunch;
+  if (state.checkpoint) out.checkpoint = state.checkpoint;
   if (state.unverifiedPlanRef && status !== "ok" && status !== "awaiting_confirmation") {
     out.plan_ref = state.unverifiedPlanRef;
     out.plan_ref_verified = false;
@@ -5090,8 +5108,10 @@ function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap, pla
     relaxed: ctx.relaxed || [],
   };
   noteRound(round, what, tagged, snap, symbols);
+  budgetStop("re-plan round " + (round + 1));
   return planAndAudit(
     Object.assign({}, ctx, {
+      resume: null,
       auditRound: round + 1,
       priorRound: next,
       suffix: roundSuffix(ctx.baseSuffix, round + 1),
@@ -5717,7 +5737,8 @@ function findingsFp(what, findings) {
 // human_only (set by its script producer), the round repeats the one before, or the rounds are spent
 function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate, fallback) {
   const r = ctx.auditRound || 0;
-  const fp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]);
+  const fp = (state.planFp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]));
+  state.audited = null;
   gate("plan findings fingerprint round " + r + ": " + fp);
   const human = findings.filter((f) => f.human_only === true);
   const same = ctx.lastFp === fp;
@@ -5754,7 +5775,18 @@ async function planAndAudit(ctx0) {
   if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
   // #95: a re-plan round sees the required checks an earlier round's ruleset read found
   if (ctx.planRs && ctx.planRs.checks.length) plannerIn.required_checks = ctx.planRs.checks;
-  const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
+  // 8.5.6 (#108 step 3, ADR-1397): a proven checkpoint replaces the planner (its draft back in the worktree) and the audit; every other check runs
+  const rs = ctx.resume;
+  state.audited = null;
+  state.planRound = ctx.auditRound;
+  state.planFp = ctx.lastFp || null;
+  if (rs) {
+    const a = [ctx.common.worktree, rs.path, ctx.common.scratch_dir, rs.run, rs.sha];
+    const u = await infra("infra:unpark-plan", INFRA_STEP + "copy the audited draft plan back into the worktree.\n" + RUN_EXACT + progCmd("parked", ["unpark"].concat(a)) + "\nIt prints one JSON object " + printsKeys("parked:unpark") + '. Return {status: "ok", reason, ' + returnKeys("parked:unpark") + "}" + COPY_DIGEST, "Plan", INFRA_AGENT);
+    requireProgram(u, "parked", "infra:unpark-plan");
+    if (!relayDigestOk(u, progKeys("parked:unpark"), "parked") || canonical(u.args) !== canonical(a)) halt("failed", "infra:unpark-plan: the relay does not match the program's digest or arguments", "contract");
+  }
+  const plan = rs ? JSON.parse(rs.plan) : requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
   const ppBad = planPathProblem(plan.plan_path);
@@ -5774,6 +5806,7 @@ async function planAndAudit(ctx0) {
   const red = (x) => (x === Object(x) ? (Object.keys(x).forEach((k) => k === HELD_OUT_KEY || (x[k] = red(x[k]))), x) : String(x) === x && hoHit(x) ? "(held-out text redacted)" : x);
   for (const f of state.findings) f.notes = f.notes.filter((n) => !hoHit(n));
   red(plan);
+  const raw = JSON.stringify(stripHeldOut(plan));
   const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
   if (factsProblem) dr(factsProblem.msg.replace(/^role scope-and-plan contract drift: /, ""));
   const planPath = normPath(plan.plan_path);
@@ -5943,8 +5976,9 @@ async function planAndAudit(ctx0) {
   // the audit runs the planner's test_cmd in a scratch worktree
   const aEnv = dbInputs("audit");
   await pathRecheck("plan-audit" + sfx, "Plan");
-  state.audits = (state.audits || 0) + 1;
-  const audit = requireOk(
+  if (rs && dc.plan_sha256 !== rs.sha) halt("needs_human", fmtLabel + ": the resumed plan doc hashes " + dc.plan_sha256 + ", audited " + rs.sha, "scope");
+  if (!rs) state.audits = (state.audits || 0) + 1;
+  const audit = rs ? { verdict: "approve" } : requireOk(
     "plan-audit",
     await callRole(
       "plan-audit",
@@ -5975,7 +6009,9 @@ async function planAndAudit(ctx0) {
       "audit",
     );
   }
-  gate("plan-audit: approve");
+  gate("plan-audit: approve" + (rs ? " (checkpoint of run " + rs.run + ")" : ""));
+  // the audited checkpoint; the held-out examples and criteria stay in memory (parkOnStop stores the examples)
+  state.audited = { plan: raw, sha: dc.plan_sha256, path: planPath, round: ctx.auditRound || 0, prior: ctx.priorRound || null, fp: ctx.lastFp || null, ex: plan[HELD_OUT_KEY] || [], criteria, held: rs ? rs.held : undefined };
   for (const f of audit.routed_findings || [])
     if (f && typeof f.finding === "string") gate("plan-audit advisory finding (approve): " + (f.criterion || "-") + ": " + f.finding);
   // 7.4.0 (#60 step 3, Max Q3 (a)+(c)): a planned gate path or touches_gate: the sweep on the plan, before the seal
@@ -6041,7 +6077,7 @@ async function commitPlanAndRef(ctx) {
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
   if (stagedSha !== ctx.auditedSha) halt("needs_human", stLabel + ": plan doc changed after audit: " + stagedSha + ", audited " + ctx.auditedSha, "scope");
   // 8.0.0 (G3, ADR-1152): the held-out examples go to the store on this machine; the ref seals its sha256, or null
-  const heldOut = await heldOutWrite(ctx, stagedSha);
+  const heldOut = (state.heldMeta = ctx.held !== undefined ? ctx.held : await heldOutWrite(ctx, stagedSha));
   // + 2: the PATH re-check before the commit and the verify step; + the first-round chunk writers
   // (6.3.4, 2176: their count depends on the message's length, which holds it; rewrite rounds are not counted)
   const sealAt = (writers) => {
@@ -6601,6 +6637,32 @@ function relayDecision(it, tag, input, phase) {
   return t;
 }
 
+// 8.5.6 (#108 step 3): the parked audited checkpoint when args.checkpoint names it and it still holds, else null (logged)
+function resumeOf(pk, want, head, src) {
+  const c0 = pk && pk.ckpt;
+  if (!c0 && !want) return null;
+  let c = null;
+  try {
+    c = JSON.parse(c0);
+  } catch (e) {}
+  const why = !c0
+    ? "no parked checkpoint"
+    : !want || want.run !== pk.run || want.sha256 !== sha256Hex(c0)
+      ? "args.checkpoint does not name it"
+      : !c || typeof c.plan !== "string" || (c.held !== null && heldOutProblem(c.held))
+        ? "unusable"
+        : c.v !== FLEET_VERSION
+          ? "parked by ccpmcwf " + c.v
+          : c.src !== src
+            ? "the task source changed"
+            : c.base !== head
+              ? "base HEAD " + c.base + " is now " + head
+              : !pk.priorDraft || pk.priorDraft.plan_path !== c.path || sha256Hex(pk.priorDraft.text) !== c.sha
+                ? "the parked draft is not the audited one"
+                : null;
+  gate("checkpoint" + (pk ? " of run " + pk.run : "") + (why ? " not used (" + why + "): full plan" : ": resumed after plan-audit (no planner, no audit)"));
+  return why ? null : Object.assign(c, { run: pk.run });
+}
 async function planMode(input, date) {
   const raw = typeof input.input === "string" ? input.input.trim() : "";
   const repo = cleanRepo(input.repo);
@@ -6700,6 +6762,11 @@ async function planMode(input, date) {
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
   const parkedBad = !!(parked && parked.unreadable);
+  const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, x.body])]));
+  const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
+  // P3: the parked round count and fingerprint go on only for the same task source
+  const carry = ck || (parked && parked.src === src ? parked : null);
+  if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
   // the throwaway test database, up through plan-audit
   await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 
@@ -6709,11 +6776,18 @@ async function planMode(input, date) {
     if (!draft) throw e;
     const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
     const ls = state.lastPlanStop || { rounds: [], symbols: [] };
+    // 8.5.6 (#108 step 3): after an approving audit, the checkpoint; the held-out examples go to their store, never to the park
+    const au = state.audited;
+    let ckpt = null;
+    if (au) {
+      const h = au.held !== undefined ? au.held : au.ex.length ? state.heldMeta || (await heldOutWrite({ heldOut: au.ex, worktree: lay.mainWt, fields: { taskId: names.taskId, planPath: au.path, criteria: au.criteria }, phaseName: "Plan" }, au.sha).catch(() => null)) : null;
+      if (h || !au.ex.length || au.held !== undefined) ckpt = JSON.stringify({ plan: au.plan, sha: au.sha, path: au.path, round: au.round, prior: au.prior, fp: au.fp, held: h, base: scan.head, src, v: FLEET_VERSION });
+    }
     const findings = {
       scratch: lay.scratch,
       run: state.nonce,
       chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
-      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
+      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft, round: state.planRound, fp: state.planFp, src, ckpt }))),
     };
     let pk = null;
     try {
@@ -6733,6 +6807,11 @@ async function planMode(input, date) {
     // the outcome is the park program's, digest-checked
     const pr = pk && pk.status === "ok" ? pk.park : null;
     const parkOk = !!pr && typeof pr === "object" && relayDigestOk(pr, progKeys("parked:park"), "parked") && canonical(pr.args) === canonical([lay.mainWt, draft, lay.scratch, state.nonce]);
+    const fw = pk && pk.status === "ok" && pk.findings_write;
+    if (ckpt && parkOk && pr.target === dest && fw && relayDigestOk(fw, progKeys("parked:write"), "parked") && fw.sha256 === findings.c.expected) {
+      state.checkpoint = { run: state.nonce, sha256: sha256Hex(ckpt) };
+      gate("checkpoint parked: run " + state.nonce + ", sha256 " + state.checkpoint.sha256);
+    }
     const note =
       parkOk && pr.clean === true
         ? pr.target === dest
@@ -6758,9 +6837,13 @@ async function planMode(input, date) {
   try {
     p = await planAndAudit({
       common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x),
-      priorDraft: parked ? parked.priorDraft : null,
-      priorRound: parked ? parked.priorRound : null,
+      priorDraft: parked && !ck ? parked.priorDraft : null,
+      priorRound: ck ? ck.prior : parked ? parked.priorRound : null,
+      resume: ck,
+      auditRound: carry ? carry.round : 0,
+      lastFp: carry ? carry.fp : null,
     });
+    budgetStop("the plan commit");
     // decided before the seal (the gate agents count into it)
     blockers = confirm === "default" || ua ? defaultBlockers(p, input, raw) : [];
     if (parkedBad && (confirm === "default" || ua)) blockers.push(PARKED_UNREADABLE);
@@ -6776,6 +6859,7 @@ async function planMode(input, date) {
       planBase: scan.head,
       expectHead: scan.head,
       auditedSha: p.auditedSha,
+      held: ck ? ck.held : undefined,
       retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       // 8.0.0 (G3): the planner's top-level held-out list, for the store only
       heldOut: p[HELD_OUT_KEY] || [],
@@ -8783,6 +8867,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (tl) return testJudgeReplan(tl);
     phase("Freeze");
     await freeze();
+    budgetStop("the coder");
   }
 
   // code

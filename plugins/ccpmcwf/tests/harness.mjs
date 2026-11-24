@@ -41,7 +41,7 @@ export const WANT_AGENT = [
   ],
   [/^workspace$/, "ccpmcwf:infra-writer"],
   [
-    /^infra:(build-|format-|stage-plan|commit-plan|plan-chunks|state-chunks|park-chunks|park-plan|held-out|state:|freeze-ref|stop-save|commit:|push|pr-stats|pr-tests|pr-ready|pr-merge|pr-update|pr-fetch|ci-rerun|fleet-cleanup|review-cleanup|replan-|run-lock|db-up|db-down|purge-bytecode)/,
+    /^infra:(build-|format-|stage-plan|commit-plan|plan-chunks|state-chunks|park-chunks|park-plan|unpark-plan|held-out|state:|freeze-ref|stop-save|commit:|push|pr-stats|pr-tests|pr-ready|pr-merge|pr-update|pr-fetch|ci-rerun|fleet-cleanup|review-cleanup|replan-|run-lock|db-up|db-down|purge-bytecode)/,
     "ccpmcwf:infra-writer",
   ],
 ];
@@ -213,10 +213,22 @@ export const RELAY_KEYS = [
 // 3.1.0: the IaC push gate program's output, with its digest
 // 5.0.2 (ledger 2004): the park program's output for a park-plan prompt
 // (`over` replaces keys of the park object: {clean: false, dirty: [...]})
+// 8.5.6 (#108 step 3): and the findings write (parked.py write) of the prompt's chunks; PARK_WRITES keeps each run's findings JSON
+export const PARK_WRITES = new Map();
 export function parkOut(prompt, over) {
   const i = inputsOf(prompt);
   const park = Object.assign({ target: i.scratch + "/parked/" + i.run + "/" + i.plan_path, clean: true, dirty: [], args: [i.worktree, i.plan_path, i.scratch, i.run] }, over);
-  return { status: "ok", reason: "parked", park };
+  const out = { status: "ok", reason: "parked", park };
+  if (/parked\.py' 'write'/.test(prompt)) {
+    let text = chunkedContentOf(prompt);
+    if (text === null) {
+      const files = CHUNK_STORE.get(i.scratch + "/chunks/park-chunks-" + i.run) || {};
+      text = Buffer.from(Object.keys(files).sort((a, b) => a - b).map((k) => files[k]).join(""), "base64").toString("utf8");
+    }
+    PARK_WRITES.set(i.run, text);
+    out.findings_write = { written: i.scratch + "/parked/" + i.run + "/findings.json", sha256: sha256(text), args: [i.scratch, i.run] };
+  }
+  return out;
 }
 export function tfGateRelay(over) {
   const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-y42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
@@ -462,6 +474,8 @@ export async function runOne(script, args0) {
     // 7.4.0 (#60): an unscripted plan-mode gate sweep measures one unit and finds no loosening
     if (!(label in script) && /^role:gate-change-nonweakening-sweep:plan/.test(label))
       script[label] = { status: "ok", reason: "0 loosened", verdict: "non_weakening", units: [{ unit: "planned gate", mutation: "the shipped gate at base", shipped_refuses: true, new_refuses: true }], findings: [] };
+    // 8.5.6 (#108 step 3): an unscripted unpark copies the draft back (parked.py unpark echoes its sha256 and args)
+    if (!(label in script) && /^infra:unpark-plan$/.test(label)) return unparkOut(prompt);
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return parkOut(prompt);
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -1274,7 +1288,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.5.5/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.5.6/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1476,6 +1490,7 @@ export const PROGRAM_LABELS = [
   [/^infra:run-lock$/, [[null, "parked", PROGRAM_KEYS["parked:claim"] || null]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
+  [/^infra:unpark-plan$/, [[null, "parked", K("parked:unpark")]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
   // 5.0.3 (ledger 2010): the DSN precheck after the plan hooks
@@ -1553,6 +1568,11 @@ export function lockOut(prompt, over) {
   const lock = m[2] + "/.git/fleet/locks/" + m[3] + ".json";
   const base = m[1] === "claim" ? { claimed: true, again: false, stale: null, held_by: null, lock } : { released: true, absent: false, held_by: null, lock };
   return Object.assign({ status: "ok", reason: m[1] === "claim" ? "claimed" : "released" }, base, over || {}, { args: (over && over.args) || args });
+}
+// 8.5.6 (#108 step 3): parked.py unpark <worktree> <plan path> <scratch> <run> <sha256>
+export function unparkOut(prompt, over) {
+  const m = /parked\.py' 'unpark' '([^']*)' '([^']*)' '([^']*)' '([^']*)' '([^']*)'/.exec(prompt);
+  return Object.assign({ status: "ok", reason: "unparked", sha256: m[5], args: m.slice(1, 6) }, over || {});
 }
 export const CUR_SCRIPT = { s: null };
 function stagedShaOf(label) {

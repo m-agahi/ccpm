@@ -376,7 +376,7 @@ test("8.0.1 #76 seal 2: a stage-plan sha that is not the sha the approving plan-
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan doc changed after audit/);
   assert.match(out.result.reason, new RegExp(PSHA));
-  assert.ok(!out.labels.some((l) => /^infra:(plan-chunks|commit-plan|held-out)/.test(l)), out.labels.join(", "));
+  assert.ok(!out.labels.some((l) => /^infra:(plan-chunks|commit-plan)/.test(l)), out.labels.join(", "));
   // a format-plan relay with no plan_sha256 fails its check
   const n = happy();
   n["infra:format-plan"] = (p) => {

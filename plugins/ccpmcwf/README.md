@@ -783,6 +783,9 @@ longer stops the build.
   (`auto_decisions`, with `unattended_source`), the run-state and the PR body's
   `### Unattended run` section under Risks, which the stats step checks in the real body. Plan
   mode reads the policy too (`infra:policy:plan`).
+- `run_budget` (8.5.6, yaadgaar #108 item 8): a profile or `repos` key, an integer 10000-100000000;
+  anything else makes the file invalid. It replaces the run's default budget of output tokens
+  (`RUN_BUDGET`, 600000; see "Plan checkpoint and run budget"). Unset: the default.
 - An invalid file (6.3.0) is the strict default, with a gate line naming the error; it no longer
   stops the build.
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
@@ -1010,6 +1013,40 @@ fingerprint round <n>: <hex>`; a round whose findings repeat the round before st
 progress (round n repeats round n-1)". Each of these stops has a stop gate (`plan` unless the site names
 `contract`, `audit`, `db` or `intent`) and an `options` list of 2-3 script-written choices; the first
 names at most 5 findings by an identifier-shaped symbol or criterion id, and leaves any other name out.
+
+### Plan checkpoint and run budget (8.5.6, yaadgaar #108 step 3 + item 8, ADR-1397)
+
+- Checkpoint. When plan-audit approves and a later plan step stops (a plan sweep agent that dies, stage-plan,
+  the plan commit, its verify, a budget stop; a plan-findings stop parks none), the park adds a checkpoint to the
+  parked findings: the planner's raw plan (held-out examples stripped), the sha256 of the audited
+  doc, its path, the round, the prior round, the findings fingerprint, base HEAD, a sha256 of the
+  task source (the input and each intake source's kind, ref and body), and `FLEET_VERSION`. The
+  held-out examples go to their store (`held_out.py write`, as at the seal) and the checkpoint
+  keeps only the store's sha256 and counts. The stop result carries `checkpoint: {run, sha256}`.
+- Resume. A plan run with `args.checkpoint` (that value, unchanged) uses the parked checkpoint only
+  when the sha256 matches, the task source hash is the same, base HEAD is the same commit (no
+  "only moved by unrelated commits" rule), the parked draft hashes to the audited sha256, and the
+  version is the same. Then `infra:unpark-plan` (`parked.py unpark`) copies the draft back into the
+  clean worktree, and the plan checks run on the parked plan exactly as after a planner round:
+  the command allowlists, the contract and criteria checks, the secret-like path check, the hook
+  gate, both DSN checks, the npm walk-up check, the caller check, format-plan and the plan sweep.
+  Only the planner and plan-audit do not run; a doc that formats to another sha256 than the
+  audited one stops at gate `scope`. Anything else logs "checkpoint of run <run> not used (<why>):
+  full plan" and runs today's path. A park is used once: the plan commit moves it to
+  `parked/used`. A relaxed audited plan stays relaxed (its prior round is in the checkpoint).
+- Round carry (P3). The park also holds the round count and the last findings fingerprint. A
+  re-run of the same task source continues the count (it does not reset to 0), and a first round
+  whose findings repeat the parked ones stops at once with options. A changed task source starts
+  at round 0.
+- Run budget. Each run counts the output tokens its agents spend: the growth of the runtime's
+  `budget.spent()` around each agent call (the same count as the PR stats). This is the turn's
+  shared pool, so it includes the main loop's output while the run is busy; input tokens are not
+  counted (the runtime reports none). With no runtime `budget`, no budget applies (the agent cap
+  still does). The default is 600000 output tokens (about 4x a full plan+build of the smoke repos,
+  120-135k); the policy's `run_budget` replaces it. The check runs only between steps: before a
+  re-plan round, after the approving audit (before the plan commit), and in build mode after the
+  freeze (before the coder). Over the budget the run stops `needs_human` at gate `budget` with
+  options; a plan stop parks its checkpoint, a build stop returns `freeze_digest` (frozen resume).
 
 ### Push-access probe (4.0.0, ledger 1985)
 
@@ -2128,8 +2165,8 @@ The script pins the role contract, not the prose:
   `audit` (8.5.4: the plan-audit verdict after the re-plan rounds), `rounds` (8.5.4: the test or
   code rounds ran out), `relay-size` (8.5.4: the hasher output is over the relay cap), `plan`
   (8.5.5: a plan-findings stop whose site names no other gate), `push` (8.5.5: no push access, or
-  push access still unknown at the PR step) or `refs` (8.5.5: a refs/replace ref exists)
-  (`null` when the run did not stop at one of them). `cap`, `rounds`, `audit`, `relay-size`,
+  push access still unknown at the PR step), `refs` (8.5.5: a refs/replace ref exists) or `budget`
+  (8.5.6: the run's output-token budget is spent) (`null` when the run did not stop at one of them). `cap`, `rounds`, `audit`, `relay-size`,
   `push` and `refs` each mean one thing; `role` and `hash` still cover other cases, which a later
   step classifies.
   A rounds stop names the gate that rejected the last round (hash, obligations

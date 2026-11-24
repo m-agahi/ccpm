@@ -1,5 +1,58 @@
 # Changelog
 
+## [8.5.6] - 2026-11-24
+
+ccpmcwf 8.5.6: a plan that plan-audit approved is not planned and audited again after a later stop, the re-plan round count survives a re-run, and a run has a budget of output tokens (yaadgaar `#108` step 3 + item 8, ADR-1397). Before 8.5.6 a re-run repeated the planner and the audit and reset the round count to 0.
+
+### Added
+
+- Plan checkpoint (P1). After an approving plan-audit, a stop parks a checkpoint in the parked
+  findings: the planner's raw plan (held-out examples stripped), the audited doc's sha256 and path,
+  the round, the prior round, the findings fingerprint, base HEAD, a sha256 of the task source
+  (the input and each intake source's kind, ref and body) and `FLEET_VERSION`. The held-out
+  examples go to their store (`held_out.py write`), never to the park; the checkpoint keeps only
+  the store's sha256 and counts, and a resumed seal uses them. The stop result carries
+  `checkpoint: {run, sha256}`; the build-task skill passes it back on the re-run. A plan-findings
+  stop (including a plan sweep weakening verdict) parks no checkpoint.
+- Resume. A plan run with `args.checkpoint` resumes only when the parked checkpoint hashes to that
+  sha256 (the caller-held value is the trust anchor: the park sits in scratch), the task source
+  hash, base HEAD (the same commit; a base that moved by unrelated commits is not accepted) and
+  `FLEET_VERSION` are the same, and the parked draft hashes to the audited sha256. Then
+  `infra:unpark-plan` (new `parked.py unpark <worktree> <plan path> <scratch> <run> <sha256>`:
+  clean worktree only, the bytes must hash to the sha256) copies the draft back, and every plan
+  check runs on the parked plan: command allowlists, contract and criteria checks, secret-like
+  paths, hook gate, both DSN checks, npm walk-up, caller check, format-plan, plan sweep. The
+  planner and plan-audit do not run. A formatted doc with another sha256 stops at gate `scope`.
+  Any other mismatch logs `checkpoint of run <run> not used (<why>): full plan`. A relaxed
+  audited plan stays relaxed. The park is consumed once (moved to `parked/used` at the commit).
+- Round carry (P3). The park holds the round count and the last findings fingerprint. A re-run
+  of the same task source continues the round count, and a first round whose findings repeat the
+  parked fingerprint stops at once ("no progress") with options. A changed task source starts at
+  round 0.
+- Run budget (item 8). The measure is output tokens: the growth of the runtime's `budget.spent()`
+  around each agent call (the counter the PR stats already use). The runtime reports output
+  tokens only, for the turn's shared pool, so the count also holds the main loop's output while
+  the run is busy, and no input tokens. With no runtime `budget`, no budget applies (the
+  100-agent cap still does). Default `RUN_BUDGET` 600000 output tokens (the smoke-repo full
+  plan+build runs spent 120-135k); the policy key `run_budget` (an integer 10000-100000000, in a
+  profile or a `repos` override) replaces it. The check runs between steps only: before a re-plan
+  round, after the approving audit (before the plan commit), and in build mode after the freeze
+  (before the coder). Over it the run stops `needs_human` at the new gate `budget` (30 names) with
+  options; the plan stop parks its checkpoint, the build stop returns `freeze_digest`.
+
+### Changed
+
+- `parked.py` gains `unpark`; `policy.py` accepts `run_budget`; the policy caps schema types it.
+- Tests: `v856_plan_checkpoint` (a resumed run dispatches no `role:scope-and-plan` and no
+  `role:plan-audit` and reaches `awaiting_confirmation`; 21 agents against 23 for today's re-run of
+  the same parked plan in the harness, the two removed being the planner and plan-audit; fail-safe
+  fallbacks; the hook gate, the command allowlist and the sweep fire on a resumed plan; P3 carry and
+  reset; the budget stops and resumes in plan and build mode; the policy override; `parked.py unpark`
+  and `policy.py` `run_budget` on the shipped programs). Updated:
+  `v801_run_lock` (a post-audit stop now writes the held-out store for its checkpoint; no chunk
+  writer or commit runs), `v402_file_sha`, `v403_schema_types`, `v5010_prompt_snapshot` (the policy
+  schema moves the three plan/build pins), `v740_readme` (30 gates), the version pins.
+
 ## [8.5.5] - 2026-11-24
 
 ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-findings stop offers options (yaadgaar `#108` step 2, ADR-1397). Plan run wf_a5e02d51-28c used 45 agents and 3.7M tokens, spent 2 re-plan rounds on a finding the planner could not fix, then stopped with no stop gate and a raw list of findings.

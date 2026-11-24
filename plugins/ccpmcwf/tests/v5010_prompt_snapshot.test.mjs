@@ -136,10 +136,11 @@ const SCENARIOS = {
 // 8.5.3 (yaadgaar #111): no prompt change; the caller check reads auto (doc and lock) pages outside the read budget and the version moves (masked); same call counts, no pin moves.
 // 8.5.4 (yaadgaar #108 step 1): no prompt change; stop_gate names, the legacy plan_ref refusal text, the hasher pin and the version move (masked); same call counts, no pin moves.
 // 8.5.5 (yaadgaar #108 step 2): infra:surfaces:plan runs plan_dsn first (its prompt lists the command and its schema gains the plan_dsn slot); same call counts: the three plan/build pins move, probe unchanged.
+// 8.5.6 (yaadgaar #108 step 3 + item 8): the policy program's caps schema types run_budget (the policy prompt's schema); same call counts: the three plan/build pins move, probe unchanged. Checked: with run_budget dropped from the caps schema every pin is 8.5.5's
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "edef5fb1c0da10efd2ba68e2101529cd64ec003814eba0031cb75f8de74392f4" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "0fbb03e6fa7d85c1c874f8e37ab6205f395d7d7008ab122d71329109c6c29487" },
-  "short path (one test writer)": { calls: 88, sha256: "82508b237fc0395c362f9c313c21c5cb7b371fd6640ecf8a95091f419ad260a0" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "8a2da3ec511bfb0c28f67f8eeba0ed025b3647d325eb5758c93d807ff226a849" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "481ba5b6505e2a9b9f0391d4cf0d064fe65a28389ef12a14a3c55a19de1e3eee" },
+  "short path (one test writer)": { calls: 88, sha256: "005dcd67663c1404a11ddc489911caa8ee243e4eceaaef656d4ef947b29aece4" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 
