@@ -7166,12 +7166,11 @@ function prTestsPrompt(inputs) {
 async function prTestsStep(label, args, block, prUrl, supplied, again) {
   const r = await infra(label, prTestsPrompt({ args }), "PR", INFRA_AGENT, "pr_test_block", args);
   requireProgram(r, "pr_test_block", label, "needs_human", "stats");
-  const relayOk = relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") && canonical(r.args) === canonical(args);
+  if (!relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + RELAY_MISMATCH, "stats");
   // fail closed before the supplied-text filter: no own claim hides behind a long list (8.7.0: ahead of the rewrite)
-  if (relayOk && r.claims_truncated === true)
+  if (r.claims_truncated === true)
     halt("needs_human", label + ": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of " + prUrl + " by hand, then " + SAME_PLAN_REF, "role");
-  const bad = !relayOk ? RELAY_MISMATCH
-    : !Array.isArray(r.claims) || r.claims.some((x) => typeof x !== "string") ? ": claims is not a list of strings"
+  const bad = !Array.isArray(r.claims) || r.claims.some((x) => typeof x !== "string") ? ": claims is not a list of strings"
     : r.error !== null ? ": " + r.error + "; check the body of " + prUrl
     : r.block_sha256 !== sha256Hex(block) ? ": the PR body's test block is not the script's block; check " + prUrl : null;
   // 8.7.0 (#108 step 4): the block is written between its markers, so a second write is the same write

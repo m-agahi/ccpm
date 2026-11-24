@@ -6379,11 +6379,10 @@ return INFRA_STEP+"write the test block into the fleet's own PR body; only the b
 async function prTestsStep(label,args,block,prUrl,supplied,again){
 const r=await infra(label,prTestsPrompt({args}),"PR",INFRA_AGENT,"pr_test_block",args);
 requireProgram(r,"pr_test_block",label,"needs_human","stats");
-const relayOk=relayDigestOk(r,progKeys("pr_test_block"),"pr_test_block")&&canonical(r.args)===canonical(args);
-if(relayOk&&r.claims_truncated===true)
+if(!relayDigestOk(r,progKeys("pr_test_block"),"pr_test_block")||canonical(r.args)!==canonical(args))halt("needs_human",label+RELAY_MISMATCH,"stats");
+if(r.claims_truncated===true)
 halt("needs_human",label+": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of "+prUrl+" by hand, then "+SAME_PLAN_REF,"role");
-const bad=!relayOk?RELAY_MISMATCH
-:!Array.isArray(r.claims)||r.claims.some((x)=>typeof x!=="string")?": claims is not a list of strings"
+const bad=!Array.isArray(r.claims)||r.claims.some((x)=>typeof x!=="string")?": claims is not a list of strings"
 :r.error!==null?": "+r.error+"; check the body of "+prUrl
 :r.block_sha256!==sha256Hex(block)?": the PR body's test block is not the script's block; check "+prUrl:null;
 if(bad&&!again){

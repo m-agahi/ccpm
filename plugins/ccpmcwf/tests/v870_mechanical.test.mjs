@@ -84,6 +84,16 @@ test("8.7.0 PR body: a second refusal of the test block stops as before", async 
   assert.match(out.result.reason, /^infra:pr-tests:regen: the PR body's test block is not the script's block/);
 });
 
+test("8.7.0 PR body: a test block relay with other args stops at once (no rewrite), as the stats block does", async () => {
+  const s = happy();
+  s["infra:pr-tests"] = s["infra:pr-tests:args-retry"] = (p) => Object.assign(badBlock(p), { args: ["gh", "o/r", "8"].concat(inputsOf(p).args.slice(3)) });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "stats");
+  assert.match(out.result.reason, /^infra:pr-tests: the relayed result does not match the program's digest or arguments/);
+  assert.ok(!out.build.labels.includes("infra:pr-tests:regen"), out.build.labels.join(", "));
+});
+
 test("8.7.0 PR body: a truncated claims list stops at once (safety ahead of the regeneration)", async () => {
   const s = happy();
   s["infra:pr-tests"] = (p) => Object.assign(badBlock(p), { claims_truncated: true });

@@ -1077,16 +1077,20 @@ also carries `auto_decisions` when it holds an entry. A second failure stops as 
 safety check runs on the repaired attempt again.
 
 - Transient (`transient`, `retry`): a read-only step (agent type `ccpmcwf:judge`) that returns no
-  result (a terminal API error, or a skip in the UI) runs once more on the same model, agent
-  type and label. A write step (any other agent type) still stops (`agent <label> returned no
-result`): its first attempt may have written. A role agent that returns no result already
-  gets its one retry on its fallback tier (see "Models"); there is no further retry.
+  result runs once more on the same model, agent type and label. The runtime returns no result
+  both for a terminal API error and for a skip in the UI, so a judge step that the user skips
+  runs once more; a second skip stops the run. A write step (any other agent type) still stops
+  (`agent <label> returned no result`): its first attempt may have written. A role agent that
+  returns no result already gets its one retry on its fallback tier (see "Models"); there is no
+  further retry.
 - PR body blocks (`pr-body`, `regenerate`): the test block (`infra:pr-tests*`) and the stats block
   (`infra:pr-stats*`) are written between their markers, so a second write is the same write. A
-  refused block (relay digest or args, a `claims` list that is not strings, a program `error`, a
-  block sha256 that is not the script's) is written once more (`<label>:regen`). Still stops at
-  once: a result that is not the shipped program, a missing `### Unattended run` section, and a
-  truncated claims list. An entry recorded after the pr-opener wrote the body is in the result
+  refused block is written once more (`<label>:regen`) for a program `error` or a block sha256
+  that is not the script's (both blocks), or a `claims` list that is not strings (the test block;
+  the stats block has no claims). Still stops at once, for both blocks: a result that is not the
+  shipped program and a relay whose digest or args do not match (after the digest or args retry
+  of the test block); also a missing `### Unattended run` section (stats block) and a truncated
+  claims list (test block). An entry recorded after the pr-opener wrote the body is in the result
   (and, in an unattended run, the run-state), not in the body's `### Unattended run` section.
 - Relay size (`relay-size`, `page`): one changed symbol whose caller-check output is over the
   65536-byte relay cap goes on the on-disk caller path (summary plus paged reads) instead of

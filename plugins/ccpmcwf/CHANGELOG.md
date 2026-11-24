@@ -2,22 +2,23 @@
 
 ## [8.7.0] - 2026-11-24
 
-ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,302 B (cap 520,000 B, ADR-1353).
+ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,307 B (cap 520,000 B, ADR-1353).
 
 ### Added
 
-- Transient: `dispatch` retries a null agent result (a terminal API error or a skip) once on the
-  same model, agent type and label when the step is read-only (agent type `ccpmcwf:judge`);
-  `auto_decisions` gate `transient`, decision `retry`. A write step (any other agent type) keeps
+- Transient: `dispatch` retries a null agent result once on the same model, agent type and label
+  when the step is read-only (agent type `ccpmcwf:judge`); `auto_decisions` gate `transient`,
+  decision `retry`. The runtime returns null for both a terminal API error and a skip in the UI,
+  so a judge step the user skips runs once more (a second skip stops). A write step (any other agent type) keeps
   the stop: its first attempt may have written. The role path (`callRole`, `retryOnDrift`) is
   unchanged: `roleAgent` already retries a null once on the role's fallback tier, and every role
   has one, so its stop is already the second null.
-- Mechanical, PR body: a refused test block (`prTestsStep`: relay digest or args, `claims` shape,
-  program `error`, block sha256) or stats block (`statsStep`: program `error`, block sha256) is
-  written once more as `<label>:regen` (`pr-body`, `regenerate`). The blocks are written between
-  their markers, so a second write is the same write. The safety checks stay first: program
-  identity, the `### Unattended run` header, and (moved ahead of the rewrite) a truncated claims
-  list with a good relay.
+- Mechanical, PR body: a refused test block (`prTestsStep`: `claims` shape, program `error`, block
+  sha256) or stats block (`statsStep`: program `error`, block sha256) is written once more as
+  `<label>:regen` (`pr-body`, `regenerate`). The blocks are written between their markers, so a
+  second write is the same write. The safety checks stay first: program identity, a relay digest
+  or args mismatch (both blocks; Max, review of #114), the `### Unattended run` header, and (moved
+  ahead of the rewrite) a truncated claims list.
 - Mechanical, relay size: one symbol whose inline caller output is over the 65536-byte relay cap
   goes on the on-disk caller path (`relay-size`, `page`) instead of stopping. Left as stops: one
   symbol over the on-disk summary cap (no smaller unit), and the hasher relay cap (gate
@@ -44,12 +45,13 @@ ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs a
 
 ### Tests
 
-- `v870_mechanical` (new, 14 tests): the null retry (read-only step, a second null, a write
-  step), the test and stats block rewrites (once, a second refusal, a truncated claims list first),
+- `v870_mechanical` (new, 15 tests): the null retry (read-only step, a second null, a write
+  step), the test and stats block rewrites (once, a second refusal, a relay mismatch and a truncated
+  claims list stop first),
   the on-disk handoff of one symbol over the relay cap, the budget stops before a code re-round,
   a fix_tests writer round and a review (each with its resume), no check before the freeze or
   after the first commit, and the `args.checkpoint` shape.
-- Changed on purpose: `v710_block_flow` (ex8, ex9, ex10, ex12, ex14), `v740_error_routing`,
+- Changed on purpose: `v710_block_flow` (ex8, ex9, ex10; ex12 and ex14 assert no rewrite), `v740_error_routing`,
   `v600_s3` (the stop now names `<label>:regen`); `v630_flow` (one symbol over the relay cap goes
   on the disk path); `v600_s4` (`statsStep(tag, again)`); `v403_schema_types` (the READS counts
   of the new reads).
