@@ -1057,7 +1057,9 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
   still does). The default is 600000 output tokens (about 4x a full plan+build of the smoke repos,
   120-135k); the policy's `run_budget` replaces it. The check runs only between steps: before a
   re-plan round, after the approving audit (before the plan commit), and in build mode after the
-  freeze (before the coder), before each later code round (8.7.0), before each test-writer round
+  freeze (before the coder), before each later code round until the first build commit (8.7.0;
+  after it, the run-state resume refuses the coder's uncommitted edits, and the review check
+  bounds each fix cycle), before each test-writer round
   after the freeze (8.7.0: a fix_tests or augmentation round, before its writers write) and
   before each review (8.7.0: after the `pr_open` run-state). Over the budget the run stops
   `needs_human` at gate `budget` with options; a plan stop parks its checkpoint, a build stop
@@ -1085,7 +1087,7 @@ result`): its first attempt may have written. A role agent that returns no resul
   block sha256 that is not the script's) is written once more (`<label>:regen`). Still stops at
   once: a result that is not the shipped program, a missing `### Unattended run` section, and a
   truncated claims list. An entry recorded after the pr-opener wrote the body is in the result
-  and the run-state, not in the body's `### Unattended run` section.
+  (and, in an unattended run, the run-state), not in the body's `### Unattended run` section.
 - Relay size (`relay-size`, `page`): one changed symbol whose caller-check output is over the
   65536-byte relay cap goes on the on-disk caller path (summary plus paged reads) instead of
   stopping. Still stops: one symbol whose on-disk summary is over its cap, and a hasher output

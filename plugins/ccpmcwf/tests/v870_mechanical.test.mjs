@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARGS, PB, HASHES, HASHES_FLAT, FP_K1, FP_K2, FP_PLAN, H, happy, run, runOne, inputsOf, stateJsonOf, noUnscripted } from "./harness.mjs";
+import { ARGS, PB, HASHES, HASHES_FLAT, FP_K1, FP_K2, FP_PLAN, CSHA, H, happy, run, runOne, inputsOf, stateJsonOf, noUnscripted } from "./harness.mjs";
 
 const autoOf = (out) => (out.result.auto_decisions || []).map((d) => d.gate + ":" + d.decision);
 const count = (out, label) => out.labels.filter((l) => l === label).length;
@@ -189,6 +189,44 @@ test("8.7.0 budget: a fix_tests re-round stops before its writers write, with fr
   assert.match(b.result.reason, /before test round 3(;|$)/);
   assert.ok(!b.labels.some((l) => /^role:fleet-test-writer:.*:r3$/.test(l)), b.labels.join(", "));
   assert.match(b.result.freeze_digest, /^[0-9a-f]{64}$/);
+  // not re-frozen yet: the frozen resume runs the coder again on the coder's tree
+  delete s.__budget;
+  const h = H(HASHES_FLAT);
+  h.git["fleetref:" + plan.result.plan_ref.plan_ref.replace(/\/plan$/, "/freeze")] = "T1";
+  s["hasher:resume-frozen"] = { status: "ok", fingerprint: { head: PB, tree: "K1" }, hashes: h };
+  s["role:fleet-code-judge:r1"] = happy()["role:fleet-code-judge:r1"];
+  const r = await runOne(s, Object.assign(buildArgs(plan), { freeze_digest: b.result.freeze_digest }));
+  assert.equal(r.result.status, "ok", r.result.reason);
+  assert.equal(r.result.resumed_at, "frozen");
+});
+
+test("8.7.0 budget: a code round after the first commit is not checked (the run-state resume refuses the coder's edits); the next review is", async () => {
+  const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
+  const REV = (v, fs) => ({ status: "ok", reason: "x", verdict: v, findings: fs, touches_gate: false, checked: [] });
+  const s = happy();
+  const rs = s["hasher:pre-review:v1"];
+  Object.assign(s, {
+    "role:pr-review:v1": REV("changes_requested", [CODE]),
+    "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
+    "hasher:pre-review:v2": rs,
+    "hasher:fp-post:pr-review:v2": rs,
+    "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
+    "role:fleet-coder:r2": { status: "ok", reason: "done", changed_paths: ["src/x.py"], frozen_tests_red_at_start: true, suite_result: { command: "pytest", exit_code: 0 } },
+    "hasher:post-coder:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: HASHES },
+    "role:fleet-code-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], hash_check: { match: true, mismatched: [] }, suite_result: { exit_code: 0 } },
+    "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" } },
+    "infra:push:p2": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
+    "role:fleet-pr-opener:p2": { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true },
+    "role:pr-review:v2": REV("approve", []),
+  });
+  const plan = await runOne(s, ARGS);
+  const ls = lateSpend();
+  after(s, "role:pr-review:v1", ls.on);
+  s.__budget = ls.budget;
+  const b = await runOne(s, buildArgs(plan));
+  assert.equal(b.result.stop_gate, "budget", b.result.reason);
+  assert.match(b.result.reason, /before the review v2(;|$)/);
+  assert.ok(b.labels.includes("role:fleet-coder:r2"), b.labels.join(", "));
 });
 
 test("8.7.0 budget: the first test round before the freeze is not checked (no resumable state before the freeze)", async () => {

@@ -271,7 +271,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
    - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
      after the freeze returns both. This includes a build that ran in the same run as the plan
      (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8
-     with both resumes at the coder (see "Re-running").
+     with both resumes at the coder (see "Re-running"); a budget stop before a review (8.7.0)
+     resumes from the run-state at the review.
    - `pr_url` when present. The PR opens ready for review; it is a draft only when the plan names a
      `merge_after` condition (the reason and the PR body name it) or the policy sets `pr_ready: false`.
      The user reviews and merges it. Never merge it, never enable auto-merge.

@@ -8937,7 +8937,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // 8.0.0 (G6): the code round that ran the augmentation round (0: none yet; one per run)
   let augAt = state.augFiles ? -1 : 0;
   // 6.1.0: a stop in a code round after update-branch writes the CI outcome back once (ciWbDone), then stops
-  // 8.7.0 (#108 step 4): the budget is checked before each later round of this loop (the frozen maps resume it)
+  // 8.7.0 (#108 step 4): the budget is checked before each later round of this loop until the first commit (a frozen
+  // resume keeps the coder's edits; after a commit the run-state resume refuses them, and the review check bounds each cycle)
   const m0 = state.rounds.code;
   try {
     for (;;) {
@@ -8951,7 +8952,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             (updRound ? "; re-plan on the new base or fix by hand" : ""),
           updRound ? "review" : "rounds",
         );
-      if (state.rounds.code > m0) budgetStop("code round " + (state.rounds.code + 1));
+      if (state.rounds.code > m0 && !commitsMade) budgetStop("code round " + (state.rounds.code + 1));
       state.rounds.code++;
       const m = state.rounds.code;
       lastRoundGate = null;

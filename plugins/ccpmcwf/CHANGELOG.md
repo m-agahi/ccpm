@@ -2,7 +2,7 @@
 
 ## [8.7.0] - 2026-11-24
 
-ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,288 B (cap 520,000 B, ADR-1353).
+ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,302 B (cap 520,000 B, ADR-1353).
 
 ### Added
 
@@ -22,16 +22,20 @@ ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs a
   goes on the on-disk caller path (`relay-size`, `page`) instead of stopping. Left as stops: one
   symbol over the on-disk summary cap (no smaller unit), and the hasher relay cap (gate
   `relay-size`; no paged hasher relay exists, and adding one changes `hasher.py`).
-- Budget: `budgetStop` also runs before each later code round, before each test-writer round after
-  the freeze (fix_tests and augmentation rounds, before the writers write) and before each review
-  (after the `pr_open` run-state). Each stop returns `freeze_digest` and `plan_ref`; the review
-  stop resumes from the run-state at the review. The test rounds before the first freeze stay
-  unchecked: no saved state resumes them.
+- Budget: `budgetStop` also runs before each later code round until the first build commit,
+  before each test-writer round after the freeze (fix_tests and augmentation rounds, before the
+  writers write) and before each review (after the `pr_open` run-state). Each stop returns
+  `freeze_digest` and `plan_ref`; the code and test stops resume at the coder (frozen resume),
+  the review stop from the run-state at the review. Not checked: the test rounds before the
+  first freeze (no saved state resumes them; the workspace step refuses the writers' uncommitted
+  files) and the code rounds after the first commit (the run-state resume refuses the coder's
+  uncommitted edits; the review check bounds each fix cycle).
 
 ### Changed
 
 - `autoDecide` logs `auto: ...` in an attended run (was `unattended: ...` in every run), and an
-  attended result carries `auto_decisions` when it holds an entry.
+  attended result carries `auto_decisions` when it holds an entry (the run-state keeps them only
+  in an unattended run, as before).
 - A build resumed from a run-state keeps this run's own decisions after the resumed ones (was: the
   resumed list was dropped when this run had any).
 - `args.checkpoint`: `run` and `sha256` must be strings (`NONCE_RE.test(undefined)` matched
@@ -40,11 +44,11 @@ ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs a
 
 ### Tests
 
-- `v870_mechanical` (new, 13 tests): the null retry (read-only step, a second null, a write
+- `v870_mechanical` (new, 14 tests): the null retry (read-only step, a second null, a write
   step), the test and stats block rewrites (once, a second refusal, a truncated claims list first),
   the on-disk handoff of one symbol over the relay cap, the budget stops before a code re-round,
-  a fix_tests writer round and a review (each with its resume where one exists), no check before
-  the freeze, and the `args.checkpoint` shape.
+  a fix_tests writer round and a review (each with its resume), no check before the freeze or
+  after the first commit, and the `args.checkpoint` shape.
 - Changed on purpose: `v710_block_flow` (ex8, ex9, ex10, ex12, ex14), `v740_error_routing`,
   `v600_s3` (the stop now names `<label>:regen`); `v630_flow` (one symbol over the relay cap goes
   on the disk path); `v600_s4` (`statsStep(tag, again)`); `v403_schema_types` (the READS counts

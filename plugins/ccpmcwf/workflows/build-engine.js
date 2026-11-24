@@ -7958,7 +7958,7 @@ halt(
 (updRound?"; re-plan on the new base or fix by hand":""),
 updRound?"review":"rounds",
 );
-if(state.rounds.code>m0)budgetStop("code round "+(state.rounds.code+1));
+if(state.rounds.code>m0&&!commitsMade)budgetStop("code round "+(state.rounds.code+1));
 state.rounds.code++;
 const m=state.rounds.code;
 lastRoundGate=null;
