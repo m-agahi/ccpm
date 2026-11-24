@@ -383,7 +383,56 @@ test("8.2.0 #80 final: a hidden root is never walked: 60,000 files under the fix
     assert.ok(pairs(p.out.argv, "--tmpfs").includes(opt));
     assert.ok(ms < 2000, "plan took " + ms + " ms");
     const w = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }, x.d);
-    assert.match(w.out.reason, /^socket walk over its caps/, "control: a walked /opt this big refuses");
+    assert.match(w.out.reason, /^socket walk over its entry cap/, "control: a walked /opt this big refuses");
+  } finally {
+    x.done();
+  }
+});
+
+test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts CPU, not wall clock", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  // 3,000 entries: well under the entry cap; with the fake clock below, over 3 s of "wall clock" on any host
+  for (let i = 0; i < 30; i++) {
+    const dd = join(R, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  const f = join(x.d, "spec.json");
+  writeFileSync(f, JSON.stringify({ result: join(x.d, "res.json"), worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }));
+  try {
+    // the loaded CI runner, made exact: time.monotonic advances 2 ms per call (one call per walked entry), so the
+    // walk spans more than 3 s of wall clock and costs the same CPU time as on an idle host. 50,000 entries
+    // (the entry cap) come to 100 s, under the 120 s backstop. The final clock goes to stderr.
+    const pre =
+      "import atexit, sys, time\n" +
+      "_t = [0.0]\n" +
+      "def _mono():\n    _t[0] += 0.002\n    return _t[0]\n" +
+      "time.monotonic = _mono\n" +
+      "atexit.register(lambda: sys.stderr.write('fake clock %.3f\\n' % _t[0]))\n" +
+      "sys.argv = [sys.argv[1], 'plan', sys.argv[2]]\n" +
+      "exec(compile(open(sys.argv[0]).read(), sys.argv[0], 'exec'), {'__name__': '__main__', '__file__': sys.argv[0]})\n";
+    const r = spawnSync(PY, ["-I", "-c", pre, SBX, f], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    assert.equal(r.status, 0, r.stderr);
+    const clock = Number((/fake clock ([0-9.]+)/.exec(r.stderr) || [])[1]);
+    assert.equal(JSON.parse(r.stdout).reason, null, "fake clock " + clock + " s");
+    assert.ok(clock > 3.5, "the walk spanned more than 3 s of the fake clock: " + r.stderr);
+  } finally {
+    x.done();
+  }
+});
+
+test("8.9.1 #115: a cap hit names the cap and what it measured", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  for (let i = 0; i < 520; i++) {
+    const dd = join(R, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  try {
+    const w = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }, x.d);
+    assert.match(w.out.reason, /^socket walk over its entry cap \(more than 50000 entries, after [0-9.]+ s CPU\)$/);
   } finally {
     x.done();
   }

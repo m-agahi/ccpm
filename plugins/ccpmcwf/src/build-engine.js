@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.0";
+const FLEET_VERSION = "8.9.1";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1724,7 +1724,7 @@ const PROGRAM_SHA256 = {
   "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
   "changed_defs": "1620b35da67564cb724336b773f5183d9587bf0eafee6c2e93158a84b8ade7af",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-  "cover_diff": "e30ad673f55e543b5623c2de1848de1db4657a6ba9b5925b5e04d02818b98f22",
+  "cover_diff": "1863425a52a6802613800a5bb04a77c32c79f5a5fd591ecacc83c9c8ce49e2db",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
   "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
@@ -1738,7 +1738,7 @@ const PROGRAM_SHA256 = {
   "hasher": "4aaebd06411d8b103d74aedeb07b43caed0b0cb7c930fadba2d03e97883a812c",
   "held_out": "bf0a828f8463a1029b29430e2e27c1d55b1df0cdb06bf193051a7d018103c8f0",
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-  "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
+  "mutants": "2109181e45ccb8a2d1e8e8fd292680c0603d104d777b61e75d8d68e92ade09ec",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "60f378be58e54214b9d8688a0ba905feac5ab053f7e52981faeb7cbd2970d6ff",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1760,8 +1760,8 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
   "ruleset_surface": "37fb467c0f9208ddd1b798cbba209cbf9732923bcd0bc25a407fbd2f3c46475b",
-  "sandbox": "2975f754fd997782358d9d687136b6b3652f6b4b6a1263f43572f6dccfb6d16a",
-  "scratch_copy": "7b2e4cdbec9ff611899cd195dea52455a62c4ce72e8daaed238770450b9bafdc",
+  "sandbox": "6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43",
+  "scratch_copy": "f5e0a7bc1b20ac3188cad8bd100436958fd825813667b894fa8af52742793046",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
   "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",

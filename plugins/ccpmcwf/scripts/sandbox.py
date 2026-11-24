@@ -66,6 +66,7 @@ except Exception:
 # stay readable). WHOLE roots (/var, /srv, /opt, /mnt, /media, /root, /home) are a tmpfs; only an approved
 # PATH or toolchain dir comes back. Every socket left visible (a bounded walk of /etc and /nix/var, joined with
 # /proc/net/unix) is masked by its real path; a walk error, a cap hit or an unreadable list refuses the run.
+# 8.9.1 (#115): the walk caps are 50,000 entries and 3 s of this process's CPU time (no longer wall clock).
 # The relay dir is 0700.
 import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, threading
 DSN = re.compile(r'mysql://([A-Za-z0-9_]{1,64}):([^@/\s]*)@127\.0\.0\.1:([0-9]{1,5})/([A-Za-z0-9_]{1,64})')
@@ -117,11 +118,15 @@ def unix_paths(f):
 # that can hold a socket are walked (small; the caps guard against abuse) and joined with SOCK_LIST
 WHOLE = ('/var', '/srv', '/opt', '/mnt', '/media', '/root', '/home')
 WALK = ('/etc', '/nix/var')
+# 8.9.1 (#115): the caps bound the walk's cost: entries, and this process's CPU time (a busy host stretches
+# the wall clock, never the CPU time: a wall-clock cap refused runs on loaded CI runners). The wall-clock cap
+# is only a backstop for a hung file system, far above any cost the CPU cap allows.
 WALK_CAP = (50000, 3.0)
+WALK_WALL = 120.0
 def walk_socks(roots, prune):
     # ([socket paths], None), or (None, why): a dir this uid can enter but not list, an error or a cap hit
     import time
-    t0, n, out = time.monotonic(), 0, []
+    t0, c0, n, out = time.monotonic(), time.process_time(), 0, []
     for root in roots:
         if not os.path.isabs(root) or os.path.islink(root) or not os.path.isdir(root):
             continue
@@ -139,8 +144,13 @@ def walk_socks(roots, prune):
                 return None, 'socket walk failed at %s: %s' % (d, e)
             for e in ents:
                 n += 1
-                if n > WALK_CAP[0] or time.monotonic() - t0 > WALK_CAP[1]:
-                    return None, 'socket walk over its caps (%d entries, %.0f s)' % WALK_CAP
+                cpu, wall = time.process_time() - c0, time.monotonic() - t0
+                if n > WALK_CAP[0]:
+                    return None, 'socket walk over its entry cap (more than %d entries, after %.2f s CPU)' % (WALK_CAP[0], cpu)
+                if cpu > WALK_CAP[1]:
+                    return None, 'socket walk over its CPU cap (%.0f s CPU, %d entries)' % (WALK_CAP[1], n)
+                if wall > WALK_WALL:
+                    return None, 'socket walk over its wall-clock backstop (%.0f s, %d entries; a hung file system?)' % (WALK_WALL, n)
                 try:
                     m = e.stat(follow_symlinks=False).st_mode
                 except OSError:

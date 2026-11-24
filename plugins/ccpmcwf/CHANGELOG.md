@@ -1,5 +1,32 @@
 # Changelog
 
+## [8.9.1] - 2026-11-24
+
+ccpmcwf 8.9.1 (yaadgaar `#115`): a busy host no longer degrades the sandboxed gate runs (coverage, mutation, the scratch-copy runs) to `not_run`. The dist stays at 479,110 B (cap 520,000 B, ADR-1353).
+
+### Fixed
+
+- `sandbox.py`: the socket walk (of `/etc` and `/nix/var`, before every sandboxed run) capped
+  its time in wall clock (3 s). On a loaded GitHub runner (`node --test` runs the test files in
+  parallel) the walk of a few thousand entries passed 3 s, so `plan` refused with
+  `socket walk over its caps (50000 entries, 3 s)` and `cover_diff` gave `not_run` (the
+  `8.0.0 G2-1` CI flake). The same could happen to a real run's gates on a busy host. The time
+  cap now counts this process's CPU time (`time.process_time`), which host load does not
+  stretch. The entry cap (50,000) and the CPU cap (3 s) are unchanged, so the cost bound is
+  the same. A 120 s wall-clock backstop remains for a hung file system.
+- A cap hit names the cap and what it measured: `over its entry cap (more than 50000 entries,
+after <n> s CPU)`, `over its CPU cap (3 s CPU, <n> entries)` or `over its wall-clock
+backstop`.
+- `cover_diff.py`, `mutants.py` and `scratch_copy.py` pin the new `sandbox.py` sha256.
+
+### Tests
+
+- `v820_hardening`: a plan run whose `time.monotonic` advances 2 ms per call (a loaded host,
+  made exact) walks 3,000 entries over more than 3 s of that clock and is not refused (red on
+  8.9.0 with the CI reason, with or without `/nix/var`); about 0.1-0.3 s idle. A cap hit names
+  the entry cap. The first SIGSTOP/SIGCONT throttle version (20,000 entries, 15-84 s) was red
+  on 8.9.0 only where a `/nix/var` walk added CPU.
+
 ## [8.9.0] - 2026-11-24
 
 ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 479,110 B (+4,203 B; cap 520,000 B, ADR-1353).
