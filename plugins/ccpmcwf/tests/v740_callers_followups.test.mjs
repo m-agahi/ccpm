@@ -3,15 +3,14 @@
 //   (SUMMARY_CAP_ONE; doctest_md can list many .md paths); two or more symbols keep 4096. This is
 //   a transport cap, not a gate: the content is still checked by count and sha256.
 // - C2 (item 3): the finding for auto hits over the caller read budget names the scratch file.
-//
-// dont_care: the finding's wording before the file name.
+//   8.5.3 (#111): auto hits no longer use the budget; C2 now checks they are read with no finding.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, SCRIPTS_SRC, happy, runOne, call, inputsOf, scratchRepo, sh, spawnSync, callersDisk, callersFileOf } from "./harness.mjs";
+import { ARGS, SCRIPTS_SRC, happy, runOne, scratchRepo, sh, spawnSync, callersDisk } from "./harness.mjs";
 
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 
@@ -51,15 +50,14 @@ test("7.4.0 #68 C1: one symbol alone over the one-symbol cap stops naming 16384 
 
 const docs = (x, n) => Array.from({ length: n }, (_, j) => "docs/" + x + "_" + String(j).padStart(3, "0") + ".md:1");
 
-test("7.4.0 #68 C2: auto hits over the read budget: the finding names the scratch file", async () => {
+// 8.5.3 (#111): auto hits no longer use the read budget, so this finding is gone; the 5 pages are read
+test("7.4.0 #68 C2 / 8.5.3: 210 auto hits (5 pages) are read outside the budget, with no finding", async () => {
   const s = happy();
   const x = "r_one";
   s["role:scope-and-plan"].changed_symbols = [{ symbol: x, occurrences: [{ at: docs(x, 1)[0], criterion: null, dont_care: "a doc" }] }];
   callersDisk(s, "infra:callers", { [x]: { hits: docs(x, 210), auto: docs(x, 210) } });
   const out = await runOne(s, ARGS);
-  const c = call(out, "role:scope-and-plan:audit-fix");
-  assert.ok(c, out.result.status + " " + out.result.reason);
-  const file = callersFileOf(inputsOf(call(out, "infra:callers:file").prompt).scratch_dir);
-  const f = inputsOf(c.prompt).prior_round.findings.map((y) => y.finding);
-  assert.ok(f.some((y) => y.startsWith(x + ": 210 doc or lock hit(s) left to auto dont_care are over the caller read budget") && y.includes(file)), f.join("\n") + "\nfile " + file);
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix"), out.result.status + " " + out.result.reason);
+  assert.equal(out.labels.filter((l) => l.startsWith("infra:callers:read:auto:")).length, 5, out.labels.join(", "));
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
 });

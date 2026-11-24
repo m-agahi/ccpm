@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.5.2";
+const FLEET_VERSION = "8.5.3";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -166,6 +166,8 @@ const CALLER_INLINE_CAP = 8192;
 const CALLER_SUMMARY_CAP_ONE = 16384;
 const CALLER_PAGE = 50;
 const CALLER_READ_BUDGET = 4;
+const CALLER_AUTO_PAGES_MAX = 20;
+const AUTO_READ_RE = /^infra:callers(:[a-z0-9-]+)*:read:auto:[0-9]+(:(digest|args)-retry)?$/;
 const CALLER_METHOD =
 "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -3371,6 +3373,7 @@ stopGate: null,
 review: null,
 repo: null,
 pathChecks: 0,
+autoReads: 0,
 buildResets: 0,
 buildScratch: null,
 testCmd: null,
@@ -3419,7 +3422,7 @@ gate(msg);
 stop(status, msg);
 }
 function capped() {
-return state.agents - state.pathChecks - state.buildResets - state.tail - !!state.lock;
+return state.agents - state.pathChecks - state.autoReads - state.buildResets - state.tail - !!state.lock;
 }
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
 function tailWriter(l) {
@@ -3472,6 +3475,7 @@ async function dispatch(label, prompt, opts) {
 const model = relayModel(label);
 const ic = infraCall(label, prompt, opts);
 if (TAIL_RE.test(label) || tailWriter(label)) state.tail++;
+else if (AUTO_READ_RE.test(label)) state.autoReads++;
 reserve(1, label);
 state.agents++;
 const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
@@ -4600,7 +4604,7 @@ return Array.from(new Set(xs)).sort(codePointCompare);
 const isStrList = (x) => Array.isArray(x) && x.every((v) => typeof v === "string");
 async function callerGrep(label, names, worktree, planPath, phaseName, expected, level) {
 const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [], unread: {}, paths: {} };
-const disk = { expected: expected && typeof expected === "object" ? expected : {}, pathLevel: level === "path", left: CALLER_READ_BUDGET, worktree, planPath, phaseName };
+const disk = { expected: expected && typeof expected === "object" ? expected : {}, pathLevel: level === "path", left: CALLER_READ_BUDGET, autoLeft: CALLER_AUTO_PAGES_MAX, worktree, planPath, phaseName };
 const per = CALLER_BATCH_SYMBOLS;
 const queue = [];
 for (let i = 0; i < names.length; i += per) queue.push({ part: names.slice(i, i + per), disk: false });
@@ -4682,7 +4686,7 @@ const live = part.filter((s) => r.capped.indexOf(s) < 0);
 const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
 const sumOf = (xs, k) => xs.reduce((a, s) => a + sm[s][k], 0);
 const unread = (xs, p) => {
-for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, auto_count: sm[s].auto_count, path_count: sm[s].path_count, file: r.file };
+for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, path_count: sm[s].path_count };
 };
 if (disk.pathLevel) {
 const P = {};
@@ -4719,8 +4723,6 @@ all.auto_dont_care[s] = [];
 }
 if (autoSet.length) {
 const got = await callerReadParts(lb, r.file, "auto", autoSet, sumOf(autoSet, "auto_count"), disk);
-if (!got) unread(autoSet, "auto");
-else
 for (const s of autoSet) {
 const A = got[s] || [];
 if (A.length !== sm[s].auto_count) halt("failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
@@ -4756,11 +4758,15 @@ return [];
 async function callerReadParts(lb, file, part, syms, total, disk) {
 const sorted = syms.slice().sort(codePointCompare);
 const pages = Math.max(1, Math.ceil(total / CALLER_PAGE));
-if (pages > disk.left) {
+if (part === "auto") {
+if (pages > disk.autoLeft)
+halt("needs_human", lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) need " + pages + " read(s); over the " + CALLER_AUTO_PAGES_MAX + " auto reads a caller check may take (" + disk.autoLeft + " left); map those hits in changed_symbols (dont_care with a reason; a full map needs no read) or split the change", "callers");
+disk.autoLeft -= pages;
+gate(lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) take " + pages + " read(s) outside the caller read budget and the agent cap");
+} else if (pages > disk.left) {
 gate(lb + ": the " + part + " lists of " + sorted.join(", ") + " need " + pages + " read(s); " + disk.left + " of the caller read budget (" + CALLER_READ_BUDGET + ") left; not read");
 return null;
-}
-disk.left -= pages;
+} else disk.left -= pages;
 const sj = JSON.stringify(sorted);
 const out = {};
 for (let k = 0; k < pages; k++) {
@@ -4819,10 +4825,7 @@ if (un) {
 findings.push({
 criterion: null,
 symbol: s.symbol,
-finding:
-un.part === "auto"
-? s.symbol + ": " + un.auto_count + " doc or lock hit(s) left to auto dont_care are over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map them in changed_symbols (dont_care with a reason); the hit list is in " + logPath(un.file)
-: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
+finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
 });
 continue;
 }

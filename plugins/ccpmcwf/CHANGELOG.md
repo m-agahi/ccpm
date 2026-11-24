@@ -1,5 +1,35 @@
 # Changelog
 
+## [8.5.3] - 2026-11-24
+
+ccpmcwf 8.5.3: doc and lock hits that the caller check auto-maps to dont_care no longer use the caller read budget (yaadgaar `#111`).
+
+### Fixed
+
+- yaadgaar `#111`: plan run wf_a5e02d51-28c (task `#108`) stopped `needs_human` with "changed_symbols misses
+  or misplaces occurrences: FLEET_VERSION: 19 doc or lock hit(s) left to auto dont_care are over the caller
+  read budget (4 reads of 50 entries)". A plan that bumps the version changes 16 or more pin symbols, so
+  the caller check splits them into batches on the disk path. All batches share one budget of 4 reads,
+  and each batch reads its `auto` lists before its `all` lists, so the first batch spent the budget and
+  the last batch could not read its auto lists. The re-planner cannot fix that stop.
+- The `auto` part (hits in doc and lock files, by the script's own list, never a doctest doc) is now
+  always read and never draws on `CALLER_READ_BUDGET`. Each auto read gets a gate line. Every check on
+  an auto read stays: the page shape, the digest and args checks, the count against `auto_count`, and the
+  sha256 of the planner's map plus the auto list against the summary (a mismatch goes to the `all` read).
+- Code hits keep the budget and the stop exactly as before: the `all` and `paths` reads still draw on the
+  4 reads, and a list over them still gives "re-grep and map every hit" (or the update-merge refusal).
+- Cost: one judge read dispatch per 50 doc or lock hits per caller check. These auto reads (and their
+  digest and args retries) sit outside the 100-agent run cap, like path checks (`state.autoReads`,
+  subtracted in `capped()`): plan and build share one cap in a same-run build, and the incident's re-plan
+  round alone would add 11 agents. Their own bound is `CALLER_AUTO_PAGES_MAX` = 20 pages (1000 hits) per
+  caller check; over it the run stops `needs_human` at the `callers` gate, naming the symbols and the hit
+  count (map those hits in changed_symbols, which needs no read, or split the change). The finding "N doc
+  or lock hit(s) left to auto dont_care are over the caller read budget" is gone.
+- Tests: `v853_caller_budget_doclock` replays the real hit list of the stopped batch, also as a same-run
+  plan+build under a lowered agent cap, and checks the 20-page auto bound
+  (`tests/fixtures/v853_callers_b3.json`); three `v720`/`v740` tests that asserted the old finding now
+  assert the reads and no finding.
+
 ## [8.5.2] - 2026-11-23
 
 ccpmcwf 8.5.2: the intake check for a required gate that the census reports unsupported ignores quoted and opted-out text (yaadgaar `#107`).
