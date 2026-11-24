@@ -1173,6 +1173,10 @@ re-run enters at or before the failed check:
   run-state mismatch.
 - A build that re-planned and built the new plan in the same run (unattended `plan_wrong`) also
   adds `confirm: "auto"`: no human confirmed that plan ref.
+- A relaxed plan built in the run (an unattended plan launch, or that in-run re-plan, whose gates
+  checked one approved, backed, fail-closed deviation per relaxed item) answers `none`: the relaxed
+  list is not sealed in the plan ref, and the build-mode gates of a re-run get no list, so they would
+  check less. `recover.args` never carries the list (the skill would relay it).
 
 The five transient sites and their re-entry: a read-only step's null result (`dispatch`,
 `callRole`, `retryOnDrift`: the step runs again in the re-run, before or after the freeze, from

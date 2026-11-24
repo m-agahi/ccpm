@@ -3400,6 +3400,7 @@ milestone:null,
 dirty:null,
 parkDirty:false,
 rerunOf:null,
+relaxed:null,
 review:null,
 repo:null,
 pathChecks:0,
@@ -3941,7 +3942,10 @@ if(state.checkpoint)a.checkpoint=state.checkpoint;
 }else if(state.launch!=="probe"){
 a.mode="build";
 a.plan_ref=state.buildRef;
-if(state.launch==="plan"||state.buildRef!==state.launchRef)a.confirm="auto";
+if(state.launch==="plan"||state.buildRef!==state.launchRef){
+a.confirm="auto";
+if(state.relaxed&&state.relaxed.length)return no("a relaxed re-plan: build mode cannot re-check its deviations");
+}
 if(state.milestone){
 if(state.dirty)return no("a coder or test writer ran after the run-state "+state.milestone);
 }else if(state.freezeDigest){
@@ -6254,6 +6258,7 @@ return awaiting("plan ready: confirm, then run mode build with plan_ref"+ledgerS
 }
 if(confirm==="default")gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
 phase("Auto-confirm");
+if(ua&&p.relaxed.length)state.relaxed=p.relaxed;
 const g=await autoGates({
 sfx:"",
 common,
@@ -8577,6 +8582,7 @@ else if(state.unattended){
 state.autoReplanned=true;
 autoDecide("plan_wrong","build",who+" re-plan "+n+": the auto gates, then the build in this run"+(prHead?"; the PR is open: the new commits go on its head "+prHead+", never force-pushed":""));
 reserve(autoGateAgents(p.planFacts.commands),"the re-plan's auto gates");
+if(p.relaxed.length)state.relaxed=p.relaxed;
 const g=await autoGates({sfx:":replan",common,mainWt:lay.mainWt,planCommit:newHead,brief,callerRepo:brief.repo,branch:lay.branch,defaultBranch:common.default_branch,criteria:p.criteria,planPath:p.planPath,planDiff:p.planDiff,planFacts:p.planFacts,files:p.testable.reduce((a,c)=>a.concat(c.test_files),[]),relaxed:p.relaxed});
 if(!g.ok)return autoFailResult(g,p.planPath,pc.tiny);
 Object.assign(state,{rounds:{tests:0,code:0},freezeDigest:null,gatesNotRun:null,gates:{},review:null});

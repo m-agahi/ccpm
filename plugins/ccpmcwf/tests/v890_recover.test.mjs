@@ -16,7 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARGS, PB, NONCE, DIST, HERE, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf, commitStub } from "./harness.mjs";
+import { ARGS, PB, NONCE, DIST, SOURCE, HERE, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf, commitStub } from "./harness.mjs";
 
 const SKILL = readFileSync(join(HERE, "..", "skills", "build-task", "SKILL.md"), "utf8");
 const README = readFileSync(join(HERE, "..", "README.md"), "utf8");
@@ -392,6 +392,64 @@ test("8.9.0 review: a stop after update-branch moved the worktree, before its ru
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.equal(out.result.recover.action, "none");
   assert.match(out.result.recover.why, /after the run-state written_back/);
+});
+
+// review B1 of #116: the relaxed list is not sealed in the plan ref, and the build-mode :rerun gates pass none;
+// a relaxed plan built in the run therefore never re-runs (none), and recover.args never carries relaxed
+const RELAXED = "criterion AC2 dropped";
+const DEV = { item: RELAXED, allowed_by: "task body: 'AC2 is out of scope'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "the task drops it" };
+const B1_WHY = "a relaxed re-plan: build mode cannot re-check its deviations";
+test("8.9.0 review B1: an unattended plan launch with a relaxed plan that stops in the build answers none", async () => {
+  const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
+  s["role:fleet-intent-judge"] = Object.assign({}, s["role:fleet-intent-judge"], { deviations: [DEV] });
+  s["role:fleet-code-judge:r1"] = [null];
+  // fault injection: the audited plan comes back relaxed (v630 drives a real relaxed re-plan; its dropped
+  // criterion would stop this scenario at the writers, before the build part this test needs)
+  const at = 'budgetStop("the plan commit");';
+  assert.equal(DIST.split(at).length, 2, "the dist holds the plan-commit budget check once");
+  s.__source = DIST.replace(at, at + "p.relaxed=[" + JSON.stringify(RELAXED) + "];");
+  assert.notEqual(s.__source, DIST);
+  const out = await runOne(s, Object.assign({}, ARGS, { unattended: true }));
+  assert.deepEqual(inputsOf(out.calls.find((c) => c.label === "role:fleet-intent-judge").prompt).relaxed, [RELAXED]);
+  assert.ok(out.labels.includes("role:fleet-code-judge:r1"), out.labels.join(", "));
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
+});
+
+test("8.9.0 review B1: an in-run re-plan with a relaxed list that stops in its build answers none", async () => {
+  const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  Object.assign(s, {
+    "role:fleet-code-judge:r1": [PLAN_WRONG, null],
+    "infra:replan-worktree": [{ status: "ok", reason: "ok", head: plan.result.plan_ref.plan_commit }, { status: "ok", reason: "ok", head: PC2 }],
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "a".repeat(64) },
+    "infra:commit-plan:replan": commitStub(s.__store, PC2, "a".repeat(64)),
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }),
+    "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "role:fleet-intent-judge:replan": Object.assign({}, s["role:fleet-intent-judge"], { deviations: [DEV] }),
+  });
+  // fault injection: the re-plan comes back relaxed (its maxRounds 0 run has no audit-fix round of its own)
+  const at = "maxRounds:0,\n});";
+  assert.equal(DIST.split(at).length, 2, "the dist holds the re-plan call once");
+  s.__source = DIST.replace(at, at + "\np.relaxed=[" + JSON.stringify(RELAXED) + "];");
+  assert.notEqual(s.__source, DIST);
+  const bargs = Object.assign({}, ARGS, { mode: "build", plan_ref: plan.result.plan_ref, unattended: true });
+  delete bargs.input;
+  const out = await runOne(s, bargs);
+  assert.deepEqual(inputsOf(out.calls.find((c) => c.label === "role:fleet-intent-judge:replan").prompt).relaxed, [RELAXED]);
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
+});
+
+test("8.9.0 review B1: recover.args never carries relaxed", () => {
+  const at = SOURCE.indexOf("function recoverOf(status) {");
+  const body = SOURCE.slice(at, SOURCE.indexOf("\n}\n", at));
+  assert.ok(at > 0 && body.length > 100);
+  assert.doesNotMatch(body, /a\.relaxed|relaxed:/);
 });
 
 test("8.9.0 review: the no-args return carries recover safety none", () => {

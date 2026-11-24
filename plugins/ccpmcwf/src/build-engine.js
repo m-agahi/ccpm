@@ -3807,6 +3807,8 @@ const state = {
   dirty: null,
   parkDirty: false,
   rerunOf: null,
+  // 8.9.0 (review B1 of #116): the relaxed list of a plan this run sent to autoGates (never relayed)
+  relaxed: null,
   review: null,
   // the repo the PATH re-checks name, and their count
   repo: null,
@@ -4438,7 +4440,11 @@ function recoverOf(status) {
     a.plan_ref = state.buildRef;
     // a plan launch that built in the same run: build mode runs the intent, command and scope gates again
     // (a build that re-planned in this run builds a ref no human confirmed: the same)
-    if (state.launch === "plan" || state.buildRef !== state.launchRef) a.confirm = "auto";
+    if (state.launch === "plan" || state.buildRef !== state.launchRef) {
+      a.confirm = "auto";
+      // review B1 of #116: the relaxed list is not sealed in the plan ref, and the build-mode gates get none
+      if (state.relaxed && state.relaxed.length) return no("a relaxed re-plan: build mode cannot re-check its deviations");
+    }
     if (state.milestone) {
       if (state.dirty) return no("a coder or test writer ran after the run-state " + state.milestone);
     } else if (state.freezeDigest) {
@@ -7031,6 +7037,8 @@ async function planMode(input, date) {
   }
   if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
   phase("Auto-confirm");
+  // 8.9.0 (review B1 of #116): a relaxed plan built in this run never re-runs (recoverOf)
+  if (ua && p.relaxed.length) state.relaxed = p.relaxed;
   const g = await autoGates({
     sfx: "",
     common,
@@ -9642,6 +9650,7 @@ async function replan(ctx) {
     state.autoReplanned = true;
     autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run" + (prHead ? "; the PR is open: the new commits go on its head " + prHead + ", never force-pushed" : ""));
     reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
+    if (p.relaxed.length) state.relaxed = p.relaxed;
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
     Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, gates: {}, review: null });

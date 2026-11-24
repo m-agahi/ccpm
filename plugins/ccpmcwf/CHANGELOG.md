@@ -2,7 +2,7 @@
 
 ## [8.9.0] - 2026-11-24
 
-ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,673 B (+2,766 B; cap 520,000 B, ADR-1353).
+ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,899 B (+2,992 B; cap 520,000 B, ADR-1353).
 
 ### Added
 
@@ -21,6 +21,10 @@ ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` 
   tests changed after it, a coder or test writer wrote after the last milestone, an update-branch
   merge moved the worktree before its re-review's run-state, or the plan park left the draft in the
   worktree. The no-args return carries `recover` too (safety, none).
+- A relaxed plan built in the run (unattended plan launch or in-run re-plan) answers `none` (review
+  B1 of #116): the relaxed list is not sealed in the plan ref, and the build-mode `:rerun` gates get
+  no list, so a re-run would skip the per-item deviation check. The list never goes into
+  `recover.args`.
 - `args.rerun_of` (any mode): a run nonce other than this run's (typeof checked before
   `NONCE_RE`). The engine records it in `auto_decisions` (gate `rerun`) and answers `none` to a
   second transient stop: at most one automatic re-run per user launch.
