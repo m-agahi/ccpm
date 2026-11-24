@@ -134,6 +134,7 @@ const SCENARIOS = {
 // 8.5.1 (yaadgaar #106): no prompt change; the gate_tools program pin and the version move, both masked; same call counts.
 // 8.5.2 (yaadgaar #107): no prompt change; the intake requirement check and the version move (masked); same call counts, no pin moves.
 // 8.5.3 (yaadgaar #111): no prompt change; the caller check reads auto (doc and lock) pages outside the read budget and the version moves (masked); same call counts, no pin moves.
+// 8.5.4 (yaadgaar #108 step 1): no prompt change; stop_gate names, the legacy plan_ref refusal text, the hasher pin and the version move (masked); same call counts, no pin moves.
 const PINS = {
   "plan then build (confirm ask)": { calls: 89, sha256: "99277c8163d0a0075275f24144ac940aab335d3f54fc0d12e20cdc916f1803b9" },
   "confirm auto (gates, then build in one run)": { calls: 89, sha256: "340658f9ba1e1ae48a67cd72ffda8e1a1b331d7262da590a89df56353a5cd1fc" },

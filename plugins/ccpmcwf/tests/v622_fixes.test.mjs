@@ -192,7 +192,7 @@ test("6.2.2 2107: a listed hook still failing in the last test round stops for a
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
   assert.match(out.result.reason, /pre_freeze_hooks still fail after 3 test round\(s\): tests\/test_a\.py \(cargo-fmt\)/);
   assert.ok(out.result.reason.includes("Diff in tests/test_a.py at line 13"), out.result.reason);
   assert.match(out.result.reason, /never frozen/);

@@ -265,12 +265,12 @@ test("6.0.0 2043: resumed at pr_open with no freeze ref -> the old resume stop",
   assert.ok(!out.labels.some((l) => /^role:fleet-coder/.test(l)));
 });
 
-test("6.0.0 2043: resumed at pr_open with the code rounds used up -> stop cap, no coder", async () => {
+test("6.0.0 2043: resumed at pr_open with the code rounds used up -> stop rounds (cap before 8.5.4), no coder", async () => {
   const { s, st, bargs } = await stoppedAtPr();
   rerun(s, Object.assign({}, st, { rounds: Object.assign({}, st.rounds, { code: 3 }) }));
   const out = await runOne(s, bargs);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
   assert.match(out.result.reason, /^code rounds exhausted \(3\)/);
   assert.ok(!out.labels.some((l) => /^role:fleet-coder/.test(l)));
 });

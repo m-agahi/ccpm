@@ -307,7 +307,7 @@ finds the files settled). A failure skips the test judge and sends a fix_tests r
 writers that own the failing files, each with only its own failures, the command to reproduce
 them and the rule to edit only its own test files; a whole-tree failure goes to every writer of
 the round. The round counts against the test rounds. A hook that still fails
-in the last round stops with `needs_human` (`stop_gate: cap`). The run never freezes while a
+in the last round stops with `needs_human` (`stop_gate: rounds`). The run never freezes while a
 listed hook fails on a test file: the coder may not edit a frozen file, and the commit hook would
 reject it. A listed id that the config at HEAD does not have, or whose `stages` (or the config's
 `default_stages`) exclude the pre-commit stage, stops with `needs_human` naming it and why
@@ -499,12 +499,13 @@ reads the ref back with `git cat-file tag`; the script checks that the commit ho
 The caller gets only a tiny `plan_ref`: `{branch, plan_commit, plan_ref, ref_sha256, repo}`, where
 `plan_ref` is `refs/fleet/<task id>/plan` and `ref_sha256` is the sha256 of the tag message bytes.
 The skill passes it back unchanged. A tiny ref with `ref_path` (2.0.1 to 2.1.3) stops with
-`needs_human` "plan_ref predates 2.1.4; re-run plan"; there is no compatibility path.
+`needs_human` "plan_ref from an unsupported fleet version; re-run plan"; there is no compatibility path.
 
 Since 2.0.3, `plan_facts` is
 `{allowed_additions, est_diff_lines, test_cmd, repo_obligations, commands}`, covered by the seal.
 Build mode refuses a ref without `test_cmd`, `repo_obligations` and `commands` (made by 2.0.2 or
-earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
+earlier) with `needs_human` "plan_ref from an unsupported fleet version; re-run plan" (8.5.4: one
+refusal for every ref from fleet 2.1.3 or earlier).
 
 ### confirm "auto"
 
@@ -547,7 +548,8 @@ skips preflight and workspace (already done in this run) and runs the shared ver
 Build mode with `confirm: "auto"` re-runs G1-G3 before any writer: intake re-reads the sealed task
 (`intake:rulings`, so new ledger rulings count), the script checks that it resolves to the same
 source and repo, and the intent judge runs again (`:rerun` labels). A failure returns the same
-`needs_human` shape. A ref made before 2.1.0 has no `plan_diff` and stops with "re-run plan".
+`needs_human` shape. A ref made before 2.1.0 has no `plan_diff` and stops with "plan_ref from an
+unsupported fleet version; re-run plan".
 
 ### Build mode
 
@@ -2103,10 +2105,12 @@ The script pins the role contract, not the prose:
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
   `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci`,
-  `merge` or `gates` (8.0.0: a gate program that errs or relays no digest-checked result twice)
-  (`null` when the run did not stop at one of them). A
-  cap stop names the gate that rejected the last round (hash, obligations gate, commit hook, push
-  hook or review).
+  `merge`, `gates` (8.0.0: a gate program that errs or relays no digest-checked result twice),
+  `audit` (8.5.4: the plan-audit verdict after the re-plan rounds), `rounds` (8.5.4: the test or
+  code rounds ran out) or `relay-size` (8.5.4: the hasher output is over the relay cap)
+  (`null` when the run did not stop at one of them). `cap` is the agent cap only, `hash` a hash
+  mismatch only. A rounds stop names the gate that rejected the last round (hash, obligations
+  gate, commit hook, push hook or review).
 
 ### Models
 
