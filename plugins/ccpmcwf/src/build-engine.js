@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.7.0";
+const FLEET_VERSION = "8.8.0";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1842,7 +1842,7 @@ function printedProgram(r) {
 // Halts unless `r` came from the shipped program `name`
 function requireProgram(r, name, label, status, stopGate) {
   const p = programProblem(r, name);
-  if (p) halt(status || "failed", label + ": " + p, stopGate || "contract");
+  if (p) halt("s", status || "failed", label + ": " + p, stopGate || "contract");
 }
 function progCmd(name, args) {
   if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + name + " cannot run");
@@ -2924,43 +2924,43 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
   // 6.2.2 review M2: the digest id, so a miscopied relay gets the one digest retry
   const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName, INFRA_AGENT, "format_files");
   if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
-    halt("failed", label + " returned no ran/stable/files/changed/refused");
+    halt("s", "failed", label + " returned no ran/stable/files/changed/refused");
   if (typeof r.hook_failed !== "boolean" || typeof r.hook_head !== "string" || typeof r.hook_sha256 !== "string" || !strsOf(r.hook_timeout) || typeof r.fix_timeout !== "boolean" || !strsOf(r.unknown_hooks) ||
       !Array.isArray(r.hook_failures) || !r.hook_failures.every((f) => strsOf(f) && f.length === 2))
-    halt("failed", label + " returned no hook_failed/hook_failures/hook_head/hook_sha256/hook_timeout/fix_timeout/unknown_hooks");
+    halt("s", "failed", label + " returned no hook_failed/hook_failures/hook_head/hook_sha256/hook_timeout/fix_timeout/unknown_hooks");
   requireProgram(r, "format_files", label);
-  if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result" + NOT_DIGEST);
+  if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("s", "failed", label + ": the relayed result" + NOT_DIGEST);
   // 6.2.2 (2107, ADR-1237; review L1, L2): a listed id the repo cannot run before commit, or a listed hook that timed out
   if (r.unknown_hooks.length)
-    halt("needs_human", label + ": the policy's pre_freeze_hooks names hook id(s) the repo cannot run at the pre-commit stage: " + r.unknown_hooks.join("; ") + "; fix the policy file or the config", "policy");
+    halt("s", "needs_human", label + ": the policy's pre_freeze_hooks names hook id(s) the repo cannot run at the pre-commit stage: " + r.unknown_hooks.join("; ") + "; fix the policy file or the config", "policy");
   // re-review D-L1: each phase names itself when it runs out of time
   if (r.fix_timeout)
-    halt("needs_human", label + ": the fixer hook runs ran out of time (each run at most " + FIX_RUN_TIMEOUT + " s, at most 3 runs); no hook result is trusted, fix or speed up the hooks", "hooks");
+    halt("s", "needs_human", label + ": the fixer hook runs ran out of time (each run at most " + FIX_RUN_TIMEOUT + " s, at most 3 runs); no hook result is trusted, fix or speed up the hooks", "hooks");
   if (r.hook_timeout.length)
-    halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s" + (/; the fixer runs took \d+ s/.test(r.note) ? r.note.slice(r.note.indexOf("; the fixer runs took")) : "") + "); a test file is never frozen unchecked: list a faster hook or none", "hooks");
-  if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
+    halt("s", "needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s" + (/; the fixer runs took \d+ s/.test(r.note) ? r.note.slice(r.note.indexOf("; the fixer runs took")) : "") + "); a test file is never frozen unchecked: list a faster hook or none", "hooks");
+  if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("s", "failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
   // the cache purge before the comparison
   if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
-    halt("failed", label + " returned no purged/purged_paths", "contract");
+    halt("s", "failed", label + " returned no purged/purged_paths", "contract");
   if (r.purged) gate(label + ": purged " + r.purged + " cache path(s) under hook paths: " + logPath(r.purged_paths.slice(0, 10).join(", ")));
   if (r.refused.length)
-    halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(r.refused.join(", ")) + "; no hook was run (" + r.note + ")", "hash");
+    halt("s", "needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(r.refused.join(", ")) + "; no hook was run (" + r.note + ")", "hash");
   if (!r.ran) {
     gate(label + ": fixer hooks not run (" + r.note + ")");
     return r;
   }
   const changed = r.changed.map((x) => normPath(String(x)));
   // the program lists the frozen paths a hook changed
-  if (!Array.isArray(r.frozen_changed) || r.frozen_changed.some((x) => typeof x !== "string")) halt("failed", label + " returned no frozen_changed list", "contract");
+  if (!Array.isArray(r.frozen_changed) || r.frozen_changed.some((x) => typeof x !== "string")) halt("s", "failed", label + " returned no frozen_changed list", "contract");
   const frozenHit = changed.filter((x) => (Array.isArray(frozenList) && frozenList.indexOf(x) >= 0) || r.frozen_changed.map(normPath).indexOf(x) >= 0);
   if (frozenHit.length)
-    halt("needs_human", label + ": a fixer hook changed frozen path(s) " + logPath(frozenHit.join(", ")) + " after freeze; never accepted", "hash");
+    halt("s", "needs_human", label + ": a fixer hook changed frozen path(s) " + logPath(frozenHit.join(", ")) + " after freeze; never accepted", "hash");
   // allowed null: the files the program passed to the hooks
   const allow = (allowed || r.files).map((x) => normPath(String(x)));
   const outside = changed.filter((x) => allow.indexOf(x) < 0);
   if (outside.length)
-    halt("needs_human", label + ": the fixer hooks changed path(s) outside the files they were given (" + logPath(allow.join(", ")) + "): " + logPath(outside.join(", ")), "scope");
-  if (!r.stable) halt("needs_human", label + ": the fixer hooks still rewrite files after 3 runs: " + logPath(changed.join(", ")), "commit");
+    halt("s", "needs_human", label + ": the fixer hooks changed path(s) outside the files they were given (" + logPath(allow.join(", ")) + "): " + logPath(outside.join(", ")), "scope");
+  if (!r.stable) halt("s", "needs_human", label + ": the fixer hooks still rewrite files after 3 runs: " + logPath(changed.join(", ")), "commit");
   gate(label + ": fixer hooks ran " + r.runs + "x on " + r.files.length + " file(s); " + (changed.length ? "reformatted " + logPath(changed.join(", ")) : "no change"));
   return r;
 }
@@ -3037,11 +3037,11 @@ async function chunkRounds(label, prefix, chunkDir, c, phaseName, step, what, no
     if (!bad) return r;
     // only a failed relay (the program's exit 3) steers a rewrite; with any other status the program may have written
     if (r.status !== "failed")
-      halt("failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the " + what + " may already be written", stopGate);
+      halt("s", "failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the " + what + " may already be written", stopGate);
     if (!bad.every((i) => Number.isInteger(i) && i >= 0 && i < c.chunks.length))
-      halt("failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of the " + what + " (0.." + (c.chunks.length - 1) + ")", stopGate);
+      halt("s", "failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of the " + what + " (0.." + (c.chunks.length - 1) + ")", stopGate);
     const ids = bad.filter((i, k) => bad.indexOf(i) === k).sort((a, b) => a - b);
-    if (round >= MAX_CHUNK_RETRIES) halt("failed", lbl + ": chunk(s) " + ids.join(", ") + " still do not match their sha256 after " + MAX_CHUNK_RETRIES + " rewrite rounds; " + none, stopGate);
+    if (round >= MAX_CHUNK_RETRIES) halt("s", "failed", lbl + ": chunk(s) " + ids.join(", ") + " still do not match their sha256 after " + MAX_CHUNK_RETRIES + " rewrite rounds; " + none, stopGate);
     gate(lbl + ": chunk(s) " + ids.join(", ") + " do not match their sha256; each goes to a fresh writer (round " + (round + 1) + ") on " + relayModel(prefix + ":r" + (round + 1) + "w0"));
     await writeChunksParallel(prefix, chunkDir, c, ids, phaseName, round + 1, what);
   }
@@ -3131,7 +3131,7 @@ async function ghEnsure(slugs, label, phaseName, soft) {
     const opts = { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "gh_identity", args };
     const r = soft ? await softDispatch(label, ghIdentityPrompt({ args }), opts) : await infra(label, ghIdentityPrompt({ args }), phaseName, JUDGE_AGENT, "gh_identity", args);
     const gp = r && r.status === "ok" ? ghCheckProblem(r, args) : "the step returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result");
-    if (gp && !soft) halt("failed", label + ": gh check unusable: " + gp, "contract");
+    if (gp && !soft) halt("s", "failed", label + ": gh check unusable: " + gp, "contract");
     if (gp) gate(label + ": gh check unusable: " + gp);
     else {
       state.gh = state.gh || { origin: null, repos: {} };
@@ -3394,10 +3394,10 @@ async function resetBuild(tag, keys, phaseName, site) {
   state.agents++;
   const ic = infraCall(label, buildDirPrompt({ args, repo: state.repo, token }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: phaseName });
   const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
-  if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
+  if (!r || r.status !== "ok") halt("s", "failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
   requireProgram(r, "build_dir", label);
   if (!relayDigestOk(r, progKeys("build_dir:reset"), "build_dir") || canonical(r.args) !== canonical(args) || canonical(r.dirs) !== canonical(keys.map(buildDirOf)))
-    halt("failed", label + ": the relayed result" + NOT_DIGEST + " or its arguments; the build dirs were not emptied");
+    halt("s", "failed", label + ": the relayed result" + NOT_DIGEST + " or its arguments; the build dirs were not emptied");
   const pc = r.path_check;
   // pathRelayProblem refuses a null, a non-object and a relay of another program, args or token
   if (pathRelayProblem(pc, [state.repo, token])) {
@@ -3439,10 +3439,10 @@ function purgePrompt(inputs) {
 
 async function purgeBytecode(label, worktree, phaseName) {
   const r = await infra(label, purgePrompt({ worktree }), phaseName, INFRA_AGENT);
-  if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
+  if (typeof r.purged !== "number") halt("s", "failed", label + " returned no purged count");
   // 7.3.0 (#9): purge.py's own count, digest-checked
   requireProgram(r, "purge", label);
-  if (canonical(r.args) !== canonical([worktree]) || !relayDigestOk(r, progKeys("purge"), "purge")) halt("failed", label + ": the relayed purge result" + NOT_DIGEST, "contract");
+  if (canonical(r.args) !== canonical([worktree]) || !relayDigestOk(r, progKeys("purge"), "purge")) halt("s", "failed", label + ": the relayed purge result" + NOT_DIGEST, "contract");
   gate(label + ": purged " + r.purged + " bytecode/cache paths");
   return r;
 }
@@ -3584,19 +3584,19 @@ function pathRelayProblem(pc, args) {
 function pathCheck(pc, repo, recheck) {
   const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
   const rp = pathRelayProblem(pc, recheck ? recheck.args : [repo]);
-  if (rp) halt("needs_human", NOT_SHIMMED + " (" + what + rp + ")", "iac");
+  if (rp) halt("s", "needs_human", NOT_SHIMMED + " (" + what + rp + ")", "iac");
   const tools = pc.tools;
   const keys = Object.keys(tools).sort();
   const at = recheck ? recheck.label + ": " : "";
   if (pc.path_problems.length)
-    halt("needs_human", NOT_SHIMMED + " (" + at + "PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
+    halt("s", "needs_human", NOT_SHIMMED + " (" + at + "PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
   const real = [];
   for (const k of keys) {
     const t = tools[k];
     if (t === null) continue;
     if (t.shim !== true) real.push(k + " at " + t.path);
   }
-  if (real.length) halt("needs_human", NOT_SHIMMED + " (" + at + real.join(", ") + ")", "iac");
+  if (real.length) halt("s", "needs_human", NOT_SHIMMED + " (" + at + real.join(", ") + ")", "iac");
   gate((recheck ? recheck.label : "PATH check") + ": every IaC tool on the agent PATH is a nix shim, or absent");
 }
 const PATH_RECHECK_SCHEMA = {
@@ -3641,9 +3641,9 @@ async function pathRecheckOne(site, label, model, phaseName, repo) {
 }
 function pathRecheckEnd(x) {
   const { r, label, token, repo } = x;
-  if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
+  if (r == null) halt("s", "needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
   if (r.status !== "ok")
-    halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
+    halt("s", "needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
   pathCheck(r, repo, { label, args: [repo, token] });
 }
 // the one check on RELAY_RETRY_MODEL after a first check gave no usable result
@@ -3752,7 +3752,13 @@ class Stop extends Error {
     this.reason = reason;
   }
 }
-function stop(status, reason) {
+// 8.8.0 (#108 step 5, ADR-1397): every stop site names its class in script code, first argument: "s" safety
+// (always stops), "m" mechanical, "t" transient, or a J_<NAME> judgment const (the class with its options);
+// no LLM sets or changes it. An unknown code is safety. docs/stop-classes.md lists every site.
+const STOP_CLASS = { s: "safety", m: "mechanical", t: "transient", j: "judgment" };
+function stop(cls, status, reason) {
+  state.stopClass = cls && cls.j ? "judgment" : STOP_CLASS[cls] || "safety";
+  if (cls && cls.j) state.options = cls.j;
   throw new Stop(status, reason);
 }
 
@@ -3777,6 +3783,7 @@ const state = {
   roleSha: null,
   refreezeLog: [],
   stopGate: null,
+  stopClass: null,
   review: null,
   // the repo the PATH re-checks name, and their count
   repo: null,
@@ -3839,11 +3846,23 @@ function unattendedOn(p, input) {
   state.runBudget = p && p.caps && p.caps.run_budget;
   if (state.unattended) gate("unattended mode on (" + state.unattended + ")");
 }
-function halt(status, msg, stopGate) {
+function halt(cls, status, msg, stopGate) {
   state.stopGate = STOP_GATES.indexOf(stopGate) >= 0 ? stopGate : null;
   gate(msg);
-  stop(status, msg);
+  stop(cls, status, msg);
 }
+// a judgment class: 2-3 options built in script code from known values (never relayed text)
+const J = (...o) => ({ j: o });
+const O_DIRECT = "make the change outside the fleet, as a direct reviewed PR";
+const O_DROP = "drop the task";
+const O_REPLAN = "edit the task text to settle this, then run plan again";
+const J_TASK = J(O_REPLAN, O_DIRECT, O_DROP);
+const J_SYMS = (s) => J("edit the task so the plan does not change " + ([].concat(s).filter((x) => SYMBOL_RE.test(x)).slice(0, 5).join(", ") || "these symbols") + " (narrower names or a smaller scope), then run plan again", O_DIRECT, O_DROP);
+const J_GATE = (g) => J("run again with unattended: the " + g + " gate is then listed in gates_not_run", "edit the task text so it does not require the " + g + " gate, then run plan again", O_DROP);
+const J_PR = J("fix the PR title or body by hand, then " + SAME_PLAN_REF, "close the PR, then " + SAME_PLAN_REF, O_DROP);
+const J_FIX = J("fix the findings on the PR by hand", "run plan again with the findings in the task text", O_DROP);
+const J_BASE = J("run plan again on the new base", "fix the PR by hand", O_DROP);
+const J_CI = J("fix the failing checks on the PR by hand", "run plan again with the CI failure in the task text", O_DROP);
 function capped() {
   // 8.0.1 (#76): the run lock claim sits outside the cap too
   return state.agents - state.pathChecks - state.autoReads - state.buildResets - state.tail - !!state.lock;
@@ -3863,11 +3882,11 @@ function budgetStop(at) {
   const cap = state.runBudget || RUN_BUDGET;
   if (n < cap) return;
   state.options = ["run again with the result's checkpoint or freeze_digest (when it has one): it resumes there", "raise run_budget in the policy file", "drop the task"];
-  halt("needs_human", "run budget: " + n + " output tokens of " + cap + " spent before " + at, "budget");
+  halt("s", "needs_human", "run budget: " + n + " output tokens of " + cap + " spent before " + at, "budget");
 }
 function reserve(n, what) {
   if (capped() + n > MAX_AGENTS)
-    halt(
+    halt("s",
       "needs_human",
       "agent cap " + MAX_AGENTS + " reached: " + capped() + " dispatched, " + n + " more needed for " + what,
       "cap",
@@ -3882,7 +3901,7 @@ function nonced(prompt, rule) {
 // an infra agent's prompt and opts
 function infraCall(label, prompt, opts) {
   const ps = programSlots(label, prompt, EMITTED_CMDS);
-  if (ps.missing.length) halt("failed", label + ": the prompt runs shipped program(s) " + ps.missing.join(", ") + " that PROGRAM_SLOTS does not place for this label", "contract");
+  if (ps.missing.length) halt("s", "failed", label + ": the prompt runs shipped program(s) " + ps.missing.join(", ") + " that PROGRAM_SLOTS does not place for this label", "contract");
   if (!ps.used.length) return { prompt: nonced(prompt), opts };
   return { prompt: nonced(prompt, fileShaRule(ps.used)), opts: Object.assign({}, opts, { schema: programSchema(opts.schema || { type: "object" }, ps.used) }) };
 }
@@ -3890,7 +3909,7 @@ function infraCall(label, prompt, opts) {
 // the INFRA_TIER model of an infra label
 function infraModel(label) {
   const hit = INFRA_TIER.find((e) => label.indexOf(e[0]) === 0);
-  if (!hit) halt("failed", "no INFRA_TIER entry for agent label " + label);
+  if (!hit) halt("s", "failed", "no INFRA_TIER entry for agent label " + label);
   return hit[1];
 }
 const REWRITE_RE = /^infra:(plan|state|park)-chunks.*:r[1-9][0-9]*w[0-9]+$/;
@@ -3907,7 +3926,7 @@ const TOK = {};
 let tokAt = null;
 const tokOn = () => typeof budget === "object" && !!budget && typeof budget.spent === "function";
 async function agentT(prompt, opts) {
-  if (!opts || AGENT_TYPES.indexOf(opts.agentType) < 0) halt("failed", "agent " + (opts && opts.label) + " has no ccpmcwf agent type (" + JSON.stringify(opts && opts.agentType) + ")", "contract");
+  if (!opts || AGENT_TYPES.indexOf(opts.agentType) < 0) halt("s", "failed", "agent " + (opts && opts.label) + " has no ccpmcwf agent type (" + JSON.stringify(opts && opts.agentType) + ")", "contract");
   if (tokOn() && tokAt === null) tokAt = budget.spent();
   const r = await agent(prompt, opts);
   if (tokOn()) {
@@ -3936,7 +3955,7 @@ async function dispatch(label, prompt, opts) {
     state.agents++;
     r = await agentT(ic.prompt + "\nA first dispatch of this step returned no result: run it again.", agentOpts(ic.opts, label, model));
   }
-  if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (r == null) halt(ic.opts.agentType === JUDGE_AGENT ? "t" : "s", "failed", "agent " + label + " returned no result");
   return digestRetry(label, prompt, opts, r, dispatch);
 }
 
@@ -4008,10 +4027,10 @@ async function softDispatch(label, prompt, opts) {
 // Role agents: the tier from the role file's DISPATCH line
 async function roleAgent(role, label, prompt, opts) {
   const at = ROLE_AGENT[role];
-  if (!at || (opts.agentType && opts.agentType !== at)) halt("failed", "role " + role + " (" + label + "): agent type " + opts.agentType + " is not its ROLE_AGENT type " + at, "contract");
+  if (!at || (opts.agentType && opts.agentType !== at)) halt("s", "failed", "role " + role + " (" + label + "): agent type " + opts.agentType + " is not its ROLE_AGENT type " + at, "contract");
   opts = Object.assign({}, opts, { agentType: at });
   const tier = state.models[role];
-  if (!tier) halt("needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
+  if (!tier) halt("s", "needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
   gate("model used: " + label + " -> " + tier.model);
   const r = await agentT(prompt, Object.assign({}, opts, { label, model: tier.model }));
   if (r != null || !tier.fallback) return r;
@@ -4044,7 +4063,7 @@ async function callRole(role, label, inputs, phaseName, agentType, deferCheck, n
   state.agents++;
   const prompt = rolePrompt(role, inputs);
   let r = await roleAgent(role, label, prompt, opts);
-  if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (r == null) halt(ROLE_AGENT[role] === JUDGE_AGENT ? "t" : "s", "failed", "agent " + label + " returned no result");
   if (!noRetry) r = await retryOnDrift(role, label, prompt, opts, r, buildKeys);
   if (deferCheck) return r;
   checkRole(role, r);
@@ -4115,7 +4134,7 @@ async function retryOnDrift(role, label, prompt, opts, r, buildKeys) {
   else await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
   state.agents++;
   const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
-  if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+  if (r2 == null) halt(ROLE_AGENT[role] === JUDGE_AGENT ? "t" : "s", "failed", "agent " + rl + " returned no result");
   gate(role + ": contract drift (" + d.detail + "); retried once");
   return r2;
 }
@@ -4127,8 +4146,8 @@ function checkRole(role, r) {
   const drift = contractProblem(role, r);
   if (!drift) return r;
   if (r.status === "failed" || r.status === "needs_human")
-    halt(r.status, roleStatusText(role, r) + " (also: " + drift + ")", "role");
-  halt("needs_human", drift, "contract");
+    halt("s", r.status, roleStatusText(role, r) + " (also: " + drift + ")", "role");
+  halt("s", "needs_human", drift, "contract");
 }
 
 function jsType(v) {
@@ -4146,7 +4165,7 @@ function typeMatches(prop, v) {
 
 function requireOk(who, r) {
   if (r.status === "ok") return r;
-  halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"), "role");
+  halt("s", r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"), "role");
 }
 async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const inputs = { worktree, test_files: testFiles, scratch_dir: scratchOf(worktree) };
@@ -4164,16 +4183,16 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   // hasher.py's fixed relay-cap marker
   if (r.status !== "ok" && typeof r.reason === "string" && r.reason.indexOf(RELAY_CAP_MARK) >= 0) {
     const m = /^FLEET_HASHER_RELAY_CAP: the hasher output is over the 65536-byte relay cap \(\d+ bytes; largest: ([a-z]+ \d+ keys(?:, [a-z]+ \d+ keys){0,2})\)$/.exec(r.reason.trim());
-    halt("needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it", "relay-size");
+    halt("m", "needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it", "relay-size");
   }
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
-    halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
+    halt("s", "failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   requireProgram(r, "hasher", "hasher " + label);
   if (!relayDigestOk(r, progKeys(baseTree ? "hasher:base" : "hasher"), "hasher"))
-    halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
+    halt("s", "failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
   // every fingerprint also hashes the shipped programs
   const sm = scriptsSummaryProblem(r.scripts, state.scriptsDir);
-  if (sm) halt("needs_human", "hasher " + label + ": " + sm, "hash");
+  if (sm) halt("s", "needs_human", "hasher " + label + ": " + sm, "hash");
   // every map is a summary
   const dir = scratchOf(worktree) + "/hashes/";
   const view = {};
@@ -4182,13 +4201,13 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     const fileOk = typeof g.file === "string" && (m === "ignored" ? new RegExp("^" + escapeRe(dir + "ignored-") + "[0-9a-f]{64}\\.json$").test(g.file) : g.file === dir + m + "-" + g.sha256 + ".json");
     const extraOk = m === "ignored" ? g.settings === null || typeof g.settings === "string" : m === "git" ? !!g.inline && typeof g.inline === "object" && Object.keys(g.inline).every((k) => (k === "core.hooksPath" || k.indexOf(FLEETREF) === 0) && typeof g.inline[k] === "string") : true;
     if (!Number.isInteger(g.count) || g.count < 0 || !SHA256_RE.test(g.sha256) || !fileOk || !extraOk)
-      halt("failed", "hasher " + label + " failed: the " + m + " summary " + JSON.stringify(g) + " is not {count, sha256, file" + (m === "ignored" ? ", settings" : m === "git" ? ", inline" : "") + "} under " + dir);
+      halt("s", "failed", "hasher " + label + " failed: the " + m + " summary " + JSON.stringify(g) + " is not {count, sha256, file" + (m === "ignored" ? ", settings" : m === "git" ? ", inline" : "") + "} under " + dir);
     HASH_FILES[m + ":" + g.sha256 + "/" + g.count] = g.file;
     view[m] = Object.assign({ [MAP_ALL]: g.sha256 + "/" + g.count }, m === "git" ? g.inline : {});
     if (m === "ignored" && g.settings !== null) view[m][SETTINGS_LOCAL] = g.settings;
   }
   const rr = Object.keys(view.git).filter((k) => k.indexOf(FLEETREF + "refs/replace/") === 0);
-  if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "refs");
+  if (rr.length) halt("s", "needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "refs");
   // 6.2.2 (2106, ADR-1235): only this run's refs/fleet/<own id>/* enter the gates; another run's refs in the shared git dir are not this run's roles'
   const own = state.ownRefs;
   if (own) {
@@ -4252,7 +4271,7 @@ async function expandKeys(keys, a, b, tag, phaseName, errGate, allow) {
       : r.total === 0 && r.allowed_changed === 0 ? "no key listed although the digests differ"
       : r.total === r.changed.length && r.allowed_changed === r.allowed.length && maps.find((m) => !listed.some((w) => w[0] === m)) ? "the " + maps.find((m) => !listed.some((w) => w[0] === m)) + " map changed but no key of it is listed" : null;
   }
-  if (why && errGate) halt("needs_human", "hasher maps " + tag + ": the " + maps.join(", ") + " map(s) changed and the key list is unavailable: " + why + "; a key is never routed unseen", errGate);
+  if (why && errGate) halt("s", "needs_human", "hasher maps " + tag + ": the " + maps.join(", ") + " map(s) changed and the key list is unavailable: " + why + "; a key is never routed unseen", errGate);
   const out = [];
   for (const x of keys) {
     if (x.key !== MAP_ALL) out.push(x);
@@ -4287,7 +4306,7 @@ async function infra(label, prompt, phaseName, agentType, digest, args, route) {
   if (digest) opts.digest = digest;
   if (args) opts.args = args;
   const r = await dispatch(label, prompt, opts);
-  if (r.status !== "ok" && !programErrorRelay(r, digest || route, args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok" && !programErrorRelay(r, digest || route, args)) halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   if (r.status !== "ok") {
     gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
     return Object.assign({}, r, { status: "ok" });
@@ -4316,7 +4335,7 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
     if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
     if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
     what = what.concat(keyNames(await expandKeys(changedKeys(before.hashes, after.hashes, worktree), before.hashes, after.hashes, roundTag, phaseName)));
-    halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + logPath(what.join(", ")) + "; verdict discarded", "fingerprint");
+    halt("s", "needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + logPath(what.join(", ")) + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
   collect(role, r);
@@ -4356,6 +4375,7 @@ function finish(status, reason) {
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
     stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
+    stop_class: status === "ok" || status === "awaiting_confirmation" ? null : state.stopClass || "safety",
     review: state.review,
     // the ROLE_SHA256 pins preflight found the role files at
     role_sha256: state.roleSha,
@@ -4422,9 +4442,9 @@ async function preflightStep(repo) {
     gate("preflight: the agent " + sp.relay + "; retried once");
     pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
     sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
-    if (sp.relay) halt("needs_human", "preflight: " + sp.problem + " (after one retry); the scripts on disk were not checked, so re-run /build-task", "contract");
+    if (sp.relay) halt("s", "needs_human", "preflight: " + sp.problem + " (after one retry); the scripts on disk were not checked, so re-run /build-task", "contract");
   }
-  if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install " + PLUGIN_NAME + " " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
+  if (sp.problem) halt("s", "needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install " + PLUGIN_NAME + " " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
   state.scriptsDir = sp.dir;
   state.rolesDir = sp.rolesDir;
   gate("scripts_dir: " + state.scriptsDir);
@@ -4452,7 +4472,7 @@ async function preflightStep(repo) {
   for (const role of ROLES) {
     const line = ROLE_DISPATCH[role];
     const t = parseDispatch(line);
-    if (!t) halt("needs_human", "role " + role + " has no usable DISPATCH line (" + JSON.stringify(line || null) + "); no tier is hardcoded", "contract");
+    if (!t) halt("s", "needs_human", "role " + role + " has no usable DISPATCH line (" + JSON.stringify(line || null) + "); no tier is hardcoded", "contract");
     state.models[role] = t;
     gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
@@ -4523,7 +4543,7 @@ async function runGate(label, slots, phase) {
   if (bad().length) {
     gate(label + ": no usable result for " + bad().join(", ") + "; dispatched once more (" + label + DIGEST_RETRY + ")");
     r = await dispatch(label + DIGEST_RETRY, gatePrompt(slots) + "\nA first run gave no usable result: run each command again and copy every value exactly.", opts);
-    if (bad().length) halt("needs_human", label + ": gate " + bad().join(", ") + " erred or relayed no digest-checked result twice", "gates");
+    if (bad().length) halt("s", "needs_human", label + ": gate " + bad().join(", ") + " erred or relayed no digest-checked result twice", "gates");
   }
   for (const s of slots) {
     const g = s[0], x = gateResult(r, s);
@@ -4534,7 +4554,7 @@ async function runGate(label, slots, phase) {
     gate("gate " + g + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
     // G2 ruling: base green, judged tree red; or a result lost after an earlier one
     if (/^tree red/.test(x.reason) || (x.status === "not_run" && p) || (x.status === "partial" && p & 6))
-      halt("needs_human", label + ": gate " + g + " " + x.status + " (" + x.reason + ")" + (p ? " after an earlier round's result" : ""), "gates");
+      halt("s", "needs_human", label + ": gate " + g + " " + x.status + " (" + x.reason + ")" + (p ? " after an earlier round's result" : ""), "gates");
   }
 }
 // 8.0.0 (G1, ADR-1316): the findings no ruling covers; a ruling names the finding's id and gives a reason
@@ -4579,23 +4599,23 @@ async function heldOutRun(ref, m, inputs) {
   const r = await roleAgent(RUNNER, label, rolePrompt(RUNNER, Object.assign(inputs, { task_id: ref.task_id, plan_sha256: ref.plan_sha256, held_out: ho, held_out_cmd: scratchCopyCmd("held_out") }, roleEnv("hrun", k, Object.fromEntries("HOME TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME".split(" ").map((v) => [v, buildDirOf(k) + "/" + v]))))), { schema: SCHEMAS[RUNNER], phase: "Code", agentType: JUDGE_AGENT });
   // the role's own text is never shown: it may hold example text
   const st = r && r.status === "failed" ? "failed" : "needs_human";
-  if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
-  if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
-  const stop = (why) => halt(st, label + ": " + why, "gates");
-  if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
+  if (!r || r.status !== "ok") halt("s", st, label + " returned " + st, "role");
+  if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt("s", st, label + ": contract drift", "contract");
+  const hoStop = (why) => halt("s", st, label + ": " + why, "gates");
+  if (r.store === "missing") return prev.seen ? hoStop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
   // 8.1.0 (#75): scratch_copy.py sandbox-run refused (no bwrap, a failed self-check); no example ran
-  if (r.store === "sandbox") return prev.seen ? stop("sandbox unavailable after an earlier round ran") : nr("sandbox unavailable: no bwrap sandbox for the held-out runs");
+  if (r.store === "sandbox") return prev.seen ? hoStop("sandbox unavailable after an earlier round ran") : nr("sandbox unavailable: no bwrap sandbox for the held-out runs");
   // car F (B-M1, review): a test run that hit its deadline is no failing example and no not_run (code under test can hang): a stop
-  if (r.store === "timeout") stop("a held-out test run hit its deadline");
+  if (r.store === "timeout") hoStop("a held-out test run hit its deadline");
   // mismatch: the store file does not match the sealed sha256; error: any other refusal of held_out.py show
-  if (r.store !== "ok") stop("held_out.py show: store " + r.store);
-  if (r.store_digest !== ho.sha256) stop("store_digest off the seal");
+  if (r.store !== "ok") hoStop("held_out.py show: store " + r.store);
+  if (r.store_digest !== ho.sha256) hoStop("store_digest off the seal");
   // exactly indexes 0..n-1 of each sealed criterion, each once, pass a boolean
   const pc = ho.per_criterion;
   const res = (r.results || []).map((x) => ({ criterion: (x = x || {}).criterion, index: x.index, pass: x.pass }));
   const want = [].concat(...Object.keys(pc).map((c) => Array.from({ length: pc[c] }, (_, i) => canonical([c, i])))).sort();
   if (canonical(res.map((x) => canonical([x.criterion, x.index])).sort()) !== canonical(want) || res.some((x) => [true, false].indexOf(x.pass) < 0))
-    stop("results off the sealed per_criterion");
+    hoStop("results off the sealed per_criterion");
   const fails = Object.keys(pc).filter((c) => res.some((x) => x.criterion === c && !x.pass));
   set(fails.length ? "failed" : "ran", res.filter((x) => x.pass).length + " of " + res.length + " pass", fails);
   return { status: "ran", reason: null, results: res };
@@ -4642,7 +4662,7 @@ async function pushProbe(lay, ws) {
   if (!relayDigestOk(r, progKeys("push:probe"), "push") || canonical(r.args) !== canonical(args))
     return unknown(label + ": the relayed result" + NOT_DIGEST + " or args");
   if (r.access === "denied")
-    halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again", "push");
+    halt("s", "needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again", "push");
   if (r.access !== "ok") return unknown("dry run " + r.result + " (exit " + r.exit_code + ")");
   gate("push access ok: dry run " + r.result + " (exit " + r.exit_code + ")");
 }
@@ -4662,9 +4682,9 @@ async function workspaceStep(repo, lay, wopt) {
     "Workspace",
     INFRA_AGENT,
   );
-  if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
-  if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
-  if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
+  if (!ws.default_branch || !ws.base_ref) halt("s", "failed", "workspace returned no default_branch/base_ref");
+  if (!ws.remote_slug) halt("s", "needs_human", "workspace found no origin remote owner/name (remote_slug)");
+  if (ws.default_branch === lay.branch) halt("s", "needs_human", "fleet branch equals the default branch " + ws.default_branch);
   gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
   if (ws.fast_forwarded === true) gate("workspace: fast-forwarded to origin/" + ws.default_branch);
   // 7.3.0 (#9): housekeeping; an unusable relay is a warning line, never a stop
@@ -4689,7 +4709,7 @@ async function workspaceStep(repo, lay, wopt) {
   // origin is the slug (a relay that differs beyond case or .git stops)
   const sameSlug = (a, b) => String(a).toLowerCase().replace(/\.git$/, "") === String(b).toLowerCase().replace(/\.git$/, "");
   if (o !== null && !sameSlug(o, ws.remote_slug))
-    halt("needs_human", "workspace: the digest-checked gh check read origin " + o + ", but the workspace relayed remote_slug " + ws.remote_slug + "; check the origin remote of " + repo);
+    halt("s", "needs_human", "workspace: the digest-checked gh check read origin " + o + ", but the workspace relayed remote_slug " + ws.remote_slug + "; check the origin remote of " + repo);
   const slug = o !== null ? o : ws.remote_slug;
   if (o !== null) gate("workspace: GitHub command for " + slug + ": " + (ghFor(slug).gh_cmd || "none") + (ghFor(slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(slug));
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "", urlRead: urlOk };
@@ -4704,9 +4724,9 @@ async function lockClaim(repo, task, ph) {
   requireProgram(r, "parked", "infra:run-lock");
   // a relay that claimed is released (nonce-matched), even when it fails its check
   if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
-  if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("failed", "infra:run-lock: relay off its digest or args");
+  if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("s", "failed", "infra:run-lock: relay off its digest or args");
   const h = r.held_by || {};
-  if (!r.claimed) halt("needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); a closed session does not end a run: check /workflows (or the run's task output) for run " + h.nonce + " before you delete " + r.lock);
+  if (!r.claimed) halt("s", "needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); a closed session does not end a run: check /workflows (or the run's task output) for run " + h.nonce + " before you delete " + r.lock);
   gate("run lock " + r.lock + " claimed" + (r.stale ? ", stale one moved" : ""));
 }
 // main's finally: release a lock this run holds; never halts
@@ -4730,13 +4750,13 @@ async function branchSlug(repo, names) {
   const r = await infra("infra:fleet-branch", INFRA_STEP + "list the local fleet branches of this task. Read only.\n" + inputsLine({ repo, task_id: names.taskId, source: names.source }) + RUN_EXACT + progCmd("fleet_branch", args) + "\n" + PRINTS_ONE + printsKeys("fleet_branch") + '. Return {status: "ok", reason, ' + returnKeys("fleet_branch") + "}" + COPY_DIGEST, "Intake", JUDGE_AGENT, "fleet_branch", args);
   requireProgram(r, "fleet_branch", "infra:fleet-branch");
   if (!relayDigestOk(r, progKeys("fleet_branch"), "fleet_branch") || canonical(r.args) !== canonical(args) || !strsOf(r.slugs) || !strsOf(r.owned) || r.owned.some((x) => r.slugs.indexOf(x) < 0))
-    halt("failed", "infra:fleet-branch: the relay" + NOT_DIGEST + " or arguments");
+    halt("s", "failed", "infra:fleet-branch: the relay" + NOT_DIGEST + " or arguments");
   const d = names.slug;
   const s = r.owned.filter((x) => x && x === slugify(x));
   if (r.slugs.some((x) => x !== d && s.indexOf(x) < 0)) gate("branch slug: fleet branches with no proof they are task " + names.taskId + "'s are not adopted: " + r.slugs.filter((x) => x !== d && s.indexOf(x) < 0).join(", "));
   const br = (x) => "fleet/" + names.taskId + "-" + x;
   if (!s.length || s.indexOf(d) >= 0) return d;
-  if (s.length > 1) halt("needs_human", "several fleet branches of task " + names.taskId + " and none is " + br(d) + ": " + s.map(br).join(", ") + "; delete the stale ones, then re-run plan");
+  if (s.length > 1) halt("s", "needs_human", "several fleet branches of task " + names.taskId + " and none is " + br(d) + ": " + s.map(br).join(", ") + "; delete the stale ones, then re-run plan");
   gate("branch slug " + s[0] + " adopted from existing " + br(s[0]) + " (intake gave " + d + ")");
   return s[0];
 }
@@ -4959,14 +4979,14 @@ const CRIT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 // out (plan mode, 8.5.5): the id and overlap problems go there as findings; a sealed ref halts
 function normCriteria(raw, testCmd, out) {
   const seen = {};
-  const bad = (m) => (out ? out.push({ criterion: null, finding: m }) : halt("needs_human", m));
+  const bad = (m) => (out ? out.push({ criterion: null, finding: m }) : halt("s", "needs_human", m));
   const criteria = raw.map((c) => {
     const id = String((c && c.id) || "");
     if (!CRIT_ID_RE.test(id)) bad("criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) bad("duplicate criterion id " + id);
     seen[id] = true;
     const ta = criterionTestArgsProblem(testCmd, c);
-    if (ta) halt("needs_human", "criterion " + id + " " + ta, "commands");
+    if (ta) halt("s", "needs_human", "criterion " + id + " " + ta, "commands");
     const kept = stripHeldOut(c);
     if (kept.test_args === null) delete kept.test_args;
     return Object.assign(kept, {
@@ -4984,7 +5004,7 @@ function testableOf(criteria) {
   const testable = criteria.filter((c) => c.test_files.length);
   for (const c of criteria)
     if (!c.test_files.length) gate("criterion " + c.id + " has no test_files ([manual]): no writer");
-  if (!testable.length) halt("needs_human", "full path but no testable criteria (all [manual])");
+  if (!testable.length) halt(J_TASK, "needs_human", "full path but no testable criteria (all [manual])");
   return testable;
 }
 
@@ -5249,16 +5269,16 @@ async function callerGrep(label, names, worktree, planPath, phaseName, expected,
       queue.unshift(...(await callerDisk(lb, part, disk, all)));
       continue;
     }
-    if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", lb + " returned " + r.status + ": " + (r.reason || "no reason"));
+    if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", lb + " returned " + r.status + ": " + (r.reason || "no reason"));
     const occ = r.occurrences;
     if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
-      halt("failed", lb + " returned no occurrences map or capped list");
+      halt("s", "failed", lb + " returned no occurrences map or capped list");
     for (const n of part)
       if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
-        halt("failed", lb + " returned no occurrence list for " + n);
+        halt("s", "failed", lb + " returned no occurrence list for " + n);
     requireProgram(r, "callers", lb);
     if (!relayDigestOk(r, progKeys("callers"), "callers"))
-      halt("failed", lb + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+      halt("s", "failed", lb + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
     const adc = r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
     for (const n of part) {
       all.occurrences[n] = occ[n];
@@ -5282,27 +5302,27 @@ async function callerDisk(lb, part, disk, all) {
   const args = [disk.worktree, disk.planPath, JSON.stringify(part), String(MAX_SYMBOL_HITS), scratch];
   const r = await dispatch(fl, callersFilePrompt({ worktree: disk.worktree, plan_path: disk.planPath, symbols: part, cap: MAX_SYMBOL_HITS, scratch_dir: scratch }), { schema: INFRA_SCHEMA, phase: disk.phaseName, agentType: JUDGE_AGENT, digest: "callers:file", args });
   if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
-    if (part.length === 1) halt("needs_human", fl + ": the caller summary of " + part[0] + " is over the " + CALLER_SUMMARY_CAP_ONE + "-byte summary cap; the caller check cannot relay it", "callers");
+    if (part.length === 1) halt(J_SYMS(part[0]), "needs_human", fl + ": the caller summary of " + part[0] + " is over the " + CALLER_SUMMARY_CAP_ONE + "-byte summary cap; the caller check cannot relay it", "callers");
     gate(fl + ": " + part.length + " symbols are over the summary cap; split in two");
     return [{ part: part.slice(0, part.length >> 1), disk: true }, { part: part.slice(part.length >> 1), disk: true }];
   }
-  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", fl + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", fl + " returned " + r.status + ": " + (r.reason || "no reason"));
   requireProgram(r, "callers", fl);
-  if (!relayDigestOk(r, progKeys("callers:file"), "callers")) halt("failed", fl + ": the relayed summary" + NOT_DIGEST);
+  if (!relayDigestOk(r, progKeys("callers:file"), "callers")) halt("s", "failed", fl + ": the relayed summary" + NOT_DIGEST);
   // A2: digestRetry returns its args retry unchecked
-  if (canonical(r.args) !== canonical(args)) halt("failed", fl + ": " + OTHER_ARGS + " (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+  if (canonical(r.args) !== canonical(args)) halt("s", "failed", fl + ": " + OTHER_ARGS + " (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
   const pre = scratch + "/callers/callers-";
   if (typeof r.file !== "string" || r.file.slice(0, pre.length) !== pre || !/^[0-9a-f]{64}\.json$/.test(r.file.slice(pre.length)))
-    halt("failed", fl + ": the callers file " + JSON.stringify(r.file === undefined ? null : r.file) + " is not " + pre + "<64 lowercase hex>.json");
+    halt("s", "failed", fl + ": the callers file " + JSON.stringify(r.file === undefined ? null : r.file) + " is not " + pre + "<64 lowercase hex>.json");
   const sm = r.symbols && typeof r.symbols === "object" && !Array.isArray(r.symbols) ? r.symbols : {};
   const cnt = (x) => Number.isInteger(x) && x >= 0;
   const hex = (x) => typeof x === "string" && SHA256_RE.test(x);
   for (const s of part) {
     const e = Object.prototype.hasOwnProperty.call(sm, s) ? sm[s] : null;
     if (!e || typeof e !== "object" || !cnt(e.count) || !hex(e.sha256) || !cnt(e.auto_count) || e.auto_count > e.count || !cnt(e.path_count) || e.path_count > e.count || !hex(e.paths_sha256))
-      halt("failed", fl + ": the summary has no valid entry for " + s);
+      halt("s", "failed", fl + ": the summary has no valid entry for " + s);
   }
-  if (!isStrList(r.capped) || !isStrList(r.doctest_md)) halt("failed", fl + ": the summary has no capped or doctest_md string list");
+  if (!isStrList(r.capped) || !isStrList(r.doctest_md)) halt("s", "failed", fl + ": the summary has no capped or doctest_md string list");
   callerMerge(all, r.capped, r.doctest_md);
   const live = part.filter((s) => r.capped.indexOf(s) < 0);
   const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
@@ -5325,7 +5345,7 @@ async function callerDisk(lb, part, disk, all) {
     for (const s of differ) {
       const Q = got[s] || [];
       if (Q.length !== sm[s].path_count || sha256Hex(canonical(Q)) !== sm[s].paths_sha256)
-        halt("failed", lb + ":read:paths: the read occurrences of " + s + " do not match the summary count or sha256");
+        halt("s", "failed", lb + ":read:paths: the read occurrences of " + s + " do not match the summary count or sha256");
       all.paths[s] = Q;
     }
     return [];
@@ -5350,7 +5370,7 @@ async function callerDisk(lb, part, disk, all) {
     const got = await callerReadParts(lb, r.file, "auto", autoSet, sumOf(autoSet, "auto_count"), disk);
     for (const s of autoSet) {
       const A = got[s] || [];
-      if (A.length !== sm[s].auto_count) halt("failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
+      if (A.length !== sm[s].auto_count) halt("s", "failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
       const U = uniqSorted(E[s].concat(A));
       if (U.length === sm[s].count && sha256Hex(canonical(U)) === sm[s].sha256) {
         all.occurrences[s] = U;
@@ -5367,13 +5387,13 @@ async function callerDisk(lb, part, disk, all) {
       for (const s of allSet) {
         const H = got[s] || [];
         if (H.length !== sm[s].count || sha256Hex(canonical(H)) !== sm[s].sha256)
-          halt("failed", lb + ":read:all: the read occurrences of " + s + " do not match the summary count or sha256");
+          halt("s", "failed", lb + ":read:all: the read occurrences of " + s + " do not match the summary count or sha256");
         // cut (c): the auto hits by the script's own doc and lock list; callerCheck re-checks each one
         const auto = H.filter((h) => {
           const p = h.slice(0, h.lastIndexOf(":"));
           return docOrLockFile(p) && doctest.indexOf(normPath(p)) < 0;
         });
-        if (auto.length !== sm[s].auto_count) halt("failed", lb + ":read:all: the auto hits of " + s + " do not match the summary auto_count");
+        if (auto.length !== sm[s].auto_count) halt("s", "failed", lb + ":read:all: the auto hits of " + s + " do not match the summary auto_count");
         all.occurrences[s] = H;
         all.auto_dont_care[s] = auto;
       }
@@ -5390,7 +5410,7 @@ async function callerReadParts(lb, file, part, syms, total, disk) {
   const pages = Math.max(1, Math.ceil(total / CALLER_PAGE));
   if (part === "auto") {
     if (pages > disk.autoLeft)
-      halt("needs_human", lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) need " + pages + " read(s); over the " + CALLER_AUTO_PAGES_MAX + " auto reads a caller check may take (" + disk.autoLeft + " left); map those hits in changed_symbols (dont_care with a reason; a full map needs no read) or split the change", "callers");
+      halt(J_SYMS(sorted), "needs_human", lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) need " + pages + " read(s); over the " + CALLER_AUTO_PAGES_MAX + " auto reads a caller check may take (" + disk.autoLeft + " left); map those hits in changed_symbols (dont_care with a reason; a full map needs no read) or split the change", "callers");
     disk.autoLeft -= pages;
     gate(lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) take " + pages + " read(s) outside the caller read budget and the agent cap");
   } else if (pages > disk.left) {
@@ -5403,10 +5423,10 @@ async function callerReadParts(lb, file, part, syms, total, disk) {
     const rl = lb + ":read:" + part + ":" + k;
     const args = [file, part, sj, String(k)];
     const r = await dispatch(rl, callersReadPrompt({ file, part, symbols: sorted, page: k }), { schema: INFRA_SCHEMA, phase: disk.phaseName, agentType: JUDGE_AGENT, digest: "callers:read", args });
-    if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", rl + " returned " + r.status + ": " + (r.reason || "no reason"));
+    if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", rl + " returned " + r.status + ": " + (r.reason || "no reason"));
     requireProgram(r, "callers", rl);
-    if (!relayDigestOk(r, progKeys("callers:read"), "callers")) halt("failed", rl + ": the relayed page" + NOT_DIGEST);
-    if (canonical(r.args) !== canonical(args)) halt("failed", rl + ": " + OTHER_ARGS + " (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+    if (!relayDigestOk(r, progKeys("callers:read"), "callers")) halt("s", "failed", rl + ": the relayed page" + NOT_DIGEST);
+    if (canonical(r.args) !== canonical(args)) halt("s", "failed", rl + ": " + OTHER_ARGS + " (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
     const pg = r.page;
     const hits = r.hits;
     if (
@@ -5415,7 +5435,7 @@ async function callerReadParts(lb, file, part, syms, total, disk) {
       !hits || typeof hits !== "object" || Array.isArray(hits) ||
       Object.keys(hits).some((s) => sorted.indexOf(s) < 0 || !isStrList(hits[s]))
     )
-      halt("failed", rl + ": the read page does not match the request (part " + part + ", page " + k + " of " + pages + ", symbols " + sorted.join(", ") + ")");
+      halt("s", "failed", rl + ": the read page does not match the request (part " + part + ", page " + k + " of " + pages + ", symbols " + sorted.join(", ") + ")");
     for (const s of sorted) if (hits[s]) out[s] = (out[s] || []).concat(hits[s]);
   }
   return out;
@@ -5435,7 +5455,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
     for (const h of Array.isArray(adc[n]) ? adc[n] : []) {
       const p = typeof h === "string" ? h.slice(0, h.lastIndexOf(":")) : "";
       if (typeof h !== "string" || occ[n].indexOf(h) < 0 || !docOrLockFile(p) || doctest.indexOf(normPath(p)) >= 0)
-        halt("failed", label + ": the program listed " + JSON.stringify(h) + " as auto dont_care for " + n + ", which the script's doc and lock file list refuses");
+        halt("s", "failed", label + ": the program listed " + JSON.stringify(h) + " as auto dont_care for " + n + ", which the script's doc and lock file list refuses");
       auto[n].push(h);
     }
   }
@@ -5517,12 +5537,12 @@ async function buildCallerCheck(label, symbols, tree, scopeFiles, got) {
     !lists.every((k) => Array.isArray(r[k]) && r[k].every((x) => typeof x === "string")) ||
     !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string" && typeof d.end === "number")
   )
-    halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
+    halt("s", "failed", label + " returned no defs, excluded, unclassified or unattributed list");
   if (
     !Array.isArray(r.generated) ||
     !r.generated.every((g) => typeof g === "string")
   )
-    halt(
+    halt("s",
       "failed",
       label + " returned no generated list (an array of path strings)",
     );
@@ -5531,11 +5551,11 @@ async function buildCallerCheck(label, symbols, tree, scopeFiles, got) {
   for (const k of progKeys("changed_defs")) relayed[k] = k === "defs" ? r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })) : r[k];
   requireProgram(r, "changed_defs", label);
   if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: printedProgram(r) }, relayed))) !== r.digest)
-    halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
+    halt("s", "failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
   for (const p of relayed.excluded) gate(label + ": skipped " + logPath(p) + " (frozen test or plan doc)");
   for (const p of relayed.generated) {
     if (p !== GENERATED_DIST)
-      halt(
+      halt("s",
         "failed",
         label +
           ": generated names " +
@@ -5548,7 +5568,7 @@ async function buildCallerCheck(label, symbols, tree, scopeFiles, got) {
   for (const p of relayed.unclassified) gate(label + ": unclassified " + logPath(p) + " (no definition pattern; checked against the plan's files)");
   const bad = buildCallerFindings(relayed, symbols, scopeFiles);
   if (bad.length)
-    halt(
+    halt("s",
       "needs_human",
       "build caller check " + label + ": the approved tree " + tree + " changes code the sealed changed_symbols does not map: " +
         logPath(bad.join(", ")) +
@@ -5572,15 +5592,15 @@ function hookSurfacePrompt(inputs) {
 
 // 7.4.0 (#36 B1): a read that failed with no HTTP status (gh crashed or timed out) asks for a re-run, not a confirmation
 function hookReadStop(err) {
-  halt("needs_human", "hook surface cannot be computed (" + err + "); " + (/HTTP None/.test(err) ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
+  halt(/HTTP None/.test(err) ? "t" : "s", "needs_human", "hook surface cannot be computed (" + err + "); " + (/HTTP None/.test(err) ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
 }
 // 8.0.0 (#62 B2): got, the hook_surface slot of a surfaces step (else its own step)
 async function hookSurface(label, worktree, rev, targets, phaseName, got) {
   const r = got ? got("hook_surface") : await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface", [worktree, rev, JSON.stringify(targets)]);
   requireProgram(r, "hook_surface", label, "needs_human", "hooks");
   if (!Array.isArray(r.surface) || !relayDigestOk(r, progKeys("hook_surface"), "hook_surface"))
-    halt("failed", label + ": the relayed surface" + NOT_DIGEST);
-  if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("failed", label + ": " + OTHER_ARGS);
+    halt("s", "failed", label + ": the relayed surface" + NOT_DIGEST);
+  if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("s", "failed", label + ": " + OTHER_ARGS);
   if (r.error !== null)
     hookReadStop(r.error);
   const mp = {};
@@ -5608,7 +5628,7 @@ function surfacesPrompt(inputs, progs) {
 async function surfaces(label, inputs, progs, phaseName) {
   const nested = progs.filter((p) => p.retry).map((p) => [p.name, p.name, p.args]);
   const r = await dispatch(label, surfacesPrompt(inputs, progs), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, nested });
-  const stop = () => halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  const relayStop = () => halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   // a failed relay of the program's own error (programErrorRelay, per slot)
   const errRelay = (p) => r[p.name] != null && programErrorRelay(Object.assign({}, r[p.name], { status: r.status }), p.name, p.args);
   const got = (slot) => {
@@ -5622,15 +5642,15 @@ async function surfaces(label, inputs, progs, phaseName) {
       return x;
     }
     // no relay, or an error the program's own branch may not see: the step's halt
-    if (x == null || ("error" in Object(x) && x.error != null)) stop();
+    if (x == null || ("error" in Object(x) && x.error != null)) relayStop();
     return x;
   };
   // before a route that skips the later slots: a not-ok status that no slot explains (a null slot or an error relay) halts
   got.settle = () => {
-    if (r.status !== "ok" && !progs.some((p) => r[p.name] == null || errRelay(p))) stop();
+    if (r.status !== "ok" && !progs.some((p) => r[p.name] == null || errRelay(p))) relayStop();
   };
   got.end = () => {
-    if (r.status !== "ok") stop();
+    if (r.status !== "ok") relayStop();
   };
   return got;
 }
@@ -5663,8 +5683,8 @@ function hookGate(what, paths, surface, rs) {
   const hooks = ps.filter((p) => isHookPath(p, all));
   const other = ps.filter((p) => !isHookPath(p, all));
   if (hooks.length && other.length)
-    halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.map(why).join(", ") + " and " + other.map(logPath).join(", "), "hooks");
-  if (hooks.length) halt("needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.map(why).join(", "), "hooks");
+    halt("s", "needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.map(why).join(", ") + " and " + other.map(logPath).join(", "), "hooks");
+  if (hooks.length) halt("s", "needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.map(why).join(", "), "hooks");
   gate(what + ": no hook-surface path (read: hook config, CI and hook-manager files" + (rs ? "; " + rs.read.concat(rs.unreadable).join("; ") : "") + ")");
 }
 function rulesetSurfacePrompt(inputs) {
@@ -5689,8 +5709,8 @@ async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName, g
   const r = got ? got("ruleset_surface") : await infra(label, rulesetSurfacePrompt({ args }), phaseName, JUDGE_AGENT, "ruleset_surface", args);
   requireProgram(r, "ruleset_surface", label, "needs_human", "hooks");
   if (!Array.isArray(r.surface) || !Array.isArray(r.sources) || !Array.isArray(r.read) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("ruleset_surface"), "ruleset_surface"))
-    halt("failed", label + ": the relayed surface" + NOT_DIGEST);
-  if (canonical(r.args) !== canonical(args)) halt("failed", label + ": " + OTHER_ARGS);
+    halt("s", "failed", label + ": the relayed surface" + NOT_DIGEST);
+  if (canonical(r.args) !== canonical(args)) halt("s", "failed", label + ": " + OTHER_ARGS);
   if (r.error !== null) hookReadStop(r.error);
   for (const u of r.unreadable) gate("warning: " + u);
   const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
@@ -5708,7 +5728,7 @@ async function prConvention(label, worktree, slug, defaultBranch, got) {
   requireProgram(r, "pr_convention", label);
   const t = r.title;
   if (!t || ["scoped-key", "conventional"].indexOf(t.style) < 0 || !Array.isArray(t.types) || !t.types.length || !r.body || !Array.isArray(r.source) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("pr_convention"), "pr_convention") || canonical(r.args) !== canonical(args))
-    halt("failed", label + ": the relayed convention" + NOT_DIGEST + " or arguments");
+    halt("s", "failed", label + ": the relayed convention" + NOT_DIGEST + " or arguments");
   for (const u of r.unreadable) gate("warning: " + u);
   gate("conventions: " + r.source.join("; "));
   const types = t.types.filter((x) => COMPONENT_RE.test(String(x)));
@@ -5767,7 +5787,7 @@ function findingsFp(what, findings) {
 }
 // every plan-findings round ends here: a re-plan round, or a stop with options when a finding is
 // human_only (set by its script producer), the round repeats the one before, or the rounds are spent
-function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate, fallback) {
+function planFindingsStop(cls, ctx, planPath, what, findings, rawMap, plan, stopGate, fallback) {
   const r = ctx.auditRound || 0;
   const fp = (state.planFp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]));
   state.audited = null;
@@ -5786,7 +5806,7 @@ function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate,
     "drop the task",
   ];
   const why = same ? ": no progress (round " + r + " repeats round " + (r - 1) + ")" : "";
-  halt("needs_human", what + why + ": " + (shown.join("; ") || fallback || what) + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate || "plan");
+  halt(cls, "needs_human", what + why + ": " + (shown.join("; ") || fallback || what) + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate || "plan");
 }
 function dsnFinding(planPath, lines) {
   const at = lines.length ? " at line " + lines.join(", ") : " (unread: over 8 MiB)";
@@ -5816,13 +5836,13 @@ async function planAndAudit(ctx0) {
     const a = [ctx.common.worktree, rs.path, ctx.common.scratch_dir, rs.run, rs.sha];
     const u = await infra("infra:unpark-plan", INFRA_STEP + "copy the audited draft plan back into the worktree.\n" + RUN_EXACT + progCmd("parked", ["unpark"].concat(a)) + "\n" + PRINTS_ONE + printsKeys("parked:unpark") + '. Return {status: "ok", reason, ' + returnKeys("parked:unpark") + "}" + COPY_DIGEST, "Plan", INFRA_AGENT);
     requireProgram(u, "parked", "infra:unpark-plan");
-    if (!relayDigestOk(u, progKeys("parked:unpark"), "parked") || canonical(u.args) !== canonical(a)) halt("failed", "infra:unpark-plan: the relay" + NOT_DIGEST + " or arguments", "contract");
+    if (!relayDigestOk(u, progKeys("parked:unpark"), "parked") || canonical(u.args) !== canonical(a)) halt("s", "failed", "infra:unpark-plan: the relay" + NOT_DIGEST + " or arguments", "contract");
   }
   const plan = rs ? JSON.parse(rs.plan) : requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
-    halt("failed", "scope-and-plan returned no plan_path/criteria");
+    halt("s", "failed", "scope-and-plan returned no plan_path/criteria");
   const ppBad = planPathProblem(plan.plan_path);
-  if (ppBad) halt("needs_human", "scope-and-plan plan_path " + JSON.stringify(plan.plan_path) + " " + ppBad);
+  if (ppBad) halt("s", "needs_human", "scope-and-plan plan_path " + JSON.stringify(plan.plan_path) + " " + ppBad);
   // from here on a stop leaves a draft plan in the worktree
   if (ctx.onPlanPath) ctx.onPlanPath(normPath(plan.plan_path));
   // 8.5.5 (#108 step 2): a planner-contract problem is a re-plan finding (the allowlist halts stay)
@@ -5844,7 +5864,7 @@ async function planAndAudit(ctx0) {
   const planPath = normPath(plan.plan_path);
   // PR #110 review M1: a draft at another path cannot be recovered by a re-plan round
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
-    halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
+    halt("s", "needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
   if (!Array.isArray(plan.changed_symbols)) dr("changed_symbols must be an array");
   const prior = ctx.priorRound || null;
   if (prior) {
@@ -5859,27 +5879,27 @@ async function planAndAudit(ctx0) {
   // PR #110 review B1: the command allowlists halt before any re-plan return, in every round
   const tc0 = plan.test_cmd && typeof plan.test_cmd === "object" && typeof plan.test_cmd.command === "string" && plan.test_cmd.command.trim() ? plan.test_cmd : null;
   const tcProblem = tc0 ? testCmdProblem(tc0) : null;
-  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(tc0.command), "commands");
+  if (tcProblem) halt("s", "needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(tc0.command), "commands");
   for (const c of plan.criteria) {
     const ta = criterionTestArgsProblem(tc0, c);
-    if (ta) halt("needs_human", "criterion " + String((c && c.id) || "") + " " + ta, "commands");
+    if (ta) halt("s", "needs_human", "criterion " + String((c && c.id) || "") + " " + ta, "commands");
   }
-  if (drift.length) return planFindingsStop(ctx, planPath, "role scope-and-plan contract drift", drift, plan.changed_symbols, plan, "contract");
+  if (drift.length) return planFindingsStop("j", ctx, planPath, "role scope-and-plan contract drift", drift, plan.changed_symbols, plan, "contract");
   const obligations = await screenCheckCmds(plan.repo_obligations, ctx.common.worktree, "Plan", sfx);
   const critF = [];
   const criteria = normCriteria(plan.criteria, plan.test_cmd, critF);
-  if (critF.length) return planFindingsStop(ctx, planPath, "criteria refused", critF, plan.changed_symbols, plan);
+  if (critF.length) return planFindingsStop("j", ctx, planPath, "criteria refused", critF, plan.changed_symbols, plan);
   const conf = confusableFindings(criteria);
-  if (conf.length) return planFindingsStop(ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
+  if (conf.length) return planFindingsStop("j", ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
   const kept = prior ? keptSymbols(prior, plan) : [];
   const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
-  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
+  if (cs.findings.length) return planFindingsStop("j", ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
   if (prior) {
     const now = cs.clean.map((x) => x.symbol);
     const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0 && kept.indexOf(x) < 0);
     // 6.3.0: a dropped symbol is a re-plan finding (the round cap still stops)
     if (dropped.length)
-      return planFindingsStop(ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
+      return planFindingsStop("j", ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
   }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
@@ -5917,7 +5937,7 @@ async function planAndAudit(ctx0) {
 
   // 8.3.0 (#99): the auto gate's secret-like path check (same function), before the surface reads and plan-audit
   const early = pathFenceProblems(planScopePaths(planFacts, criteria)).filter((x) => /: secret-like path$/.test(x));
-  if (early.length) halt("needs_human", "scope check failed: " + early.join("; "), "scope");
+  if (early.length) halt("s", "needs_human", "scope check failed: " + early.join("; "), "scope");
   // Max's rule: a plan that touches the hook surface stops here
   const pnt = npmTargetOf(plan.test_cmd.command);
   // 7.4.0 car 5 (Z1): npx jest|vitest resolves the nearest dir with a package.json (no root one: the main checkout's)
@@ -5942,19 +5962,19 @@ async function planAndAudit(ctx0) {
   const ed = planGot("plan_dsn");
   requireProgram(ed, "plan_dsn", surfL);
   if (typeof ed.holds !== "boolean" || !Array.isArray(ed.lines) || !relayDigestOk(ed, progKeys("plan_dsn"), "plan_dsn") || canonical(ed.args) !== canonical([ctx.common.worktree, planPath]))
-    halt("failed", surfL + ": the relayed plan_dsn" + NOT_DIGEST + " or arguments", "contract");
+    halt("s", "failed", surfL + ": the relayed plan_dsn" + NOT_DIGEST + " or arguments", "contract");
   if (ed.holds) {
     planGot.settle();
-    return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, ed.lines) }], plan.changed_symbols, plan, "db");
+    return planFindingsStop("s", ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, ed.lines) }], plan.changed_symbols, plan, "db");
   }
   // 7.4.0 (#39): with no package.json script at the worktree root npm walks up to the main checkout's
   // (npm_config_prefix and npm_config_local_prefix do not stop it; only --prefix does)
   // 8.0.0 (#62 B2): a walk-up stop skips the convention slot; a not-ok status no slot explains halts first
   if ((pnt && !planHs.make_paths[pst]) || (pxt && !planHs.make_paths[pxt])) planGot.settle();
   if (pnt && !planHs.make_paths[pst])
-    return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (a JSON object with a string scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
+    return planFindingsStop("s", ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (a JSON object with a string scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
   if (pxt && !planHs.make_paths[pxt])
-    return planFindingsStop(ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
+    return planFindingsStop("s", ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
   const conventions = await prConvention(surfL + " pr_convention", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, planGot);
   planGot.end();
   let callerOcc = null;
@@ -5962,7 +5982,7 @@ async function planAndAudit(ctx0) {
   let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
-    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
+    if (cc.findings.length) return planFindingsStop("j", ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
     callerOcc = cc.occurrences;
     autoDontCare = cc.auto;
     symbolMap = cs.clean.map((s) => {
@@ -5981,34 +6001,34 @@ async function planAndAudit(ctx0) {
   const fmtLabel = "infra:format-plan" + sfx;
   await pathRecheck("format-plan" + sfx, "Plan");
   const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath, scratch_dir: ctx.common.scratch_dir }), "Plan", INFRA_AGENT);
-  if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
+  if (!Array.isArray(fmt.changed_paths)) halt("s", "failed", fmtLabel + " returned no changed_paths list");
   // 7.3.0 (#9): the plan-mode hook result, digest-checked (a failing hook, an unsettled fixer or no pre-commit stop as before)
   const ff = fmt.format;
   requireProgram(ff, "format_files", fmtLabel);
   // 8.2.3 (#85): base_red, the whole-tree hooks red at HEAD without the doc, are a warning, never a stop
   if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures) || !strsOf(ff.base_red))
-    halt("failed", fmtLabel + ": the relayed format result" + NOT_DIGEST, "contract");
-  if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(ff.refused.join(", ")) + " (" + ff.note + ")", "hooks");
-  if (ff.note === "pre-commit is not installed") halt("needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
+    halt("s", "failed", fmtLabel + ": the relayed format result" + NOT_DIGEST, "contract");
+  if (ff.refused.length) halt("s", "needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(ff.refused.join(", ")) + " (" + ff.note + ")", "hooks");
+  if (ff.note === "pre-commit is not installed") halt("s", "needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
   if (ff.fix_timeout || !ff.stable || ff.hook_failed)
-    halt("needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
+    halt("s", "needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
   if (ff.base_red.length) gate("warning: hooks red at the plan base, not caused by the plan doc: " + ff.base_red.join(", "));
   const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
   if (fmtOther.length)
-    halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + logPath(fmtOther.join(", ")) + " (never committed; clean the worktree)", "scope");
+    halt("s", "needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + logPath(fmtOther.join(", ")) + " (never committed; clean the worktree)", "scope");
   gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
   const dc = fmt.dsn_check;
   requireProgram(dc, "plan_dsn", fmtLabel);
   if (typeof dc.holds !== "boolean" || !Array.isArray(dc.lines) || !(dc.holds || SHA256_RE.test(dc.plan_sha256)) || !relayDigestOk(dc, progKeys("plan_dsn"), "plan_dsn"))
-    halt("failed", fmtLabel + ": the relayed dsn_check" + NOT_DIGEST, "contract");
+    halt("s", "failed", fmtLabel + ": the relayed dsn_check" + NOT_DIGEST, "contract");
   if (canonical(dc.args) !== canonical([ctx.common.worktree, planPath]))
-    halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
-  if (dc.holds) return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, dc.lines) }], plan.changed_symbols, plan, "db");
+    halt("s", "failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
+  if (dc.holds) return planFindingsStop("s", ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, dc.lines) }], plan.changed_symbols, plan, "db");
 
   // the audit runs the planner's test_cmd in a scratch worktree
   const aEnv = dbInputs("audit");
   await pathRecheck("plan-audit" + sfx, "Plan");
-  if (rs && dc.plan_sha256 !== rs.sha) halt("needs_human", fmtLabel + ": the resumed plan doc hashes " + dc.plan_sha256 + ", audited " + rs.sha, "scope");
+  if (rs && dc.plan_sha256 !== rs.sha) halt("s", "needs_human", fmtLabel + ": the resumed plan doc hashes " + dc.plan_sha256 + ", audited " + rs.sha, "scope");
   state.audits = (state.audits || 0) + 1;
   const audit = rs ? { verdict: "approve" } : requireOk(
     "plan-audit",
@@ -6032,10 +6052,10 @@ async function planAndAudit(ctx0) {
   const refusal = audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria";
   // 8.5.5: an LLM finding is never human_only
   if (refusal)
-    return planFindingsStop(ctx, planPath, "plan-audit verdict " + audit.verdict, (audit.routed_findings || []).map(({ human_only, ...f }) => f), plan.changed_symbols, plan, "audit", audit.reason || audit.verdict);
+    return planFindingsStop("j", ctx, planPath, "plan-audit verdict " + audit.verdict, (audit.routed_findings || []).map(({ human_only, ...f }) => f), plan.changed_symbols, plan, "audit", audit.reason || audit.verdict);
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
-    halt(
+    halt(audit.verdict ? J_TASK : "s",
       audit.verdict ? "needs_human" : "failed",
       "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : "") + afterRounds(ctx),
       "audit",
@@ -6059,7 +6079,7 @@ async function planAndAudit(ctx0) {
     else if (sw.verdict === "weakening") {
       const loose = sw.units.filter((u) => u && u.shipped_refuses === true && u.new_refuses === false);
       const fs = (loose.length ? loose : [{ unit: "(see the sweep units)", mutation: sw.reason }]).map((u) => ({ criterion: null, finding: "planned gate accepts " + u.unit + " (" + u.mutation + ") that the shipped gate refuses; make it an Open decision citing the brief, or keep the refusal" }));
-      return planFindingsStop(ctx, planPath, "plan sweep verdict weakening", fs, plan.changed_symbols, plan, "intent");
+      return planFindingsStop("s", ctx, planPath, "plan sweep verdict weakening", fs, plan.changed_symbols, plan, "intent");
     } else if (um !== undefined) gate("warning: plan sweep unit " + logPath(um && um.unit != null ? um.unit : "?") + " not measured (" + logPath(um && um.mutation != null ? um.mutation : "no reason given") + "); the post-PR sweep decides");
     else gate("plan sweep: " + sw.verdict + " (" + sw.units.length + " unit(s))");
   }
@@ -6105,9 +6125,9 @@ async function commitPlanAndRef(ctx) {
   requireProgram(st.plan_hash, "plan_hash", stLabel);
   const stagedSha = st.plan_hash.plan_sha256;
   if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
-    halt("failed", stLabel + ": the relayed plan hash" + NOT_DIGEST + " or arguments");
-  if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
-  if (stagedSha !== ctx.auditedSha) halt("needs_human", stLabel + ": plan doc changed after audit: " + stagedSha + ", audited " + ctx.auditedSha, "scope");
+    halt("s", "failed", stLabel + ": the relayed plan hash" + NOT_DIGEST + " or arguments");
+  if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("s", "failed", stLabel + " returned no usable plan_sha256");
+  if (stagedSha !== ctx.auditedSha) halt("s", "needs_human", stLabel + ": plan doc changed after audit: " + stagedSha + ", audited " + ctx.auditedSha, "scope");
   // 8.0.0 (G3, ADR-1152): the held-out examples go to the store on this machine; the ref seals its sha256, or null
   const heldOut = (state.heldMeta = ctx.held !== undefined ? ctx.held : await heldOutWrite(ctx, stagedSha));
   // + 2: the PATH re-check before the commit and the verify step; + the first-round chunk writers
@@ -6141,11 +6161,11 @@ async function commitPlanAndRef(ctx) {
     },
     "plan ref", "nothing was sealed", "commit",
   );
-  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   requireProgram(r, "plan_ref_write", label, "failed", "commit");
   if (typeof r.plan_commit !== "string" || !SHA_RE.test(r.plan_commit) || r.plan_base !== ctx.planBase || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !Array.isArray(r.dirty) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
-    halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
-  if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + logPath(r.dirty.join(", ")), "scope");
+    halt("s", "failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
+  if (r.dirty.length) halt("s", "needs_human", label + ": the worktree is not clean after the plan doc left it: " + logPath(r.dirty.join(", ")), "scope");
   if (r.reused === true) gate("reused plan commit " + r.plan_commit + ": the plan doc is unchanged; no new commit");
   // 7.3.0 (#9): the parked folder's retire is housekeeping; an unusable relay is a warning line
   if (ctx.retire) {
@@ -6197,21 +6217,21 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
   if (problem) {
     // only this stop returns the plan_ref, marked unverified
     state.unverifiedPlanRef = tiny;
-    halt("failed", label + ": " + problem + "; the plan commit " + w.plan_commit + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
+    halt("s", "failed", label + ": " + problem + "; the plan commit " + w.plan_commit + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
   }
   const pf = v.plan_files;
   if (pf.commit !== w.plan_commit || pf.parent !== full.plan_base || pf.head !== ctx.expectHead)
-    halt("failed", label + ": plan commit " + pf.commit + " on " + pf.parent + " with HEAD " + pf.head + ", not " + w.plan_commit + " on " + full.plan_base + " with HEAD " + ctx.expectHead, "commit");
+    halt("s", "failed", label + ": plan commit " + pf.commit + " on " + pf.parent + " with HEAD " + pf.head + ", not " + w.plan_commit + " on " + full.plan_base + " with HEAD " + ctx.expectHead, "commit");
   if (v.plan_hash.plan_sha256 !== stagedSha)
-    halt("failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
+    halt("s", "failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
   const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
   if (files.length !== 1 || files[0] !== normPath(full.plan_path))
-    halt("needs_human", label + ": the plan commit holds " + logPath(JSON.stringify(pf.files)) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+    halt("s", "needs_human", label + ": the plan commit holds " + logPath(JSON.stringify(pf.files)) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
   if (pf.dsn_paths.length)
-    halt("needs_human", label + ": the committed plan " + logPath(JSON.stringify(pf.dsn_paths)) + " holds mysql:// (a test DSN); fix the plan doc, then re-run plan", "db");
+    halt("s", "needs_human", label + ": the committed plan " + logPath(JSON.stringify(pf.dsn_paths)) + " holds mysql:// (a test DSN); fix the plan doc, then re-run plan", "db");
   const e = v.plan_ref.refs.find((x) => x && x.name === refName);
   const ep = planRefMetaProblem(e, w.plan_commit, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
-  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
+  if (ep) halt("s", "failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
   return v;
 }
 
@@ -6595,9 +6615,9 @@ async function autoGates(ctx) {
     );
     requireProgram(cfg, "precommit_ids", "infra:precommit-ids" + sfx);
     if (!relayDigestOk(cfg, progKeys("precommit_ids"), "precommit_ids"))
-      halt("failed", "infra:precommit-ids" + sfx + ": the relayed hook ids do not match the program's digest", "contract");
+      halt("s", "failed", "infra:precommit-ids" + sfx + ": the relayed hook ids do not match the program's digest", "contract");
     if (canonical(cfg.args) !== canonical([ctx.mainWt, ctx.planCommit]))
-      halt("failed", "infra:precommit-ids" + sfx + ": " + OTHER_ARGS + " (" + JSON.stringify(cfg.args === undefined ? null : cfg.args) + ")", "contract");
+      halt("s", "failed", "infra:precommit-ids" + sfx + ": " + OTHER_ARGS + " (" + JSON.stringify(cfg.args === undefined ? null : cfg.args) + ")", "contract");
     const g2 = hookIdProblems(shape.hookIds, cfg);
     if (g2.length) return fail("commands", g2);
   }
@@ -6614,6 +6634,7 @@ function autoGateAgents(commands) {
 
 function autoFailResult(g, planPath, tiny) {
   state.stopGate = g.failedCheck;
+  state.stopClass = "safety";
   return Object.assign(finish("needs_human", "auto-confirm: " + g.failedCheck + " check failed: " + g.reasons.join("; ")), {
     failed_check: g.failedCheck,
     intent: g.intent,
@@ -6643,7 +6664,7 @@ function relayDecision(it, tag, input, phase) {
   if (phase === "valid") {
     if (!Object.prototype.hasOwnProperty.call(it, "relay") || !r || typeof r !== "object" || Array.isArray(r) || ["none", "names_input", "delegation", "request"].indexOf(r.kind) < 0 || typeof r.text !== "string" || (r.kind === "delegation" && !r.text.trim())) {
       state.relaunch = "intake";
-      halt("needs_human", tag + ": missing or malformed relay field (want {kind: none | names_input | delegation | request, text: <string>})" + again, "relaunch");
+      halt("s", "needs_human", tag + ": missing or malformed relay field (want {kind: none | names_input | delegation | request, text: <string>})" + again, "relaunch");
     }
     return null;
   }
@@ -6654,7 +6675,7 @@ function relayDecision(it, tag, input, phase) {
     .join("");
   if (r.kind === "request") {
     state.relaunch = "intake";
-    halt("needs_human", tag + ": relayed message is a request, not the build input: " + t + again, "relaunch");
+    halt("s", "needs_human", tag + ": relayed message is a request, not the build input: " + t + again, "relaunch");
   }
   if (!input) {
     gate(tag + ": relayed message passes as a general delegation (confirm auto): " + t);
@@ -6663,7 +6684,7 @@ function relayDecision(it, tag, input, phase) {
   const c = input.confirm === undefined ? "ask" : input.confirm;
   if (input.unattended !== true && c !== "auto" && c !== "default") {
     state.relaunch = "intake";
-    halt("needs_human", tag + ": relayed message is a general delegation, but this launch is attended (confirm ask, no unattended): " + t + again, "relaunch");
+    halt("s", "needs_human", tag + ": relayed message is a general delegation, but this launch is attended (confirm ask, no unattended): " + t + again, "relaunch");
   }
   gate(tag + ": relayed message passes as a general delegation (confirm " + c + ", unattended " + (input.unattended === true) + "): " + t);
   return t;
@@ -6698,14 +6719,14 @@ function resumeOf(pk, want, head, src) {
 async function planMode(input, date) {
   const raw = typeof input.input === "string" ? input.input.trim() : "";
   const repo = cleanRepo(input.repo);
-  if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
-  if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
+  if (!raw) stop("s", "needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
+  if (!repo) stop("s", "needs_human", "args.repo must be the absolute path of the caller's git toplevel");
   // 7.0.0 review F1: an L<N> input stops in script code, before any agent runs
   const legacyId = LEGACY_ID_RE.exec(raw);
   if (legacyId)
-    stop("needs_human", "task id " + JSON.stringify(raw) + " is a legacy yadgar ledger id: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + legacyId[1] + ": `; run /build-task with that task's yaadgaar number");
+    stop("s", "needs_human", "task id " + JSON.stringify(raw) + " is a legacy yadgar ledger id: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + legacyId[1] + ": `; run /build-task with that task's yaadgaar number");
   if (input.confirm === "auto" && input.unattended !== true && !input.project && TASK_ID_INPUT_RE.test(raw))
-    stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
+    stop("s", "needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 
   await preflightStep(repo);
 
@@ -6718,24 +6739,24 @@ async function planMode(input, date) {
   });
   if (it.status === "needs_human" && typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
     state.relaunch = "intake";
-    halt("needs_human", "intake: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
+    halt("s", "needs_human", "intake: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
   }
   relayDecision(it, "intake", input, "valid");
   const nl = TASK_ID_INPUT_RE.test(raw) ? noLedgerStop(it, input.project) : null;
-  if (nl) halt("needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
-  if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
+  if (nl) halt("s", "needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
+  if (it.status !== "ok") halt("s", it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
   const relayText = relayDecision(it, "intake", input, "kind");
   const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
-  if (problem) halt("needs_human", "intake: " + problem);
+  if (problem) halt("s", "needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
   const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
-  if (lp) halt("needs_human", "intake: " + lp);
+  if (lp) halt("s", "needs_human", "intake: " + lp);
   const ug = unsupportedRequired([brief.title, brief.description].concat(brief.sources.map((x) => x.body)).join("\n"));
   // 8.5.2 (#107): --auto goes on; the gate's own program reports not_run and lands in gates_not_run
-  if (ug && input.unattended !== true) halt("needs_human", "intake: " + ug.reason, "gates");
+  if (ug && input.unattended !== true) halt(J_GATE(ug.gate), "needs_human", "intake: " + ug.reason, "gates");
   if (ug) autoDecide("gates", "continue", "the task requires the " + ug.gate + " gate, but the gate census reports it unsupported; the " + ug.gate + " gate will not run (gates_not_run lists it)");
   const names = namesFor(brief, raw);
-  if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
+  if (!names.taskId) halt("s", "needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   await lockClaim(brief.repo, names.taskId, "Intake");
   if (!names.text) names.slug = await branchSlug(brief.repo, names);
   const lay = layout(names, brief.repo);
@@ -6748,9 +6769,9 @@ async function planMode(input, date) {
 
   const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
   const oh = originHalt(ws);
-  if (oh) halt("needs_human", oh);
+  if (oh) halt("s", "needs_human", oh);
   // 8.5.5 (#108): a definite no stops before the planner (ADR-1201: unknown goes on)
-  if (ghNoPush(ws.remoteSlug)) halt("needs_human", noPushText(ws.remoteSlug).replace(SAME_PLAN_REF, "run plan again"), "push");
+  if (ghNoPush(ws.remoteSlug)) halt("s", "needs_human", noPushText(ws.remoteSlug).replace(SAME_PLAN_REF, "run plan again"), "push");
   await pushProbe(lay, ws);
   const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
   unattendedOn(planPolicy, input);
@@ -6769,28 +6790,30 @@ async function planMode(input, date) {
     JUDGE_AGENT,
     "branch_scan",
   );
-  if (!Array.isArray(scan.commits) || !Array.isArray(scan.refs)) halt("failed", "infra:branch-scan returned no commit or plan-ref list");
+  if (!Array.isArray(scan.commits) || !Array.isArray(scan.refs)) halt("s", "failed", "infra:branch-scan returned no commit or plan-ref list");
   requireProgram(scan, "branch_scan", "infra:branch-scan");
   if (!relayDigestOk(scan, progKeys("branch_scan"), "branch_scan"))
-    halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
-  if (typeof scan.head !== "string" || !SHA_RE.test(scan.head)) halt("failed", "infra:branch-scan returned no usable head");
+    halt("s", "failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
+  if (typeof scan.head !== "string" || !SHA_RE.test(scan.head)) halt("s", "failed", "infra:branch-scan returned no usable head");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
   // 6.3.0: a branch with build commits and its sealed plan ref resumes in build mode with that ref
   const sref = built.length ? scan.refs.find((e) => e && e.name === "refs/fleet/" + names.taskId + "/plan" && e.type === "tag" && e.target_type === "commit" && e.ref_ok === true && e.task_id === names.taskId) : null;
   const rtiny = sref ? { branch: lay.branch, plan_commit: sref.target, plan_ref: sref.name, ref_sha256: sref.sha256, repo } : null;
   if (rtiny && !tinyRefProblem(rtiny)) {
     state.stopGate = "resume";
+    // mechanical: the skill runs build with this plan_ref (a deterministic hop)
+    state.stopClass = "mechanical";
     gate("branch has build commits (first: " + built[0].sha + "); resume_with build: plan_ref " + sref.name + " at " + sref.target);
     return Object.assign(finish("needs_human", "branch has build commits; resume_with build: run build with plan_ref " + sref.name + " (it resumes at the last completed gate)"), { resume_with: "build", plan_ref: rtiny });
   }
   if (built.length)
-    halt(
+    halt("s",
       "needs_human",
       "branch has build commits; run build, or delete branch " + lay.branch + " (first: " + built[0].sha + " " + JSON.stringify(built[0].subject) + ")",
     );
   // 6.0.0 (2042): a 5.x plan commit on the branch would ship the plan doc
   if (scan.commits.length)
-    halt("needs_human", "branch " + lay.branch + " carries a plan commit of fleet 5.x (" + scan.commits[0].sha + "); since 6.0.0 the plan doc never ships: delete branch " + lay.branch + ", then re-run plan");
+    halt("s", "needs_human", "branch " + lay.branch + " carries a plan commit of fleet 5.x (" + scan.commits[0].sha + "); since 6.0.0 the plan doc never ships: delete branch " + lay.branch + ", then re-run plan");
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
   const parkedBad = !!(parked && parked.unreadable);
@@ -7013,7 +7036,7 @@ function fenceChanged(where, changed) {
     const why = fencePathProblem(p);
     if (why) bad.push(normPath(p) + " (" + why + ")");
   }
-  if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + logPath(bad.join(", ")), "scope");
+  if (bad.length) halt("s", "needs_human", where + ": changed path outside the scope fence: " + logPath(bad.join(", ")), "scope");
 }
 // 2033: the per-owner policy; work owners never merge or update the branch, whatever it says
 const WORK_OWNERS = ["quinyx", "concrete-media"];
@@ -7038,7 +7061,7 @@ async function policyStep(host, slug, sealed, plan) {
   const lb = "infra:policy" + (plan ? ":plan" : "");
   const r = await infra(lb, policyPrompt({ args }), plan ? "Workspace" : "Verify", JUDGE_AGENT, "policy", args);
   requireProgram(r, "policy", lb, "needs_human", "policy");
-  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", lb + RELAY_MISMATCH, "policy");
+  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("s", "needs_human", lb + RELAY_MISMATCH, "policy");
   let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
   // 2044: the build's wall time starts here
   if (!plan) state.t0 = Number.isInteger(r.now) ? r.now : null;
@@ -7047,7 +7070,7 @@ async function policyStep(host, slug, sealed, plan) {
     const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
     gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
     p = sealed;
-  } else if (!r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  } else if (!r.caps) halt("s", "needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
   // 6.3.0: an invalid file is the strict default (policy.py DEFAULT), never a halt
   else if (r.error) gate("policy: " + r.error + "; the strict default applies (" + capsText(p.caps) + "); fix or remove the file");
   else gate("policy: " + r.matched + " (" + capsText(p.caps) + ")");
@@ -7166,10 +7189,10 @@ function prTestsPrompt(inputs) {
 async function prTestsStep(label, args, block, prUrl, supplied, again) {
   const r = await infra(label, prTestsPrompt({ args }), "PR", INFRA_AGENT, "pr_test_block", args);
   requireProgram(r, "pr_test_block", label, "needs_human", "stats");
-  if (!relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + RELAY_MISMATCH, "stats");
+  if (!relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") || canonical(r.args) !== canonical(args)) halt("s", "needs_human", label + RELAY_MISMATCH, "stats");
   // fail closed before the supplied-text filter: no own claim hides behind a long list (8.7.0: ahead of the rewrite)
   if (r.claims_truncated === true)
-    halt("needs_human", label + ": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of " + prUrl + " by hand, then " + SAME_PLAN_REF, "role");
+    halt("s", "needs_human", label + ": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of " + prUrl + " by hand, then " + SAME_PLAN_REF, "role");
   const bad = !Array.isArray(r.claims) || r.claims.some((x) => typeof x !== "string") ? ": claims is not a list of strings"
     : r.error !== null ? ": " + r.error + "; check the body of " + prUrl
     : r.block_sha256 !== sha256Hex(block) ? ": the PR body's test block is not the script's block; check " + prUrl : null;
@@ -7178,7 +7201,7 @@ async function prTestsStep(label, args, block, prUrl, supplied, again) {
     autoDecide("pr-body", "regenerate", label + bad);
     return prTestsStep(label + ":regen", args, block, prUrl, supplied, true);
   }
-  if (bad) halt("needs_human", label + bad, "stats");
+  if (bad) halt("s", "needs_human", label + bad, "stats");
   gate(label + ": test block " + (r.edited === true ? "written" : "unchanged") + " in " + prUrl);
   const own = ownClaims(r.claims, supplied);
   if (own.length < r.claims.length) gate(label + ": ignored " + (r.claims.length - own.length) + " claim(s) found in workflow-supplied text");
@@ -7192,13 +7215,13 @@ const PR_STATE_READS = ["view", "logs"];
 async function prState(label, args, what, stopGate) {
   const prompt = INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\n" + PRINTS_ONE + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.";
   let r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, agentType: PR_STATE_READS.indexOf(args[0]) >= 0 ? JUDGE_AGENT : INFRA_AGENT, phase: "PR" });
-  if (r.status !== "ok" && !programErrorRelay(r, "pr_state:" + args[0], args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok" && !programErrorRelay(r, "pr_state:" + args[0], args)) halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   if (r.status !== "ok") {
     gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
     r = Object.assign({}, r, { status: "ok" });
   }
   requireProgram(r, "pr_state", label, "needs_human", stopGate);
-  if (!relayDigestOk(r, progKeys("pr_state:" + args[0]), "pr_state") || canonical(r.args) !== canonical(args)) halt("needs_human", label + RELAY_MISMATCH, stopGate);
+  if (!relayDigestOk(r, progKeys("pr_state:" + args[0]), "pr_state") || canonical(r.args) !== canonical(args)) halt("s", "needs_human", label + RELAY_MISMATCH, stopGate);
   return r;
 }
 // 2034, ADR-1199: orchestrator and IaC signs (fail closed); one CI watch agent re-runs its slice while pending
@@ -7234,9 +7257,9 @@ function subjectsOf(pf, brief, slug, taskId, tldr) {
 
 async function buildMode(input, date) {
   // 8.5.4 (#108): a ref from fleet 2.1.3 or earlier (it names a committed ref_path file)
-  if (input.plan_ref && typeof input.plan_ref === "object" && "ref_path" in input.plan_ref) stop("needs_human", LEGACY_REF);
+  if (input.plan_ref && typeof input.plan_ref === "object" && "ref_path" in input.plan_ref) stop("s", "needs_human", LEGACY_REF);
   const tp = tinyRefProblem(input.plan_ref);
-  if (tp) stop("needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
+  if (tp) stop("s", "needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
   const tiny = input.plan_ref;
   const repo = cleanRepo(tiny.repo);
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
@@ -7244,7 +7267,7 @@ async function buildMode(input, date) {
   await preflightStep(repo);
   await lockClaim(repo, PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1], "Preflight");
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
-  if (ghNoPush(ws.remoteSlug)) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "push");
+  if (ghNoPush(ws.remoteSlug)) halt("s", "needs_human", "build start: " + noPushText(ws.remoteSlug), "push");
   if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("build start: push access to " + ws.remoteSlug + " not known (" + ghTried(ws.remoteSlug) + "); the PR step checks again");
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
@@ -7265,22 +7288,22 @@ async function rereadBrief(brief, project, repo) {
   // PR #105 review R1: the RELAUNCH_REASON answer halts first, as in plan mode; a request relay halts on any status
   if (typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
     state.relaunch = "intake";
-    halt("needs_human", "intake:rulings: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
+    halt("s", "needs_human", "intake:rulings: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
   }
   relayDecision(it, "intake:rulings", null, "valid");
   if (it.relay.kind === "request") relayDecision(it, "intake:rulings", null, "kind");
   const nl = LEDGER_KINDS.indexOf(src.kind) >= 0 ? noLedgerStop(it, project) : null;
-  if (nl) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + nl + "; run build with confirm \"ask\"");
-  if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + intakeHaltReason(it, input));
+  if (nl) halt("s", "needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + nl + "; run build with confirm \"ask\"");
+  if (it.status !== "ok") halt("s", it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + intakeHaltReason(it, input));
   const relayText = relayDecision(it, "intake:rulings", null, "kind");
   if (relayText !== null && state.unattended) autoDecide("relaunch", "pass", "general delegation: " + relayText);
   const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null);
-  if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
+  if (problem) halt("s", "needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
   const fresh = cleanBrief(it.brief);
   const legacy = legacySourceProblem(fresh);
-  if (legacy) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + legacy);
+  if (legacy) halt("s", "needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + legacy);
   if (fresh.repo !== brief.repo || !fresh.sources.some((x) => x.kind === src.kind && x.ref === src.ref && (src.kind !== "yaadgaar" || !src.id || x.id === src.id)))
-    halt(
+    halt("s",
       "needs_human",
       "re-read of " + src.kind + ":" + src.ref + " resolved to " + fresh.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " in " + fresh.repo + ", not the sealed task",
     );
@@ -7336,7 +7359,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // load the sealed ref from its local tag object
   phase("Verify");
   const refTask = PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
-  const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
+  const changed = (why) => halt("s", "needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
   // a model relaying the whole ref shortened it
   const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
   const loadPrompt = (part) => loadRefPrompt(Object.assign({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }, part === null ? { mode: "meta" } : { mode: "part", part }));
@@ -7388,7 +7411,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
   // 7.3.0 (#47b): every relay passed the metadata check, so the ref is intact: a join that still fails is a relay failure
   if (content === null || sha256Hex(content) !== tiny.ref_sha256)
-    halt("failed", "load-ref: the relayed parts do not join to ref_sha256 " + tiny.ref_sha256 + " after the re-reads; the plan ref " + tiny.plan_ref + " is intact; re-run build with the same plan_ref");
+    halt("s", "failed", "load-ref: the relayed parts do not join to ref_sha256 " + tiny.ref_sha256 + " after the re-reads; the plan ref " + tiny.plan_ref + " is intact; re-run build with the same plan_ref");
   let loaded = null;
   try {
     loaded = JSON.parse(content);
@@ -7413,32 +7436,32 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // the ledger scope sealed at plan time
   const sealedProject = typeof loaded.project === "string" ? loaded.project : null;
   if (sealedProject && input.project && input.project !== sealedProject)
-    halt("needs_human", "project mismatch: args.project " + JSON.stringify(input.project) + " but plan ref " + tiny.plan_ref + " sealed " + JSON.stringify(sealedProject) + "; build with the plan's project, or re-run plan");
+    halt("s", "needs_human", "project mismatch: args.project " + JSON.stringify(input.project) + " but plan ref " + tiny.plan_ref + " sealed " + JSON.stringify(sealedProject) + "; build with the plan's project, or re-run plan");
   if (sealedProject && !input.project) {
     input = Object.assign({}, input, { project: sealedProject });
     gate("project " + sealedProject + " from the sealed plan ref");
   }
   const pf = loaded.plan_facts;
   if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
-    halt("needs_human", LEGACY_REF);
+    halt("s", "needs_human", LEGACY_REF);
   const refFacts = planFactsProblem(pf.test_cmd, pf.repo_obligations);
-  if (refFacts) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + refFacts.msg, refFacts.gate);
+  if (refFacts) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": " + refFacts.msg, refFacts.gate);
   const refTc = testCmdProblem(pf.test_cmd);
-  if (refTc) halt("needs_human", "plan ref " + tiny.plan_ref + ": test_cmd refused: " + refTc, "commands");
+  if (refTc) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": test_cmd refused: " + refTc, "commands");
   for (const o of pf.repo_obligations) {
     if (typeof o.check_cmd !== "string") continue;
     const pc = parseCheckCmd(o.check_cmd);
-    if (!pc.ok) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
+    if (!pc.ok) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
   }
   // 6.0.0 (2042): a 5.x ref's plan commit is on the branch and its plan doc would ship
   if (typeof loaded.plan_base !== "string" || !SHA_RE.test(loaded.plan_base) || !loaded.plan_facts || !loaded.plan_facts.conventions)
-    halt("needs_human", "plan ref " + tiny.plan_ref + " was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch " + tiny.branch + ", then re-run plan");
+    halt("s", "needs_human", "plan ref " + tiny.plan_ref + " was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch " + tiny.branch + ", then re-run plan");
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref: tiny.plan_ref });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
   state.ownRefs = ownRefPrefixes(names, lay);
   const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id, ref.tldr);
-  for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
+  for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,
@@ -7450,13 +7473,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // 7.0.0 review F3: a legacy ledger source is inert (never read or written), so it needs no
   // args.project; an old ref without one resumes to the unavailable write-back entry
   const lpb = ledgerProblem(brief, input.project);
-  if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
+  if (lpb) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
   // the origin URL sealed in the plan ref
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   // 8.2.1 (#81): before any role runs
-  if (!validRemoteUrl(remoteUrl)) halt("needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again");
+  if (!validRemoteUrl(remoteUrl)) halt("s", "needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again");
   // 7.3.0 (#33): the plan's merge condition (an older plan_ref has none: the PR opens ready)
   const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
   const mainWt = lay.mainWt;
@@ -7473,37 +7496,37 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     JUDGE_AGENT,
     "verify_since",
   );
-  if (typeof v.head !== "string" || !SHA_RE.test(v.head)) halt("failed", "infra:verify-plan returned no usable head");
+  if (typeof v.head !== "string" || !SHA_RE.test(v.head)) halt("s", "failed", "infra:verify-plan returned no usable head");
   if (typeof v.is_ancestor !== "boolean" || !Array.isArray(v.commits_since) || !Array.isArray(v.plan_touched) || !Array.isArray(v.changed_since))
-    halt("failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
+    halt("s", "failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
   requireProgram(v, "verify_since", "infra:verify-plan");
   requireProgram(v.plan_hash, "plan_hash", "infra:verify-plan (plan_hash)");
   v.plan_sha256 = v.plan_hash.plan_sha256;
   if (!relayDigestOk(v, progKeys("verify_since"), "verify_since"))
-    halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
+    halt("s", "failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (canonical(v.args) !== canonical([mainWt, planBase, ref.plan_path]))
-    halt("failed", "infra:verify-plan: " + OTHER_ARGS + " (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
+    halt("s", "failed", "infra:verify-plan: " + OTHER_ARGS + " (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
   // security review: no replacement object may stand in for a sealed id; roles read the plan by its own blob id
   const ph = v.plan_hash;
   if (!relayDigestOk(ph, progKeys("plan_hash"), "plan_hash") || canonical(ph.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(String(ph.blob)))
-    halt("failed", "infra:verify-plan: the relayed plan hash" + NOT_DIGEST + ", arguments or a full blob id");
-  if (!Array.isArray(v.replace_refs)) halt("failed", "infra:verify-plan: no replace_refs list");
-  if (v.replace_refs.length) halt("needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "refs");
+    halt("s", "failed", "infra:verify-plan: the relayed plan hash" + NOT_DIGEST + ", arguments or a full blob id");
+  if (!Array.isArray(v.replace_refs)) halt("s", "failed", "infra:verify-plan: no replace_refs list");
+  if (v.replace_refs.length) halt("s", "needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "refs");
   const planBlob = v.plan_hash.blob;
   if (v.plan_sha256 !== ref.plan_sha256)
-    halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
+    halt("s", "needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
   if (v.head !== planBase) {
     if (v.is_ancestor !== true)
-      halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase);
+      halt("s", "needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase);
     if ((v.plan_touched || []).length)
-      halt("needs_human", "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc never ships)");
+      halt("s", "needs_human", "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc never ships)");
     // 6.0.1 D4: a forge update-branch merge (parents [a fleet commit or plan_base, a base commit]) stops, fail closed
     const fleetShas = [planBase].concat((v.commits_since || []).filter((c) => subj.isFleet(String(c.subject || ""))).map((c) => c.sha));
     if ((v.commits_since || []).some((c) => Array.isArray(c.parents) && c.parents.length === 2 && fleetShas.indexOf(c.parents[0]) >= 0 && fleetShas.indexOf(c.parents[1]) < 0))
-      halt("needs_human", "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish the PR by hand or re-plan on the new base");
+      halt("s", "needs_human", "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish the PR by hand or re-plan on the new base");
     for (const c of v.commits_since || [])
       if (!subj.isFleet(String(c.subject || "")))
-        halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
+        halt("s", "needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
     // earlier fleet commits are fenced too, before any role runs
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_base by " + (v.commits_since || []).length + " fleet commit(s)");
@@ -7545,7 +7568,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT, "read_state");
   requireProgram(rs, "read_state", "infra:read-state", "needs_human", "resume");
   if (!relayDigestOk(rs, progKeys("read_state"), "read_state"))
-    halt("needs_human", "run-state read did not complete: the relayed state" + NOT_DIGEST + " (" + stateRef + ")", "resume");
+    halt("s", "needs_human", "run-state read did not complete: the relayed state" + NOT_DIGEST + " (" + stateRef + ")", "resume");
   let resume = null;
   // the hasher:resume state: the frozen maps at ship (2043)
   let resumeState = null;
@@ -7560,7 +7583,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       gate("stale run-state of plan " + st.plan_commit + " ignored: HEAD is the plan base " + planBase);
     else {
       const mis = (what) =>
-        halt("needs_human", "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the writers", "resume");
+        halt("s", "needs_human", "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the writers", "resume");
       if (!st || typeof st !== "object") mis("unreadable state");
       if (st.plan_commit !== ref.plan_commit) mis("plan_commit " + st.plan_commit + " != " + ref.plan_commit);
       if (st.ref_sha256 !== tiny.ref_sha256) mis("ref_sha256");
@@ -7581,7 +7604,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       resumeState = hr;
     }
   } else if (v.head !== planBase)
-    halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+    halt("s", "needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
   // 6.3.0 (security review): the current file (or a resume's run-state seal), never looser than the plan ref's seal
   const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
@@ -7596,7 +7619,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (typeof input.freeze_digest === "string" && resume) gate("freeze_digest not used: the run-state at " + resume.last_gate + " resumes this build");
   else if (typeof input.freeze_digest === "string") {
     const mis = (what) =>
-      halt(
+      halt("s",
         "needs_human",
         "frozen resume refused: " + what + " (" + freezeRefName + "); clean or stash the worktree by hand and build without freeze_digest, or re-plan",
         "resume",
@@ -7618,7 +7641,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let intent = resume ? resume.intent || null : opt.intent;
   if (opt.rerunGates && !resume) {
     phase("Auto-confirm");
-    if (!Array.isArray(ref.plan_diff)) halt("needs_human", LEGACY_REF);
+    if (!Array.isArray(ref.plan_diff)) halt("s", "needs_human", LEGACY_REF);
     if (planFacts.change_kind === null || planFacts.new_behaviour === null)
       return autoFailResult(
         { failedCheck: "intent", reasons: ["plan_ref sealed before 4.0.0 (no plan_facts change_kind/new_behaviour in " + tiny.plan_ref + "): re-plan to build under confirm auto"], intent: null },
@@ -7666,9 +7689,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     : null;
   async function tfGate(label, scanDiff) {
     if (!validRemoteUrl(remoteUrl))
-      halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX, "iac");
+      halt("s", "needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX, "iac");
     if (ws.remoteUrl !== remoteUrl)
-      halt("needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
+      halt("s", "needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
     const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "tf_gate", [mainWt, defaultBranch, approvedSha, remoteUrl]);
     const strs = (a) => Array.isArray(a) && a.every((x) => typeof x === "string");
     const scanIac = (scanDiff || []).filter(isIacPath);
@@ -7677,9 +7700,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       !relayDigestOk(r, progKeys("tf_gate"), "tf_gate") || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
       r.touched !== r.iac_files.length > 0 || scanIac.some((p) => r.iac_files.indexOf(p) < 0)
     )
-      halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result" + NOT_DIGEST + ", arguments or the PR diff)", "iac");
+      halt("s", "needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result" + NOT_DIGEST + ", arguments or the PR diff)", "iac");
     const hints = "hints (not a security check): " + (r.hints.length ? logPath(r.hints.join("; ")) : "none");
-    if (r.problems.length) halt("needs_human", "IaC pre-push check stops: " + logPath(r.problems.join("; ")) + ". " + hints, "iac");
+    if (r.problems.length) halt("s", "needs_human", "IaC pre-push check stops: " + logPath(r.problems.join("; ")) + ". " + hints, "iac");
     if (!r.touched) {
       gate(label + ": no IaC file in the PR diff");
       return false;
@@ -7694,7 +7717,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return true;
     }
     const remote = !rhOk ? "could not be read" : rh.head === null ? "is absent" : "is at " + rh.head;
-    halt(
+    halt("s",
       "needs_human",
       "IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approvedSha + ", IaC files: " + logPath(r.iac_files.join(", ")) +
         ". To push it yourself: git -C " + shQuote(mainWt) + " push -u origin " + branch + " ; then " + SAME_PLAN_REF + " to open the PR (it goes on only when origin/" +
@@ -7708,15 +7731,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const sb = upd ? upd.base : null;
     const r = await infra(label, fleetScanPrompt(Object.assign({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }, sb ? { base: sb } : {})), "PR", JUDGE_AGENT, "fleet_scan");
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
-      halt("needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
+      halt("s", "needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
     if (!relayDigestOk(r, progKeys(sb ? "fleet_scan:base" : "fleet_scan"), "fleet_scan") || (sb && r.base !== sb))
-      halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
+      halt("s", "needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
-    if (bad.length) halt("needs_human", "fleet internal files in PR diff: " + logPath(bad.join(", ")), "scope");
+    if (bad.length) halt("s", "needs_human", "fleet internal files in PR diff: " + logPath(bad.join(", ")), "scope");
     // 6.0.0 (2042): the plan doc never ships
     const pp = normPath(ref.plan_path);
-    if (r.diff.concat(...r.commits.map((c) => c.files)).some((x) => normPath(x) === pp)) halt("needs_human", "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships", "scope");
+    if (r.diff.concat(...r.commits.map((c) => c.files)).some((x) => normPath(x) === pp)) halt("s", "needs_human", "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships", "scope");
     gate(label + ": no .fleet/ path and no plan doc in the PR diff or its commits");
     return r.diff;
   }
@@ -7738,10 +7761,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         g = ghFor(remoteSlug);
       }
       if (!g || (!g.push && !ghNoPush(remoteSlug)))
-        halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then " + SAME_PLAN_REF + " (it resumes at the PR)", "push");
+        halt("s", "needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then " + SAME_PLAN_REF + " (it resumes at the PR)", "push");
     }
     if (!g || !g.push)
-      halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "push");
+      halt("s", "needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "push");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
     const opener = async (lb, more) => {
       const x = requireOk(
@@ -7773,7 +7796,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         ),
       );
       // 7.3.0 (#49): ok with no PR stops; a review is never skipped silently
-      if (x.pr_url == null || x.pr_number == null) halt("needs_human", "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch on the forge", "role");
+      if (x.pr_url == null || x.pr_number == null) halt("s", "needs_human", "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch on the forge", "role");
       return x;
     };
     const why = (x) =>
@@ -7789,13 +7812,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       r = await opener(label + ":again", { pr_url: first.pr_url, pr_number: first.pr_number, retry_reason: w });
       if (first.created) r = Object.assign({}, r, { created: true });
       // review M2: the retry fixes the same PR, never another
-      if (r.pr_url !== first.pr_url || r.pr_number !== first.pr_number) halt("needs_human", "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
+      if (r.pr_url !== first.pr_url || r.pr_number !== first.pr_number) halt("s", "needs_human", "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
       w = why(r);
     }
-    if (w && r.title !== subj.main) halt("needs_human", w, "role");
+    if (w && r.title !== subj.main) halt(J_PR, "needs_human", w, "role");
     state.pr = r;
     gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
-    if (w) halt("needs_human", w);
+    if (w) halt(J_PR, "needs_human", w);
     // 7.1.0 (L2145): the script-written test block, then one checked rewrite for a count claim outside it
     const tl = "infra:pr-tests" + label.replace("role:fleet-pr-opener", "");
     const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
@@ -7810,13 +7833,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       pr_number: first.pr_number,
       retry_reason: "the PR body states test counts outside the script-written test block: " + quoteClaims(own) + "; write no test count anywhere in your text (the workflow writes the measured counts into its own block)",
     });
-    if (r2.pr_url !== first.pr_url || r2.pr_number !== first.pr_number) halt("needs_human", "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
+    if (r2.pr_url !== first.pr_url || r2.pr_number !== first.pr_number) halt("s", "needs_human", "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
     const w2 = why(r2);
-    if (w2) halt("needs_human", w2, "role");
+    if (w2) halt(J_PR, "needs_human", w2, "role");
     r = Object.assign({}, r2, { created: first.created });
     state.pr = r;
     const left = await prTestsStep(tl + ":counts", targs, tb, r.pr_url, supplied);
-    if (left.length) halt("needs_human", stillClaims(tl + ":counts", left, r.pr_url), "role");
+    if (left.length) halt(J_PR, "needs_human", stillClaims(tl + ":counts", left, r.pr_url), "role");
     return r;
   }
   async function saveState(lastGate, label) {
@@ -7874,15 +7897,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
         await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
         r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "PR" }), "run-state", "no run-state was written", "resume");
-        if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+        if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
       }
     } finally {
       state.tailWriters = false;
     }
     requireProgram(r, "state_write", label);
-    if (!relayDigestOk(r, progKeys("state_write"), "state_write")) halt("failed", label + ": the relayed head and state object do not match the program's digest");
-    if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
-    if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("failed", label + " returned no usable state_sha");
+    if (!relayDigestOk(r, progKeys("state_write"), "state_write")) halt("s", "failed", label + ": the relayed head and state object do not match the program's digest");
+    if (r.head !== approvedSha) halt("s", "failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
+    if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("s", "failed", label + " returned no usable state_sha");
     if (frozen) frozen.git[FLEETREF + stateRef] = r.state_sha;
     gate("run-state " + lastGate + " at " + approvedSha);
   }
@@ -7906,7 +7929,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const notes = state.review && Array.isArray(state.review.nits) ? state.review.nits : [];
       const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
       const own = await prTestsStep("infra:pr-tests:resume", targs, tb, pr.pr_url, supplied);
-      if (own.length) halt("needs_human", stillClaims("infra:pr-tests:resume", own, pr.pr_url), "role");
+      if (own.length) halt(J_PR, "needs_human", stillClaims("infra:pr-tests:resume", own, pr.pr_url), "role");
     }
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
@@ -7938,10 +7961,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         );
         requireProgram(push, "push", pushLabel);
         if (!relayDigestOk(push, progKeys("push:push"), "push") || canonical(push.args) !== canonical(pushArgs))
-          halt("failed", pushLabel + ": the relayed push result" + NOT_DIGEST + " or arguments (push_result " + JSON.stringify(push.push_result === undefined ? null : push.push_result) + ")");
+          halt("s", "failed", pushLabel + ": the relayed push result" + NOT_DIGEST + " or arguments (push_result " + JSON.stringify(push.push_result === undefined ? null : push.push_result) + ")");
         if (push.push_result === "hook_rejected") {
           if (push.exit_code !== 1 || typeof push.hook_tail !== "string")
-            halt("failed", pushLabel + ": the relayed hook_rejected result is not the program's (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
+            halt("s", "failed", pushLabel + ": the relayed hook_rejected result is not the program's (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
           const tail = String(push.hook_tail || "").trim();
           gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
           return {
@@ -7958,9 +7981,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           };
         }
         if (push.push_result !== "ok")
-          halt(["non_ff", "remote_rejected", "ambiguous"].indexOf(push.push_result) >= 0 ? "needs_human" : "failed", pushLabel + ": push_result " + JSON.stringify(push.push_result || null) + " after " + push.attempts + " attempt(s): " + logPath(String(push.tail || "").trim().split(/[\r\n]+/).slice(-5).join(" | ")));
+          halt("s", ["non_ff", "remote_rejected", "ambiguous"].indexOf(push.push_result) >= 0 ? "needs_human" : "failed", pushLabel + ": push_result " + JSON.stringify(push.push_result || null) + " after " + push.attempts + " attempt(s): " + logPath(String(push.tail || "").trim().split(/[\r\n]+/).slice(-5).join(" | ")));
         if (push.remote_head !== approvedSha)
-          halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
+          halt("s", "needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
         gate("pushed " + branch + " at " + approvedSha);
         await saveState("pushed", "infra:state:pushed:p" + pushes);
       } else if (step === "pr") {
@@ -7976,7 +7999,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         if (upd) await statsStep();
         await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
       } else if (step === "review") {
-        if (!pr || !pr.pr_url || pr.pr_number == null) halt("needs_human", "review: no PR to review (pr-opener returned no pr_url/pr_number)", "review");
+        if (!pr || !pr.pr_url || pr.pr_number == null) halt("s", "needs_human", "review: no PR to review (pr-opener returned no pr_url/pr_number)", "review");
         // 8.7.0 (#108 step 4): after the pr_open run-state; a re-run resumes at the review
         budgetStop("the review v" + (reviews + 1));
         reviews++;
@@ -7997,19 +8020,19 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // 7.4.0 (#61): a fix that contradicts a frozen test or criterion re-plans, never a coder round
           const planF = rv.blocking.filter((f) => f.target === "plan");
           if (planF.length && inUpd)
-            halt("needs_human", "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge; re-plan on the new base or fix by hand", "review");
+            halt(J_BASE, "needs_human", "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge; re-plan on the new base or fix by hand", "review");
           if (planF.length) {
             gate("review v" + reviews + ": changes_requested (" + planF.length + " plan-target) -> re-plan");
             return { gate: "review", plan: planF.map((f) => ({ target: "plan", criterion: null, finding: reviewFindingText(f) })) };
           }
           if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
-            halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
+            halt(J_PR, "needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
           // 6.1.0 (2049): code rounds on the forge's merge only when R1-R5 pass, else the 6.0.1 stop
           // (the findings stay in the run result, state.review; no PR-body write before the stop)
           if (codeF.length && inUpd) {
             const no = upd ? await updRefusal() : "the update record is from an earlier run";
             if (no)
-              halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
+              halt(J_BASE, "needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
             upd.pr = rv.changed;
             if (bodyF.length) state.bodyPending = bodyF;
             gate("review u" + upd.reviews + ": changes_requested (" + codeF.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
@@ -8031,7 +8054,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // mixed: the code findings go to the coder first; the next PR-step pr-opener call fixes the body
           if (bodyF.length) state.bodyPending = bodyF;
           if (reviews - (state.bodyReviews || 0) >= MAX_REVIEWS)
-            halt(
+            halt(J_FIX,
               "needs_human",
               "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "),
               "review",
@@ -8094,7 +8117,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // review S8: every PR-tail step needs the checked gh command of the repo
   function ghCmd(where, stopGate) {
     const g = ghFor(remoteSlug);
-    if (!g || !g.gh_cmd) halt("needs_human", where + ": " + noPushText(remoteSlug), stopGate);
+    if (!g || !g.gh_cmd) halt("s", "needs_human", where + ": " + noPushText(remoteSlug), stopGate);
     return g.gh_cmd;
   }
   // review NIT: check names and urls of unverified checks are quoted (CI data)
@@ -8120,7 +8143,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (o.hook_surface_pr) why.push("hook-surface PR");
     };
     judge();
-    const orchStop = () => o.orchestrator && halt("needs_human", "orchestrator PR: needs Max (" + pr.pr_url + "; CI " + ci.verdict + (ci.checks.length ? ": " + ci.checks.map((c) => c.name + " " + c.state).join(", ") : "") + ")", "merge");
+    const orchStop = () => o.orchestrator && halt("s", "needs_human", "orchestrator PR: needs Max (" + pr.pr_url + "; CI " + ci.verdict + (ci.checks.length ? ": " + ci.checks.map((c) => c.name + " " + c.state).join(", ") : "") + ")", "merge");
     const done = (note) => {
       state.ciNote = note;
       orchStop();
@@ -8139,18 +8162,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const wl = "infra:ci-watch:w" + watches;
       const w = await infra(wl, ciWatchPrompt({ args: wa }, Math.ceil(policy.caps.ci_watch_minutes / 8) + 3), "CI", JUDGE_AGENT, "ci_watch", wa);
       requireProgram(w, "ci_watch", wl, "needs_human", "ci");
-      if (!relayDigestOk(w, progKeys("ci_watch"), "ci_watch") || canonical(w.args) !== canonical(wa)) halt("needs_human", wl + RELAY_MISMATCH, "ci");
+      if (!relayDigestOk(w, progKeys("ci_watch"), "ci_watch") || canonical(w.args) !== canonical(wa)) halt("s", "needs_human", wl + RELAY_MISMATCH, "ci");
       ci.checks = w.checks.map((c) => ({ name: c.name, state: c.state, url: c.url }));
       // security review (S6): the CI write-back carries bucket counts only, never names, urls or text
       state.ciCounts = ["pass", "fail", "pending"].map((b) => w.checks.filter((c) => (b === "fail" ? c.bucket === "fail" || c.bucket === "cancel" : c.bucket === b)).length);
       state.ciWaitS = (state.ciWaitS || 0) + (Number.isInteger(w.elapsed_s) && w.elapsed_s > 0 ? w.elapsed_s : 0);
-      if (w.state === "head_moved") halt("needs_human", wl + ": the head of " + pr.pr_url + " moved to " + w.head + " during the CI watch; nothing merged", "ci");
+      if (w.state === "head_moved") halt("s", "needs_human", wl + ": the head of " + pr.pr_url + " moved to " + w.head + " during the CI watch; nothing merged", "ci");
       // B1: an empty check list is never green: nothing ran, nothing merges
       if (w.state === "no_checks" || (w.state === "green" && !w.checks.length)) return done("no CI checks reported");
       if (w.state !== "green" && w.state !== "red") {
         ci.verdict = "timeout";
         const t = "CI unresolved (" + w.state + (w.error ? ": " + w.error : "") + "; " + (ci.checks.map((c) => c.name + " " + c.state).join(", ") || "no check") + ")";
-        if (!why.length) halt("needs_human", t + "; nothing merged: " + pr.pr_url, "ci");
+        if (!why.length) halt("t", "needs_human", t + "; nothing merged: " + pr.pr_url, "ci");
         return done(t);
       }
       if (w.state === "green") {
@@ -8177,10 +8200,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           state.prUpdated = true;
           const u = await prState("infra:pr-update", ["update", g, remoteSlug, n, head], "update the fleet's own PR branch on the forge (never a local rebase or push)", "merge");
           if (u.error !== null || u.updated !== true || typeof u.head !== "string" || !/^[0-9a-f]{40}$/.test(u.head) || typeof u.base !== "string" || !/^[0-9a-f]{40}$/.test(u.base))
-            halt("needs_human", "green, merge blocked: update-branch failed (" + (u.error || "no new head") + "): " + pr.pr_url, "merge");
+            halt("s", "needs_human", "green, merge blocked: update-branch failed (" + (u.error || "no new head") + "): " + pr.pr_url, "merge");
           state.update = { head: u.head, base: u.base };
           if (u.overlap.length) {
-            if (head !== approvedSha) halt("needs_human", "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url, "merge");
+            if (head !== approvedSha) halt("s", "needs_human", "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url, "merge");
             gate("infra:pr-update: " + pr.pr_url + " updated to " + u.head + "; the base change touches files of the PR (" + logPath(u.overlap.join(", ")) + "): review the new head");
             return { gate: "update", head: u.head, base: u.base, overlap: u.overlap };
           }
@@ -8190,7 +8213,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           judge();
           continue;
         }
-        halt("needs_human", "green, merge blocked: " + (m.error || m.blocked || "not merged") + " (" + pr.pr_url + ")", "merge");
+        halt("s", "needs_human", "green, merge blocked: " + (m.error || m.blocked || "not merged") + " (" + pr.pr_url + ")", "merge");
       }
       ci.verdict = "red";
       // security review: a check whose url is not this repo's run of the head is report-only
@@ -8215,8 +8238,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // ADR-1199: on an IaC or orchestrator repo the fleet watches and reports, never pushes a fix
       if (byDiff.length && !iac && !o.orchestrator) {
         // 6.0.1 D1: never a CI-fix coder round after any update-branch (an overlap update moves approvedSha too)
-        if (state.prUpdated) halt("needs_human", "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url, "ci");
-        if ((state.rounds.ci || 0) >= MAX_CI_FIX) halt("needs_human", "CI still red after " + MAX_CI_FIX + " CI-fix rounds: " + rep, "ci");
+        if (state.prUpdated) halt(J_CI, "needs_human", "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url, "ci");
+        if ((state.rounds.ci || 0) >= MAX_CI_FIX) halt(J_CI, "needs_human", "CI still red after " + MAX_CI_FIX + " CI-fix rounds: " + rep, "ci");
         state.rounds.ci = (state.rounds.ci || 0) + 1;
         ci.fix_rounds = state.rounds.ci;
         gate("CI red on " + approvedSha + ": " + rep + " -> coder (CI-fix round " + state.rounds.ci + ")");
@@ -8240,7 +8263,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         }
         gate("warning: rerun failed: " + rr.error);
       }
-      if (!why.length) halt("needs_human", "CI red, nothing merged: " + rep, "ci");
+      if (!why.length) halt("s", "needs_human", "CI red, nothing merged: " + rep, "ci");
       return done("CI red, reported with no code change: " + rep);
     }
   }
@@ -8249,10 +8272,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   async function adoptUpdate(f) {
     const fr = await prState("infra:pr-fetch:u1", ["fetch", mainWt, branch, approvedSha, f.head, f.base], "bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)", "merge");
     if (fr.error !== null || fr.head !== f.head)
-      halt("needs_human", "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " and the base tip " + f.base + " (" + (fr.error || "head " + fr.head) + "): " + pr.pr_url, "merge");
+      halt("s", "needs_human", "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " and the base tip " + f.base + " (" + (fr.error || "head " + fr.head) + "): " + pr.pr_url, "merge");
     // 6.1.0: changed = old head..merge, the net base change (moved)
     const h = await hasher("hasher:update:u1", mainWt, hashedFiles, "CI", approvedSha);
-    if (h.fingerprint.head !== f.head) halt("needs_human", "update-branch: worktree HEAD " + h.fingerprint.head + " is not the fetched " + f.head, "merge");
+    if (h.fingerprint.head !== f.head) halt("s", "needs_human", "update-branch: worktree HEAD " + h.fingerprint.head + " is not the fetched " + f.head, "merge");
     const hs = await hookSurface("infra:hook-surface:u1", mainWt, f.base, [], "CI");
     hookGate("the update-branch merge " + f.head, f.overlap, hs.surface, null);
     gate("update-branch: " + f.head + " is the forge's merge of " + approvedSha + " and " + f.base + " (tree " + fr.tree + "); reviewing it");
@@ -8323,6 +8346,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const c = state.ci;
     const line = ciLine(c, state.ciCounts, stopReason);
     const sg = state.stopGate;
+    const sc = state.stopClass;
     try {
       const r = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url, ci: line });
       state.ciWriteBack = { ledger_status: r.ledger_status, comment_status: r.comment_status, write_back: r.write_back };
@@ -8331,6 +8355,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       gate("warning: CI write-back failed: " + state.ciWriteBack.error);
     }
     state.stopGate = sg;
+    state.stopClass = sc;
   }
   // a stop inside the CI tail still writes the CI outcome back, then stops
   async function ciGuard(fn) {
@@ -8360,7 +8385,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     orchLabels.push(ol);
     const o = await infra(ol, orchScanPrompt({ args: oa }), "PR", JUDGE_AGENT, "orch_scan", oa);
     requireProgram(o, "orch_scan", ol, "needs_human", "ci");
-    if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + RELAY_MISMATCH, "ci");
+    if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("s", "needs_human", ol + RELAY_MISMATCH, "ci");
     gate(ol + ": " + (o.reasons.length ? logPath(o.reasons.join("; ")) : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
     // 7.3.0 (#32): an error gets one retry; the second result counts
     if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
@@ -8372,7 +8397,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   async function readyStep() {
     if (!pr || pr.pr_number == null) return gate("ready skipped: no PR");
     // 7.3.0 (#33): the PR opened ready; a branch Max pushed himself (ADR-1175) still stops here
-    if (iacTouched) halt("needs_human", "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")", "iac");
+    if (iacTouched) halt("s", "needs_human", "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")", "iac");
     const g = ghCmd("ready", "ci");
     const o = await orchScan(approvedSha);
     // 7.3.0 (#32): a scan error no longer keeps a draft; it blocks merge and rerun (judge() in ciStep) and is a warning
@@ -8394,7 +8419,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const label = "infra:pr-ready" + (++readyRuns > 1 ? ":p" + readyRuns : "");
     const r = await prState(label, ["ready", g, remoteSlug, String(pr.pr_number), approvedSha], "mark the fleet's own PR ready for review", "ci");
     if (r.error !== null || r.is_draft !== false || r.head !== approvedSha)
-      halt("needs_human", label + ": " + pr.pr_url + " is not ready at the approved " + approvedSha + " (" + (r.error || "is_draft " + r.is_draft + ", head " + r.head) + ")", "ci");
+      halt("s", "needs_human", label + ": " + pr.pr_url + " is not ready at the approved " + approvedSha + " (" + (r.error || "is_draft " + r.is_draft + ", head " + r.head) + ")", "ci");
     state.prReady = true;
     gate(label + ": " + pr.pr_url + (r.was_draft ? " marked ready for review" : " was already ready") + " at " + approvedSha);
   }
@@ -8418,15 +8443,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const label = again || (tag ? "infra:pr-stats:" + tag : "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : ""));
     const r = await infra(label, prStatsPrompt({ args }), "PR", INFRA_AGENT, undefined, args, "pr_body_block");
     requireProgram(r, "pr_body_block", label, "needs_human", "stats");
-    if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + RELAY_MISMATCH, "stats");
-    if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
+    if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("s", "needs_human", label + RELAY_MISMATCH, "stats");
+    if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("s", "needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
     const bad = r.error !== null ? ": " + r.error + "; check the body of " + pr.pr_url : r.block_sha256 !== sha256Hex(tpl.replace(STATS_WALL, fmtDur(r.wall_s))) ? ": the PR body's stats block is not the script's block; check " + pr.pr_url : null;
     // 8.7.0 (#108 step 4): written once more between its markers (the same write)
     if (bad && !again) {
       autoDecide("pr-body", "regenerate", label + bad);
       return statsStep(tag, label + ":regen");
     }
-    if (bad) halt("needs_human", label + bad, "stats");
+    if (bad) halt("s", "needs_human", label + bad, "stats");
     gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + pr.pr_url);
   }
 
@@ -8472,7 +8497,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const uh = o && o.head !== undefined ? o.head : null;
       const ub = o && o.base !== undefined ? o.base : null;
       if (!/^[0-9a-f]{40}$/.test(String(uh)) || !/^[0-9a-f]{40}$/.test(String(ub)) || (uh === approvedSha && ub === approvedSha))
-        halt("needs_human", "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSha + " (" + stateRef + ")", "resume");
+        halt("s", "needs_human", "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSha + " (" + stateRef + ")", "resume");
       state.update = { head: uh, base: ub };
     }
     if (resume.pr_url || resume.pr_number != null) {
@@ -8515,7 +8540,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 2043: the coder round starts from the freeze ref; without it the run stops as before
     const ft = resumeState.hashes.git[FLEETREF + freezeRefName];
     if (typeof ft !== "string" || !ft)
-      halt(
+      halt("s",
         "needs_human",
         "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot start (no freeze ref " + freezeRefName + "); fix by hand or re-plan: " +
           shipFix.findings.map((f) => f.finding).join("; "),
@@ -8570,7 +8595,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     );
     const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
     let r = await roleAgent("fleet-test-writer", label, prompt, opts);
-    if (r == null) halt("failed", "test writer short r" + n + " returned no result");
+    if (r == null) halt("s", "failed", "test writer short r" + n + " returned no result");
     r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r, [writerKey(null, n)]);
     checkRole("fleet-test-writer", r);
     collect("fleet-test-writer", r);
@@ -8580,7 +8605,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
     for (const f of out.files) {
       const nf = normPath(f);
-      if (!owner[nf]) halt("needs_human", "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
+      if (!owner[nf]) halt("s", "needs_human", "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
     }
     const split = {};
     for (const id of ids) split[id] = [];
@@ -8588,7 +8613,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const cv = t && typeof t === "object" && typeof t.covers === "string" ? t.covers : null;
       const cid = cv !== null && cv.indexOf(":") > 0 ? cv.slice(0, cv.indexOf(":")) : null;
       if (cid === null || !Object.prototype.hasOwnProperty.call(split, cid))
-        halt(
+        halt("s",
           "needs_human",
           "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n + " has covers " + JSON.stringify(cv) +
             ", not \"<criterion id>: ...\" of a pending criterion (" + ids.join(", ") + ")",
@@ -8631,7 +8656,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (let idx = 0; idx < results.length; idx++) {
       const cid = pending[idx].criterion.id;
       let r = results[idx];
-      if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
+      if (r == null) halt("s", "failed", "test writer " + cid + " r" + n + " returned no result");
       r = await retryOnDrift("fleet-test-writer", wcalls[idx][0], wcalls[idx][1], wcalls[idx][2], r, [writerKey(pending[idx].criterion, n)]);
       checkRole("fleet-test-writer", r);
       collect("fleet-test-writer", r);
@@ -8642,12 +8667,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // 8.3.0 (#98): an ownership stop after the writers (before the first freeze, not an augmentation round) saves
   // their output under a ref, then cleans the worktree to HEAD, so a new run of this plan_ref starts clean
   async function writerStop(n, post, msg, sg) {
-    if (sg !== "ownership" || freezeTree !== null || aug) halt("needs_human", msg, sg);
+    if (sg !== "ownership" || freezeTree !== null || aug) halt("s", "needs_human", msg, sg);
     const fp = post.fingerprint;
     const ref = "refs/fleet/" + lay.key + "/stopped-" + safeName(state.nonce) + "-r" + n + "-tree";
     const r = await softDispatch("infra:stop-save:r" + n, stopSavePrompt({ main_worktree: mainWt, expected_head: fp.head, expected_tree: fp.tree, ref }), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Tests" });
     const ok = !!r && r.status === "ok" && r.ref_target === fp.tree && r.head === fp.head && r.clean === true;
-    halt("needs_human", msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " and clean not confirmed (" + (r ? r.status + ": " + r.reason : "no result") + ")"), sg);
+    halt("s", "needs_human", msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " and clean not confirmed (" + (r ? r.status + ": " + r.reason : "no result") + ")"), sg);
   }
   async function afterWriters(n, pending, pre) {
     const roundOut = pending.map((p) => writerOut[p.criterion.id]);
@@ -8663,11 +8688,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const pfh = preFreezeHooks(state.policy);
     const fmt = await formatFiles("infra:format-tests:r" + n, mainWt, pfh.length ? { paths: wrote, check_hooks: pfh } : { paths: wrote }, [], wrote, "Tests", lay.scratch);
     if (pfh.length && !fmt.ran && fmt.note !== "no files to format")
-      halt("needs_human", "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.note + "); a test file is never frozen unchecked", "policy");
+      halt("s", "needs_human", "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.note + "); a test file is never frozen unchecked", "policy");
     hookFail = pfh.length && fmt.ran && fmt.hook_failed ? { failures: fmt.hook_failures.map((x) => [normPath(x[0]), x[1]]), head: fmt.hook_head } : null;
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
-      halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
+      halt("s", "needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
     const owner = {};
     for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
     const reported = {};
@@ -8690,7 +8715,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (k.map === "ignored")
         await writerStop(n, post, ((k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
       // a run-state ref a role touched is left as found (no save, no clean)
-      else if (k.map === "git" && k.key.indexOf(FLEETREF) === 0) halt("needs_human", logPath(violationName(k)) + " in test round " + n, "ownership");
+      else if (k.map === "git" && k.key.indexOf(FLEETREF) === 0) halt("s", "needs_human", logPath(violationName(k)) + " in test round " + n, "ownership");
       if (k.more) more = k.more;
       // 7.4.0 (#72): a config file the round owns (a greenfield pyproject.toml in test_files) owns its sections;
       // review A-M3: only for a file new in this round: the hasher lists a section of every existing file (ABSENT
@@ -8709,7 +8734,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const t = [].concat(...roundOut.map((o) => o.tests));
       const miss = aug.mut.filter((v) => !t.some((x) => x && new RegExp("\\b" + v.id + "\\b").test(x.covers)));
       if (!t.length || t.some((x) => !x || x.red_kind !== "kills_mutant") || miss.length)
-        halt("needs_human", "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must name each survivor in a covers" + (miss.length ? "; not named: " + miss.map((v) => v.id).join(", ") : ""), "role");
+        halt("s", "needs_human", "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must name each survivor in a covers" + (miss.length ? "; not named: " + miss.map((v) => v.id).join(", ") : ""), "role");
     }
     gate("test round " + n + ": writers ok: " + ids + "; " + changed.length + " owned path(s) changed, HEAD unchanged");
     last = post;
@@ -8749,7 +8774,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           const whole = hf.failures.filter((x) => x[0] === "").map((x) => x[1]);
           const listed = hf.failures.map((x) => (x[0] === "" ? "the whole tree" : logPath(x[0])) + " (" + x[1] + ")").join(", ");
           if (i === maxTestRounds - 1)
-            halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "rounds");
+            halt(J_TASK, "needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "rounds");
           // review L3: each writer gets only the failures in its own test files
           const next = [];
           for (const p of pending) {
@@ -8768,7 +8793,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
               ". First output: " + hf.head;
             next.push({ criterion: p.criterion, findings: [{ target: "tests", criterion: p.criterion.id, finding }] });
           }
-          if (!next.length) halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns", "ownership");
+          if (!next.length) halt("s", "needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns", "ownership");
           pending = next;
           gate("infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + "; fix_tests round to " + pending.map((p) => p.criterion.id).join(", "));
           continue;
@@ -8805,14 +8830,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           gate("test-judge r" + n + ": approve");
           return null;
         }
-        if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
+        if (tj.verdict !== "revise") halt("s", "failed", "test-judge returned no verdict");
         const byCrit = {};
         for (const f of routed)
           if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
         pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: aug && aug.c.id === c.id ? aug.c : c, findings: byCrit[c.id] }));
         if (pending.length) break;
         const w = "test-judge revise r" + n + " routed no finding to a known criterion";
-        if (k) halt("needs_human", w);
+        if (k) halt("s", "needs_human", w);
         // 6.3.0: one scripted retry of the judge
         gate(w + "; one scripted retry (" + tl + ":again)");
         reserve(2, "test-judge retry r" + n);
@@ -8822,7 +8847,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       }
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
-    halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "rounds");
+    halt(J_TASK, "needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "rounds");
   }
 
   // freeze
@@ -8836,9 +8861,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, hashedFiles, "Freeze");
     if (last && !sameState(last, h, mainWt))
-      halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
+      halt("s", "needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
-      halt(
+      halt("s",
         "needs_human",
         "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " +
           logPath(h.hashes.suspicious.join(", ")),
@@ -8851,9 +8876,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const changed = [];
       const keys = await expandKeys(changedKeys(frozen, h.hashes, mainWt), frozen, h.hashes, "refreeze:f" + freezes, "Freeze", null, Object.keys(allowed));
       for (const k of keys) {
-        if (k.more && k.map !== "ignored") halt("needs_human", "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)", "hash");
+        if (k.more && k.map !== "ignored") halt("s", "needs_human", "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)", "hash");
         if (k.map !== "files" || k.key === MAP_ALL || !allowed[k.key] || (refreeze.files && k.kind !== "added"))
-          halt("needs_human", "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")).join(", ") : violationName(k)), "hash");
+          halt("s", "needs_human", "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")).join(", ") : violationName(k)), "hash");
         // no hash value
         changed.push({ path: k.name, change: k.kind });
       }
@@ -8876,7 +8901,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("freeze f" + freezes + " at tree " + freezeTree + " (HEAD " + freezeRef + "): " + countKeys(frozen) + " hashed keys");
     // the freeze tree under refs/fleet/<task>/freeze (no commit)
     const fr = await infra("infra:freeze-ref:f" + freezes, freezeRefPrompt({ main_worktree: mainWt, ref: freezeRefName, tree: freezeTree }), "Freeze", INFRA_AGENT);
-    if (fr.ref_target !== freezeTree) halt("failed", "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_target === undefined ? null : fr.ref_target) + ", not the freeze tree " + freezeTree);
+    if (fr.ref_target !== freezeTree) halt("s", "failed", "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_target === undefined ? null : fr.ref_target) + ", not the freeze tree " + freezeTree);
     frozen.git[FLEETREF + freezeRefName] = freezeTree;
     setFreezeDigest();
   }
@@ -8942,7 +8967,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   try {
     for (;;) {
       if (state.rounds.code >= MAX_CODE_ROUNDS)
-        halt(
+        halt(updRound ? J_BASE : J_TASK,
           "needs_human",
           "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" +
             // 6.1.0 review S1: after update-branch it is a review outcome (CI stop code review)
@@ -8985,7 +9010,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           rolePrompt("fleet-coder", coderIn) + "\nYour previous result was refused: " + coderFileOnly + ". Your code changes are in the worktree; change no file. Do steps 1 and 2 again, then return the whole result object again.",
           { schema: SCHEMAS["fleet-coder"], phase: "Code" },
         );
-        if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+        if (r2 == null) halt("s", "failed", "agent " + rl + " returned no result");
         gate("fleet-coder: " + coderFileOnly + "; asked once more");
         coder = r2;
       }
@@ -8996,12 +9021,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 6.1.0: in a round after update-branch the coder's own delta is diffed against tree(d)
       const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", updRound ? upd.tree : planBase);
       if (h.fingerprint.head !== expectedHead)
-        halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
+        halt("s", "needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
       fenceChanged("code round " + m, h.changed);
       const viol = await diffHashes(frozen, h.hashes, mainWt, "code:r" + m, "Code");
       const coderDrift = contractProblem("fleet-coder", coder);
       if (viol.length && (coderDrift || coder.status !== "ok"))
-        halt(
+        halt("s",
           "needs_human",
           "code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze tree " + freezeTree + ")" +
             " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
@@ -9009,7 +9034,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         );
       // the coder is never re-run on drift
       const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
-      if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
+      if (coderFile) halt("s", "needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
       const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
       // 7.4.0 (#61): a well-formed test conflict goes to the code judge this round (no hash change, role file checked)
       const tc = !viol.length && !updRound && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
@@ -9022,7 +9047,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       collect("fleet-coder", coder);
       if (coder.status === "ok") state.followUps = followUpsOf(coder);
       if (augAt && augAt + 1 === m && coder.status === "ok" && coder.frozen_tests_red_at_start)
-        halt("needs_human", "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its new tests must pass on the approved tree", "gates");
+        halt(J_TASK, "needs_human", "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its new tests must pass on the approved tree", "gates");
       last = h;
       if (coderDriftOk) {
         lastRoundGate = "contract";
@@ -9099,7 +9124,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (tc && cj.verdict !== "plan_wrong" && cj.verdict !== "fix_tests") requireOk("fleet-coder", coder);
       // 6.1.0 R6: never a test writer, re-freeze or re-plan on the forge's merge
       if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
-        halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
+        halt(J_BASE, "needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
       if (cj.verdict === "plan_wrong") return planWrong("code-judge", routed.filter((f) => f.target === "plan"), jc.state.fingerprint.head, codeTree, !!tc);
       if (cj.verdict === "fix_code") {
         coderFindings = routed.filter((f) => f.target === "code");
@@ -9124,7 +9149,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         judgePrior = coderFindings.slice();
         continue;
       }
-      if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
+      if (cj.verdict !== "approve") halt("s", "failed", "code-judge returned no verdict");
       // 8.0.0 (G4): an approve with a failing hidden example is fix_code; the coder learns the criterion only
       const hoF = state.gates.held_out;
       if (hoF.status === "failed") {
@@ -9160,14 +9185,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const mutT = mutF.unruled ? [] : mutF.filter((f) => f.mutant);
       if (mutT.length) {
         if (updRound || augAt)
-          halt(
+          halt(updRound ? J_BASE : J_TASK,
             "needs_human",
             "code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") + " target tests " + (updRound ? "after update-branch" : "after the augmentation round of this run") + "; one round per run",
             updRound ? "review" : "gates",
           );
         augAt = m;
         // the round's new file: the first test file of the first testable criterion, _mut<m> before its suffix
-        const c0 = testable[0] || halt("needs_human", "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file", "gates");
+        const c0 = testable[0] || halt("s", "needs_human", "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file", "gates");
         const files = [augName(testable, m)];
         aug = { c: Object.assign({}, c0, { test_files: files }), orig: frozenFiles.slice(), files, mut: mutT.map((f) => f.mutant) };
         frozenFiles.push(...(state.augFiles = files));
@@ -9259,9 +9284,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         INFRA_AGENT,
       );
       if (cs.staged_tree !== codeTree)
-        halt("needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
+        halt("s", "needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
       if (cs.worktree_tree !== codeTree)
-        halt("needs_human", "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+        halt("s", "needs_human", "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
       if (cs.commit_result === "hook_rejected") {
         const tail = String(cs.hook_tail || "").trim();
         coderFindings = [
@@ -9279,11 +9304,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         continue;
       }
       if (cs.commit_result !== "committed" || typeof cs.head !== "string" || !SHA_RE.test(cs.head))
-        halt("failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
+        halt("s", "failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
       if (cs.head_tree !== codeTree)
-        halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+        halt("s", "needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
       if (prParent && cs.parent !== prParent)
-        halt("needs_human", "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the push would need a force", "commit");
+        halt("s", "needs_human", "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the push would need a force", "commit");
       shipParent = prParent ? [prParent, codeTree] : null;
       expectedHead = cs.head;
       commitsMade = true;
@@ -9335,7 +9360,7 @@ function reviewFindingText(f) {
 async function reviewStep(k, ctx) {
   // pr-review reads the PR with the checked gh command
   const g = ghFor(ctx.remoteSlug);
-  if (!g || !g.gh_cmd) halt("needs_human", "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")", "review");
+  if (!g || !g.gh_cmd) halt("s", "needs_human", "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")", "review");
   reserve(REVIEW_AGENTS, "review " + k);
   phase("Review");
   try {
@@ -9346,10 +9371,10 @@ async function reviewStep(k, ctx) {
       JUDGE_AGENT,
       "review_paths",
     );
-    if (!Array.isArray(rp.changed_paths)) halt("failed", "infra:review-paths:v" + k + " returned no changed_paths");
+    if (!Array.isArray(rp.changed_paths)) halt("s", "failed", "infra:review-paths:v" + k + " returned no changed_paths");
     requireProgram(rp, "review_paths", "infra:review-paths:v" + k);
     if (!relayDigestOk(rp, progKeys("review_paths"), "review_paths"))
-      halt("failed", "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or changed in the copy)");
+      halt("s", "failed", "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or changed in the copy)");
     const changedPaths = rp.changed_paths.map(normPath).filter(Boolean);
     const inputs = {
       pr_url: ctx.pr.pr_url,
@@ -9368,7 +9393,7 @@ async function reviewStep(k, ctx) {
     // the review runs repo tests against its own database
     const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
     if (pre.fingerprint.head !== ctx.approvedSha)
-      halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
+      halt("s", "needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
     // the review and the sweep run repo tests
     await resetBuild("pr-review:v" + k, ["review-v" + k], "Review");
     // pr-review only (the sweep keeps the shared inputs)
@@ -9403,7 +9428,7 @@ async function reviewStep(k, ctx) {
       if (sw.verdict === "non_weakening") {
         const um = sw.units.find((u) => !u || typeof u !== "object" || u.shipped_refuses == null || u.new_refuses == null);
         if (um !== undefined)
-          halt("needs_human", "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um.mutation : "no reason given") + ")", "review");
+          halt("s", "needs_human", "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um.mutation : "no reason given") + ")", "review");
       }
       for (const f of sw.findings) if (f && f.severity === "blocking") blocking.push(f);
       for (const f of sw.findings) if (f && f.severity !== "blocking") nits.push(f);
@@ -9440,7 +9465,7 @@ async function reviewStep(k, ctx) {
 async function replan(ctx) {
   const { ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl } = ctx;
   const who = ctx.source || "code-judge";
-  if (!ctx.findings.length) halt("needs_human", who + " verdict plan_wrong without a plan finding");
+  if (!ctx.findings.length) halt("s", "needs_human", who + " verdict plan_wrong without a plan finding");
   const proposed = proposedChanges(ctx.findings, gate);
   gate(who + " verdict plan_wrong: " + proposed.join("; "));
   const n = history.replans + 1;
@@ -9460,7 +9485,7 @@ async function replan(ctx) {
     "Re-plan",
     INFRA_AGENT,
   );
-  if (rw.head !== ref.plan_commit) halt("failed", "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit);
+  if (rw.head !== ref.plan_commit) halt("s", "failed", "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit);
   const findingsText = ctx.findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n");
   const replanBrief = Object.assign({}, brief, {
     plan_path: ref.plan_path,
@@ -9518,9 +9543,9 @@ async function replan(ctx) {
     "Re-plan",
     INFRA_AGENT,
   );
-  if (rs.head !== ref.plan_base) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base);
+  if (rs.head !== ref.plan_base) halt("s", "failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base);
   // 7.4.0 review A-M2: the agent's superseded_head is a claim; the script's expected head is the value
-  if (rs.superseded_head !== ctx.expectedHead) halt("needs_human", "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead);
+  if (rs.superseded_head !== ctx.expectedHead) halt("s", "needs_human", "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead);
   gate("re-plan " + n + ": old head " + ctx.expectedHead + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
@@ -9808,7 +9833,7 @@ function dbOf(consumer) {
 }
 function dbDsn(consumer) {
   const db = dbOf(consumer);
-  if (state.db.dbs.indexOf(db) < 0 || !state.db.users[db]) halt("failed", "internal: no test database " + db + " in " + state.db.name, "db");
+  if (state.db.dbs.indexOf(db) < 0 || !state.db.users[db]) halt("s", "failed", "internal: no test database " + db + " in " + state.db.name, "db");
   return "mysql://" + db + ":" + state.db.users[db] + "@127.0.0.1:" + state.db.port + "/" + db;
 }
 function dbUsersOk(users, dbs) {
@@ -9868,32 +9893,32 @@ function dbDownPrompt(inputs) {
 
 async function dbDispatch(label, prompt, phaseName) {
   const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: phaseName });
-  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"), "db");
+  if (r.status !== "ok") halt("s", r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"), "db");
   return r;
 }
 async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, taskId) {
-  if (!t || typeof t !== "object") halt("failed", label + ": no test_db relay (the " + DB_DECL_FILE + " read)", "db");
+  if (!t || typeof t !== "object") halt("s", "failed", label + ": no test_db relay (the " + DB_DECL_FILE + " read)", "db");
   requireProgram(t, "test_db_decl", label + " (test_db)", "failed", "db");
   if (!relayDigestOk(t, progKeys("test_db_decl"), "test_db_decl") || canonical(t.args) !== canonical([wt, defaultBranch]))
-    halt("failed", label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments", "db");
-  if (t.error !== null) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error, "db");
+    halt("s", "failed", label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments", "db");
+  if (t.error !== null) halt("s", "needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error, "db");
   if (t.decl === null) {
-    if (state.db) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database", "db");
+    if (state.db) halt("s", "needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database", "db");
     return;
   }
   const dp = testDbDeclProblem(t.decl);
-  if (dp) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
+  if (dp) halt("s", "needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
   const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
   // db_up's optional last argument
   const prefix = t.decl.test_db_prefix === undefined ? null : t.decl.test_db_prefix;
   const proc = Array.isArray(t.decl.grants) && t.decl.grants.indexOf("PROCESS") >= 0;
   const pa = (prefix ? [prefix] : []).concat(proc ? ["grant:PROCESS"] : []);
   const pi = Object.assign(prefix ? { test_db_prefix: prefix } : {}, proc ? { grants: ["PROCESS"] } : {});
-  if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
+  if (!image) halt("s", "needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
   const want = [];
   for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
   if (state.db) {
-    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix || !!state.db.process !== proc) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix || !!state.db.process !== proc) halt("s", "needs_human", DB_DECL_FILE + " changed during the run", "db");
     const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
     if (!missing.length) return;
     const al = "infra:db-up:add";
@@ -9903,14 +9928,14 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
     const ua = ra.up;
     requireProgram(ua, "db_up", al, "failed", "db");
     if (!relayDigestOk(ua, progKeys("db_up"), "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(aa) || !dbUsersOk(ua.users, missing))
-      halt("failed", al + RELAY_MISMATCH, "db");
+      halt("s", "failed", al + RELAY_MISMATCH, "db");
     state.db.dbs = state.db.dbs.concat(missing);
     Object.assign(state.db.users, ua.users);
     gate("test database " + state.db.name + ": added " + missing.join(", "));
     return;
   }
   const name = dbContainerName(taskId, state.nonce);
-  if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
+  if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("s", "failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
   const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)].concat(pa);
   await pathRecheck("db-up", phaseName);
   state.dbTarget = { name, mechanism: "podman --timeout or systemd-run", expires: "in " + DB_TTL_SECONDS + " s" };
@@ -9922,13 +9947,13 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const u = r.up;
   requireProgram(u, "db_up", "infra:db-up", "failed", "db");
   if (!relayDigestOk(u, progKeys("db_up"), "db_up") || canonical(u.args) !== canonical(args))
-    halt("failed", "infra:db-up" + RELAY_MISMATCH, "db");
-  if (!dbUsersOk(u.users, want)) halt("failed", "infra:db-up: the program did not return one user per database", "db");
-  if (u.name !== name || canonical(u.dbs) !== canonical(want)) halt("failed", "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name, "db");
-  if (!Number.isInteger(u.port) || u.port < 1 || u.port > 65535) halt("failed", "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port), "db");
+    halt("s", "failed", "infra:db-up" + RELAY_MISMATCH, "db");
+  if (!dbUsersOk(u.users, want)) halt("s", "failed", "infra:db-up: the program did not return one user per database", "db");
+  if (u.name !== name || canonical(u.dbs) !== canonical(want)) halt("s", "failed", "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name, "db");
+  if (!Number.isInteger(u.port) || u.port < 1 || u.port > 65535) halt("s", "failed", "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port), "db");
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
-    halt("failed", "infra:db-up: no self-expiry recorded", "db");
+    halt("s", "failed", "infra:db-up: no self-expiry recorded", "db");
   state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, process: proc, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
   state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
   gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + (proc ? " (each user also has PROCESS, ADR-1233)" : "") + "; " + t.decl.env + " goes to each role's test_env");
@@ -9955,7 +9980,7 @@ async function dbTeardown() {
 }
 async function probeMode(input) {
   const repo = cleanRepo(input.repo);
-  if (!repo) stop("needs_human", "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)");
+  if (!repo) stop("s", "needs_human", "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)");
   await preflightStep(repo);
   const role = PROBE_READ_ROLE;
   const label = "infra:role-read:" + role;
@@ -9966,7 +9991,7 @@ async function probeMode(input) {
   const ic = infraCall(label, roleReadPrompt(role), { schema: sh ? withShared(ROLE_READ_SCHEMA) : ROLE_READ_SCHEMA, agentType: JUDGE_AGENT, phase: "Preflight" });
   const rr = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   const rp = rr == null ? "returned no result" : rr.status !== "ok" ? "returned " + rr.status + ": " + (rr.reason || "no reason") : roleFileProblem(role, rr) || sharedFileProblem(role, rr);
-  if (rp) halt("needs_human", "probe: the role-read agent (" + label + ") " + rp, "contract");
+  if (rp) halt("s", "needs_human", "probe: the role-read agent (" + label + ") " + rp, "contract");
   gate("probe: " + label + " read " + role + ".md" + (sh ? " and _shared/" + sh + ".md" : "") + " at their pins");
   const roles = {};
   for (const r of ROLES) roles[r] = { sha256: state.roleSha[r], model: state.models[r].model, fallback: state.models[r].fallback };
@@ -9980,35 +10005,35 @@ async function probeMode(input) {
 async function main(input) {
   const mode = input.mode;
   if (MODES.indexOf(mode) < 0)
-    stop("needs_human", "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
+    stop("s", "needs_human", "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
   // 8.0.1: meta.name is a literal; the first narrator line tells two live runs apart
   log(mode + " " + String(input.input || (input.plan_ref || {}).plan_ref || input.repo).slice(0, 60));
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
-    stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
+    stop("s", "needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
   // 6.3.0 (ADR-1239)
-  if (input.unattended !== undefined && input.unattended !== true) stop("needs_human", "args.unattended must be true or absent, got " + JSON.stringify(input.unattended));
+  if (input.unattended !== undefined && input.unattended !== true) stop("s", "needs_human", "args.unattended must be true or absent, got " + JSON.stringify(input.unattended));
   if (input.unattended === true) state.unattended = "arg";
-  if (input.user_confirm !== undefined && CONFIRMS.indexOf(input.user_confirm) < 0) stop("needs_human", "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm));
-  if (input.brief_marker !== undefined && typeof input.brief_marker !== "boolean") stop("needs_human", "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker));
+  if (input.user_confirm !== undefined && CONFIRMS.indexOf(input.user_confirm) < 0) stop("s", "needs_human", "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm));
+  if (input.brief_marker !== undefined && typeof input.brief_marker !== "boolean") stop("s", "needs_human", "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker));
   // 4.0.0 (1990, S3)
   if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
-    stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
+    stop("s", "needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
-    stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
+    stop("s", "needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
   if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))
-    stop(
+    stop("s",
       "needs_human",
       "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /build-task again, never resumeFromRunId (it would replay stale worktree checks)",
     );
   state.nonce = input.run_nonce;
   // the caller-held digest of a freeze, for a frozen resume
   if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
-    stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
+    stop("s", "needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
   // 8.5.6: the caller-held name of a parked plan checkpoint
   const ck = input.checkpoint;
   if (ck !== undefined && (mode !== "plan" || !ck || typeof ck.run !== "string" || !NONCE_RE.test(ck.run) || typeof ck.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(ck.sha256)))
-    stop("needs_human", "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify(ck));
+    stop("s", "needs_human", "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify(ck));
   // the run's test database goes, whatever the result
   try {
     return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
@@ -10035,6 +10060,7 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
   log("build-engine started without args: nothing to do; use /build-task");
   return {
     status: "needs_human",
+    stop_class: "safety",
     reason:
       "build-engine was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
   };

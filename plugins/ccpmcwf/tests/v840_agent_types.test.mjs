@@ -211,7 +211,7 @@ test("8.4.0 #25: agentT, the one agent() call, refuses a missing or unknown agen
   const i = SOURCE.indexOf("\nasync function agentT(");
   assert.ok(i >= 0 && calls[0].index > i && calls[0].index < SOURCE.indexOf("\n}\n", i), "the agent() call is in agentT");
   const body = SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
-  const halt = (status, msg, g) => {
+  const halt = (cls, status, msg, g) => {
     const e = new Error(msg);
     e.status = status;
     e.gate = g;

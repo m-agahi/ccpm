@@ -48,6 +48,6 @@ test("7.3.0 A14: a review step with no PR stops (stop gate review), never a skip
   const i = SOURCE.indexOf('} else if (step === "review") {');
   assert.ok(i >= 0);
   const head = SOURCE.slice(i, SOURCE.indexOf("reviews++;", i));
-  assert.match(head, /halt\("needs_human", [^\n]*"review"\)/);
+  assert.match(head, /halt\("s", "needs_human", [^\n]*"review"\)/);
   assert.ok(!SOURCE.includes("review skipped: no PR"));
 });

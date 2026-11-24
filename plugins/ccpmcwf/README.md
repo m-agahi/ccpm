@@ -1097,6 +1097,41 @@ safety check runs on the repaired attempt again.
   stopping. Still stops: one symbol whose on-disk summary is over its cap, and a hasher output
   over the relay cap (gate `relay-size`; the hasher has no paged relay).
 
+### Stop classes: stop_class (8.8.0, yaadgaar #108 step 5, ADR-1397)
+
+Every stop site in the engine names its stop class in script code, as the first argument of
+`halt`, `stop` or `planFindingsStop`. No agent sets or changes a class at run time. A stop result
+carries the class as `stop_class`, next to `stop_gate`; `ok` and `awaiting_confirmation` carry
+`stop_class: null`.
+
+| `stop_class` | Meaning                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `safety`     | Always stops. Never repaired or re-run automatically.                                   |
+| `mechanical` | A deterministic script repair exists in principle (8.7.0 runs the ones that are wired). |
+| `transient`  | One retry is reasonable (8.7.0 already retries a judge step's null result once).        |
+| `judgment`   | A human decides. The result carries `options`: 2-3 choices built in script code.        |
+
+- When a site is not clearly mechanical, judgment or transient, it is `safety`. Safety covers the
+  hook surface, IaC, hash, freeze, fingerprint and ownership, the scope fence, the command
+  allowlist, the DSN rule, secret paths, the work-owner merge rule, intent refusals, role,
+  contract and program identity, relay digest or args mismatches, run-state, plan-ref and
+  checkpoint trust, version and legacy refs, push access, the agent cap and the run budget.
+- The run budget is `safety`: safety is the only class that is never repaired or re-run, which a
+  spent budget needs. Its stop still returns its options.
+- A null agent result is `transient` for a read-only (judge) step and `safety` for a write step,
+  whose first attempt may have written. A hook-surface read with no HTTP status (`HTTP None`) is
+  `transient`; any other hook-surface read error is `safety`. A CI watch that ends unresolved is
+  `transient`. `resume_with: "build"` is `mechanical`.
+- Judgment stops: the plan findings the planner did not fix in its rounds (`planFindingsStop`,
+  except the DSN, npm/npx test_cmd and intent findings, which are `safety`), a refused plan audit,
+  no testable criterion, a caller check over its read limits, a required gate the census reports
+  unsupported, the test, code, review and CI-fix rounds spent, and a PR title or body the
+  pr-opener did not fix after its scripted retry. An option names only identifier-shaped symbols
+  (`SYMBOL_RE`); no relayed text goes into an option.
+- 8.8.0 changes no behaviour: no stop becomes a repair. `docs/stop-classes.md` lists every site
+  (function, gate, class, reason); `tests/v880_stop_class.test.mjs` fails on a site with no
+  class and on a table that does not match the source.
+
 ### Push-access probe (4.0.0, ledger 1985)
 
 Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs `push.py probe`

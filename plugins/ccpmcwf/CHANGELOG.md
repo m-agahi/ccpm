@@ -1,5 +1,42 @@
 # Changelog
 
+## [8.8.0] - 2026-11-24
+
+ccpmcwf 8.8.0 (yaadgaar `#108` step 5, ADR-1397): a stop class on every stop site. The class is fixed in script code at each site; no agent grades it. No stop becomes a repair (step 6 adds `recover` and the skill re-run, keyed on the class). The dist grows from 471,307 B to 474,460 B (+3,153 B; cap 520,000 B, ADR-1353).
+
+### Added
+
+- `halt(cls, status, msg, gate)`, `stop(cls, status, reason)` and `planFindingsStop(cls, ...)`
+  take the class first: `"s"` safety, `"m"` mechanical, `"t"` transient, or a `J_<NAME>`
+  judgment const that carries its 2-3 options (built in script code; symbols filtered by
+  `SYMBOL_RE`). An unknown code is safety. 341 sites: safety 309, judgment 29, transient 5,
+  mechanical 1 (a site with a condition counts in both of its classes), plus the two that pass
+  their caller's class on.
+- The result carries `stop_class` next to `stop_gate` (null on `ok` and `awaiting_confirmation`).
+  The direct stops set it too: an auto-confirm check failure (safety), `resume_with: "build"`
+  (mechanical) and the no-args return (safety).
+- Every judgment stop returns `options`. New judgment options: the caller-check read limits, an
+  unsupported required gate (run unattended, or edit the task), the spent test, code, review and
+  CI-fix rounds, the pr-opener's title and body, a refused plan audit.
+- `docs/stop-classes.md`: every site, in source order, with its function, gate, class and reason.
+
+### Changed
+
+- The run budget stop is safety (not its own class): it must never be repaired or re-run.
+- The two local closures named `stop` (`heldOutRun`, `surfaces`) are `hoStop` and `relayStop`.
+- `ciWriteBack` restores `stop_class` with `stop_gate` after its write-back.
+
+### Tests
+
+- `v880_stop_class` (new, 14 tests): the coverage scan (every site names a class; a new
+  unclassified site fails), the judgment consts, the safety categories pinned safety, the table
+  matches the source, and `stop_class` in the result (null, transient, safety, judgment with
+  options, mechanical, an argument stop).
+- Changed on purpose: the `halt` stubs and source regexes take the class argument
+  (`build_task_run`, `v4_s3`, `v840_agent_types`, `v800_gate_tools`, `v730_review_no_pr`,
+  `v821_origin_relay`, `v855_judgment_routing`); `v403_schema_types` (a READS entry for `J_SYMS`).
+- Version pins: 8.7.0 -> 8.8.0.
+
 ## [8.7.0] - 2026-11-24
 
 ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,307 B (cap 520,000 B, ADR-1353).
