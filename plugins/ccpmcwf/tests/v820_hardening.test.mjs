@@ -15,6 +15,8 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync, r
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createServer } from "node:net";
+import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { HERE, HAVE_PY, spawnSync } from "./harness.mjs";
 
 const SBX = join(HERE, "..", "scripts", "sandbox.py");
@@ -383,7 +385,61 @@ test("8.2.0 #80 final: a hidden root is never walked: 60,000 files under the fix
     assert.ok(pairs(p.out.argv, "--tmpfs").includes(opt));
     assert.ok(ms < 2000, "plan took " + ms + " ms");
     const w = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }, x.d);
-    assert.match(w.out.reason, /^socket walk over its caps/, "control: a walked /opt this big refuses");
+    assert.match(w.out.reason, /^socket walk over its entry cap/, "control: a walked /opt this big refuses");
+  } finally {
+    x.done();
+  }
+});
+
+test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts CPU, not wall clock", { skip: !HAVE_PY }, async () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  // 20,000 entries: well under the entry cap, a fraction of a second of CPU
+  for (let i = 0; i < 200; i++) {
+    const dd = join(R, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  const f = join(x.d, "spec.json");
+  writeFileSync(f, JSON.stringify({ result: join(x.d, "res.json"), worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }));
+  try {
+    // the CI runner: the plan process gets about 2% of a CPU (5 ms run, 245 ms stopped), so the walk takes
+    // far more than 3 s of wall clock and the same CPU time as on an idle host
+    const t0 = Date.now();
+    const c = spawn(PY, ["-I", SBX, "plan", f], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    let out = "";
+    c.stdout.on("data", (b) => (out += b));
+    let live = true;
+    const done = new Promise((ok) => c.on("exit", (code) => ((live = false), ok(code))));
+    (async () => {
+      while (live) {
+        await delay(5);
+        if (live) c.kill("SIGSTOP");
+        await delay(245);
+        if (live) c.kill("SIGCONT");
+      }
+    })();
+    const code = await done;
+    const ms = Date.now() - t0;
+    assert.equal(code, 0);
+    assert.ok(ms > 3500, "the throttle held the plan back: " + ms + " ms");
+    assert.equal(JSON.parse(out).reason, null, "plan took " + ms + " ms wall");
+  } finally {
+    x.done();
+  }
+});
+
+test("8.9.1 #115: a cap hit names the cap and what it measured", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  for (let i = 0; i < 520; i++) {
+    const dd = join(R, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  try {
+    const w = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }, x.d);
+    assert.match(w.out.reason, /^socket walk over its entry cap \(more than 50000 entries, after [0-9.]+ s CPU\)$/);
   } finally {
     x.done();
   }
