@@ -270,6 +270,9 @@ function gateRig(results) {
     state,
     INFRA_STEP: "Infra step: ",
     RUN_EXACT: "Run:\n",
+    // 8.5.7: prompt fragments built once
+    PRINTS_ONE: "It prints one JSON object ",
+    RECOMPUTES: " (the script recomputes the digest)",
     // 8.0.0 (G2): the gate prompt names its gates in an Inputs line
     inputsLine: (o) => "Inputs: " + JSON.stringify(o) + "\n",
     DIGEST_RETRY: ":digest-retry",

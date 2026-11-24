@@ -195,7 +195,7 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
   const table = TABLE();
   // PROGRAM_OUT types every key of every mode, and no other (the hasher's are in HASHER_SCHEMA)
   const at = SOURCE.indexOf("\nconst PROGRAM_OUT = {");
-  const out = new Function("const STR = {}, STR_OR_NULL = {}, STRS = {}, BOOL = {}, INT = {}, STR_LISTS = {}, PROGRAM_PROP = {};\nreturn " + SOURCE.slice(SOURCE.indexOf("{", at), SOURCE.indexOf("\n};\n", at) + 2))();
+  const out = new Function("const STR = {}, STR_OR_NULL = {}, STRS = {}, BOOL = {}, INT = {}, INT_OR_NULL = {}, BOOL_OR_NULL = {}, STRS_OR_NULL = {}, STR_LISTS = {}, PROGRAM_PROP = {};\nreturn " + SOURCE.slice(SOURCE.indexOf("{", at), SOURCE.indexOf("\n};\n", at) + 2))();
   // 7.3.0 (#54): scratch_copy.py is run by the copy roles and relayed by no step: no key table
   // 8.1.0 (#75): sandbox.py is run by other programs, relayed by no step
   const RELAYED = PROGRAMS.filter(([n]) => n !== "scratch_copy" && n !== "sandbox");

@@ -51,8 +51,8 @@ test("4.0.0 S2 keys: the caller grep relay carries auto_dont_care and doctest_md
   const m = /const INFRA_SCHEMA = \{[\s\S]*?\n\};/.exec(SOURCE);
   assert.ok(m);
   // S4 (1989): per symbol, like occurrences
-  assert.match(m[0], /auto_dont_care: \{ type: "object", additionalProperties: \{ type: "array", items: STR \} \}/);
-  assert.match(m[0], /doctest_md: \{ type: "array", items: STR \}/);
+  assert.match(m[0], /auto_dont_care: \{ type: "object", additionalProperties: STRS \}/);
+  assert.match(m[0], /doctest_md: STRS/);
 });
 
 test("4.0.0 S2 keys: an ok planner without change_kind, or with a bad one, is contract drift", async () => {
