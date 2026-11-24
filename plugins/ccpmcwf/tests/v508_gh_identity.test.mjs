@@ -401,6 +401,9 @@ test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at push
   const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(first.result.status, "needs_human", first.result.reason);
   const st = states.pushed;
+  // 8.9.2 (#116 b): an attended run-state holds auto_decisions too; a 5.0.7 one has none
+  assert.deepEqual(st.auto_decisions, []);
+  delete st.auto_decisions;
   assert.deepEqual(Object.keys(st).sort(), STATE_507_KEYS.filter((k) => k in st).sort());
   assert.ok(!JSON.stringify(st).includes("gh"), "no gh value in the run-state");
   // the re-run (as docs-74 does: same plan_ref)

@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.1";
+const FLEET_VERSION = "8.9.2";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -3816,6 +3816,8 @@ const state = {
   rerunKey: null,
   // 8.9.0 (review B1 of #116): the relaxed list of a plan this run sent to autoGates (never relayed)
   relaxed: null,
+  // 8.9.2 (#116 a): the relaxed list sealed in the plan ref this build loaded (null: none loaded, or sealed before 8.9.2)
+  sealedRelaxed: null,
   review: null,
   // the repo the PATH re-checks name, and their count
   repo: null,
@@ -4449,8 +4451,10 @@ function recoverOf(status) {
     // (a build that re-planned in this run builds a ref no human confirmed: the same)
     if (state.launch === "plan" || state.buildRef !== state.launchRef) {
       a.confirm = "auto";
-      // review B1 of #116: the relaxed list is not sealed in the plan ref, and the build-mode gates get none
-      if (state.relaxed && state.relaxed.length) return no("a relaxed re-plan: build mode cannot re-check its deviations");
+      // review B1 of #116, 8.9.2 (#116 a): the build-mode :rerun gates re-check the list sealed in the ref; a ref
+      // sealed before 8.9.2 (no list), or one whose list is not this run's, gives them none to check
+      if (state.relaxed && state.relaxed.length && canonical(state.sealedRelaxed) !== canonical(state.relaxed))
+        return no("a relaxed re-plan whose plan ref holds no sealed relaxed list (sealed before 8.9.2): build mode cannot re-check its deviations");
     }
     if (state.milestone) {
       if (state.dirty) return no("a coder or test writer ran after the run-state " + state.milestone);
@@ -4823,10 +4827,10 @@ async function lockRelease() {
   gate((r && r.status === "ok" && lockOk(r, "release", l.a) && (r.released || r.absent) ? "" : "warning: not confirmed: ") + "run lock " + l.path + " released");
 }
 // 8.9.0 (#108 step 6, Max's ruling on #116): the engine-side once-only guard. A result whose recover is a
-// re-run checks and sets <git-common-dir>/fleet/reruns/<task id>.json (parked.py rerun) after main's
-// finally; only a digest-checked marked true keeps the re-run, anything else is none. The marker can only
-// remove a re-run: it is never read for any other stop or for any check. Never halts (it runs after the
-// result is made).
+// re-run checks and sets <git-common-dir>/fleet/reruns/<task id>.json (parked.py rerun) in main's
+// finally (8.9.2, #116 f0: before the lock release, so the held lock serializes it); only a digest-checked
+// marked true keeps the re-run, anything else is none. The engine uses the marker only to remove a re-run:
+// it is never read for any other stop or for any check. Never halts (it runs after the result is made).
 async function rerunGuard(out) {
   const rc = out && out.recover;
   if (!rc || rc.action !== "rerun") return out;
@@ -6410,6 +6414,8 @@ function makePlanRef(f) {
     project: typeof f.project === "string" && f.project ? f.project : null,
     // 8.0.0 (G3): {sha256, count, per_criterion} of the held-out store, or null (absent before 8.0.0)
     held_out: f.heldOut || null,
+    // 8.9.2 (#116 a): how a re-plan relaxed round 0 ([]: it did not); absent in a ref sealed before 8.9.2
+    relaxed: Array.isArray(f.relaxed) ? f.relaxed.slice() : [],
   });
   // 6.3.0 (ADR-1239): the policy plan mode read, sealed; the build keeps it (a later edit is logged)
   if (f.policy && typeof f.policy === "object") ref.policy = stripHeldOut(f.policy);
@@ -7043,6 +7049,7 @@ async function planMode(input, date) {
         tldr: p.tldr,
         planDiff: p.planDiff,
         planFacts: sealedFacts(p),
+        relaxed: p.relaxed,
         // the role table this run loaded, for the build
         history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
@@ -7144,6 +7151,8 @@ function planRefProblem(r) {
   if ("policy" in r && sealedPolicyProblem(r.policy)) return "policy is malformed (" + sealedPolicyProblem(r.policy) + ")";
   // absent in a ref sealed before 4.0.0
   if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
+  // 8.9.2 (#116 a): absent in a ref sealed before 8.9.2
+  if ("relaxed" in r && (!Array.isArray(r.relaxed) || r.relaxed.some((x) => typeof x !== "string" || !x))) return "relaxed is malformed";
   return null;
 }
 function fenceChanged(where, changed) {
@@ -7473,6 +7482,8 @@ function partReader(o) {
 async function buildFromRef(input, date, tiny, lay, ws, opt) {
   state.mode = "build";
   state.buildRef = tiny;
+  // 8.9.2 (#116 a): the relaxed list sealed in this ref (null until it loads, and for a ref sealed before 8.9.2)
+  state.sealedRelaxed = null;
   const repo = cleanRepo(tiny.repo);
   // load the sealed ref from its local tag object
   phase("Verify");
@@ -7562,6 +7573,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const pf = loaded.plan_facts;
   if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
     halt("s", "needs_human", LEGACY_REF);
+  if (Array.isArray(loaded.relaxed)) state.sealedRelaxed = loaded.relaxed.slice();
   const refFacts = planFactsProblem(pf.test_cmd, pf.repo_obligations);
   if (refFacts) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": " + refFacts.msg, refFacts.gate);
   const refTc = testCmdProblem(pf.test_cmd);
@@ -7716,6 +7728,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 8.0.0 (G7 step 0): one entry, the generated name of a round (normPath-equal, relative, no ..)
       if (af !== undefined && (!Array.isArray(af) || af.length !== 1 || af.some((f) => typeof f !== "string" || normPath(f) !== f || f[0] === "/" || f.split("/").indexOf("..") >= 0 || frozenFiles.indexOf(f) >= 0 || !Array.from({ length: MAX_CODE_ROUNDS }, (_, r) => testable.length && augName(testable, r + 1)).includes(f)))) mis("aug_files");
       if (af) frozenFiles.push(...(state.augFiles = af));
+      // 8.9.2 (#116 b): {gate, decision, reason} strings (absent in a run-state of an attended run before 8.9.2)
+      const ad = st.auto_decisions;
+      if (ad !== undefined && (!Array.isArray(ad) || ad.some((d) => !d || typeof d !== "object" || Array.isArray(d) || ["gate", "decision", "reason"].some((k) => typeof d[k] !== "string")))) mis("auto_decisions");
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
       resume = st;
@@ -7766,6 +7781,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         ref.plan_path,
         tiny,
       );
+    // 8.9.2 (#116 a): the sealed relaxed list (never a relayed one); attended, it never reaches the auto gates (as plan mode)
+    const rx = state.sealedRelaxed || [];
+    if (rx.length && !state.unattended) return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + rx.join("; ")], intent: null }, ref.plan_path, tiny);
+    if (rx.length) state.relaxed = rx;
     const fresh = await rereadBrief(brief, input.project, repo);
     const g = await autoGates({
       sfx: ":rerun",
@@ -7781,6 +7800,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       planDiff: ref.plan_diff,
       planFacts: ref.plan_facts,
       files: hashedFiles,
+      relaxed: rx,
     });
     if (!g.ok) return autoFailResult(g, ref.plan_path, tiny);
     intent = g.intent;
@@ -7986,7 +8006,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           gates_seen: Object.fromEntries(GATES3.map((g) => [g, (state.gates[g] || {}).seen | 0])),
           ...(state.augFiles ? { aug_files: state.augFiles } : {}),
           auto_confirmed: autoConfirmed,
-          ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
+          ...(state.unattended ? { unattended: state.unattended } : {}),
+          // 8.9.2 (#116 b): an attended run's automatic decisions too, so a resume keeps them
+          auto_decisions: state.autoDecisions,
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
@@ -8644,6 +8666,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return finishOk("done");
     }
     gate("resuming at " + next + " (run-state " + resume.last_gate + " at " + approvedSha + ")");
+    // 8.9.2 (#116 c): the review reads the local approved sha; a PR head moved on the forge since the run-state
+    // (a push by hand, another run) refuses, before the PR-body check and the review write anything
+    if (next === "review" && pr && pr.pr_number != null) {
+      const rl = "infra:pr-view:resume-review";
+      const v = await prState(rl, ["view", ghCmd("resume at review", "resume"), remoteSlug, String(pr.pr_number), approvedSha], "read the head of the fleet's own PR (read only)", "resume");
+      const no = v.error !== null ? "the head of " + pr.pr_url + " could not be read (" + v.error + ")" : v.state !== "OPEN" ? pr.pr_url + " is " + v.state : v.head !== approvedSha ? "the head of " + pr.pr_url + " moved to " + v.head : null;
+      if (no) halt("s", "needs_human", "resume at review refused: " + no + "; the run-state " + resume.last_gate + " is at " + approvedSha + ". Check the PR by hand, then re-plan", "resume");
+      gate(rl + ": " + pr.pr_url + " is open at the run-state's " + approvedSha);
+    }
     // review NIT: a merge that landed before the shipped run-state: record it, clean up, done
     if (next === "stats" && pr && pr.pr_number != null && ghFor(remoteSlug) && ghFor(remoteSlug).gh_cmd) {
       const v = await prState("infra:pr-view:resume", ["view", ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number), approvedSha], "read the state of the fleet's own PR (read only)", "resume");
@@ -9645,6 +9676,7 @@ async function replan(ctx) {
       tldr: p.tldr,
       planDiff: p.planDiff,
       planFacts: sealedFacts(p),
+      relaxed: p.relaxed,
       history: { runs: history.runs, replans: n, agents: history.agents, audits: history.audits },
       project: ctx.project,
       // review H1: the build's policy (already never looser than the plan ref's seal)
@@ -10169,14 +10201,32 @@ async function main(input) {
     autoDecide("rerun", "rerun", "the automatic re-run of run " + ro + " after a transient stop");
   }
   // the run's test database goes, whatever the result
+  let out = null;
+  let stopped = null;
+  let done = false;
   try {
-    return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
+    out = await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
+    done = true;
+  } catch (e) {
+    if (!(e instanceof Stop)) throw e;
+    stopped = e;
+    done = true;
   } finally {
-    // the per-role build dirs (only when one was reset)
-    await buildTeardown();
-    await dbTeardown();
-    await lockRelease();
+    // 8.9.2 (#116 f0): the teardowns, the result (a Stop after the teardowns, so a swallowed cleanup halt still
+    // competes) and the engine marker before the lock release: the held run lock serializes the marker's
+    // read-then-replace. The lock release runs whatever they throw.
+    try {
+      // the per-role build dirs (only when one was reset)
+      await buildTeardown();
+      await dbTeardown();
+      if (done) out = await rerunGuard(stopped ? finishStop(stopped) : out);
+    } finally {
+      await lockRelease();
+    }
+    // a stop result counts the release agent, as before 8.9.2 (it was made after the release), and now the marker agent too
+    if (stopped && out) out.agents = state.agents;
   }
+  return out;
 }
 
 // ---------------------------------------------------------------- entry
@@ -10206,6 +10256,9 @@ try {
   out = await main(input);
 } catch (e) {
   if (!(e instanceof Stop)) throw e;
+  // a Stop before main's try (an argument check) or out of main's cleanup: it never passed the engine marker,
+  // so it never re-runs (fail closed)
   out = finishStop(e);
+  if (out.recover && out.recover.action === "rerun") out.recover = { class: out.recover.class, action: "none", why: "the stop came after the engine marker step" };
 }
-return await rerunGuard(out);
+return out;
