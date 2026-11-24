@@ -858,7 +858,7 @@ const READS = {
     "tip integer": "prog:branch_scan:plan_tip_time",
     // 5.0.2 (ledger 2004): the park program's relay
     "pr object": "infra:park",
-    "pr.clean boolean": "prog:parked:clean",
+    "pr.clean boolean": ["prog:parked:clean", 2],
     "pr.dirty array": "prog:parked:dirty",
     // 6.0.0 (2040): intake's relaunch reason code (7.0.0: the body-page reason code is retired)
     "it.reason string": "intake:reason",
@@ -1085,6 +1085,9 @@ const READS = {
     "ck.run string-re": PARSED_ARGS,
     "ck.run string": PARSED_ARGS,
     "ck.sha256 string": PARSED_ARGS,
+    // 8.9.0 (#108 step 6): args.rerun_of, typeof before NONCE_RE
+    "ro string": PARSED_ARGS,
+    "ro string-re": PARSED_ARGS,
     "input.run_nonce string": PARSED_ARGS,
     "input.run_nonce string-re": PARSED_ARGS,
     "input.freeze_digest string": PARSED_ARGS,
@@ -1303,7 +1306,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.8\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.8\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

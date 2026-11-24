@@ -293,7 +293,7 @@ export function render(source) {
   for (const r of rows) for (const c of r.names.split(" / ")) count[c] = (count[c] || 0) + 1;
   const counts = ["safety", "judgment", "transient", "mechanical", "per caller"].map((c) => c + " " + (count[c] || 0)).join(", ");
   return [
-    "# Stop classes of build-engine.js (ccpmcwf 8.8.0)",
+    "# Stop classes of build-engine.js (ccpmcwf 8.9.0)",
     "",
     "yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in",
     "script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or",
@@ -325,7 +325,7 @@ export function render(source) {
     "- A hook-surface stop is transient only for ruleset_surface.py's own error shape with no HTTP",
     "  status; hook_surface.py makes no GitHub call, and its errors name repo files.",
     "- 8.8.0 changes no behaviour except the hook_surface text above: no stop becomes a repair. Step 6",
-    "  (`recover` and the skill re-run) keys on this class.",
+    "  (8.9.0: `recover` on every stop result and the skill re-run) keys on this class only.",
     "",
     "Counts of the call sites (a two-class site counts in both): " + counts + "; " + rows.length + " sites. The",
     "three stops that return without `halt` are listed after the table.",

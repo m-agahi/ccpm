@@ -74,7 +74,8 @@ test("8.8.0 review S2: a prototype key is no stop class (constructor, toString, 
 
 test("8.8.0: only stop() and the park re-throw build a Stop; the direct finish stops set the class", () => {
   assert.equal((SOURCE.match(/new Stop\(/g) || []).length, 2);
-  assert.match(SOURCE, /throw new Stop\(e\.status, e\.reason \+ note\)/);
+  // 8.9.0: the park re-throw carries the real Stop (class, gate, options, order)
+  assert.match(SOURCE, /throw new Stop\(e\.status, e\.reason \+ note, e\)/);
   const direct = [...SOURCE.matchAll(/finish\("(needs_human|failed)"/g)];
   assert.ok(direct.length >= 2);
   for (const d of direct) assert.match(SOURCE.slice(d.index - 400, d.index), /state\.stopClass = "(safety|mechanical|transient|judgment)"/, SOURCE.slice(d.index - 200, d.index + 80));

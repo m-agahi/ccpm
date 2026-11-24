@@ -1140,6 +1140,51 @@ carries the class as `stop_class`, next to `stop_gate`; `ok` and `awaiting_confi
   `planFindingsStop` used as a value (an alias would hide a site), and on a table that is not the
   generator's output.
 
+### Recover: what the skill does with a stop (8.9.0, yaadgaar #108 step 6, ADR-1387, ADR-1406)
+
+Every stop result carries `recover: {class, action}`; `ok` and `awaiting_confirmation` carry
+`recover: null`. The engine derives it in script code from the stop class and its own resume
+facts only (the launch mode, the plan ref it builds, the parked checkpoint, the freeze digest, the
+last run-state milestone, and whether a test writer or coder wrote since then). No reason text and
+no agent decides it.
+
+| `class`      | `action`       | The skill                                                                    |
+| ------------ | -------------- | ---------------------------------------------------------------------------- |
+| `safety`     | `none`         | Reports the stop. Budget, agent cap, hook surface and relay mismatches too.  |
+| `judgment`   | `ask`          | Shows `recover.options` (the script options) verbatim and stops.             |
+| `mechanical` | `resume_build` | `resume_with: "build"`: runs build once with `recover.args.plan_ref`.        |
+| `transient`  | `rerun`        | Re-launches once, at once, with a fresh nonce and `recover.args`.            |
+| `transient`  | `none`         | No clean resume point, or the run is already the re-run: reports it (`why`). |
+
+`recover.args` of a re-run holds `mode`, the resume handle and `rerun_of` (this run's nonce). The
+re-run enters at or before the failed check:
+
+- A plan launch that stopped before its build: `mode: "plan"`, plus `checkpoint` when the run
+  parked one (it resumes after the plan audit; a stop before the audit approved parks none).
+- A launch that reached the build: `mode: "build"` and `plan_ref`. With no run-state milestone and
+  no freeze, the build starts again; after the freeze, `freeze_digest` resumes at the coder; after a
+  run-state milestone (committed, pushed, pr_open, reviewed, written_back), the build resumes at the
+  step after it. A plan launch that built in the same run adds `confirm: "auto"`, so the intent,
+  command and scope gates run again.
+- There is no clean resume point, so `action` is `none`: the test writers wrote before the freeze;
+  the frozen tests changed after it; a coder or test writer wrote after the last milestone; or the
+  plan park failed and left the draft in the worktree. A re-run there would stop on the dirty
+  worktree.
+
+The five transient sites and their re-entry: a read-only step's null result (`dispatch`,
+`callRole`, `retryOnDrift`: the step runs again in the re-run, before or after the freeze, from
+the milestone before it); a ruleset read with no HTTP status (`hookReadStop`: plan, Code and the
+update-branch check all run after the resume point); CI unresolved (`buildFromRef`: the last
+milestone is `written_back`, so the re-run resumes at stats, ready, then the CI watch).
+
+- The class rides on the Stop object, with its gate and options. A cleanup step that halts and
+  swallows its own stop (the park, a CI write-back, main's teardown) never relabels the real stop;
+  when it is more severe (safety > judgment > transient), the result takes that class. A swallowed
+  relay mismatch after a transient stop therefore blocks the re-run (ADR-1406).
+- `args.rerun_of` is the nonce of the run this launch re-runs (a run nonce, not this launch's).
+  The engine records it in `auto_decisions` (gate `rerun`) and answers `action: "none"` to a
+  second transient stop: never more than one automatic re-run per user launch.
+
 ### Push-access probe (4.0.0, ledger 1985)
 
 Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs `push.py probe`

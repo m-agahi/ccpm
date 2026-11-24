@@ -1,4 +1,4 @@
-# Stop classes of build-engine.js (ccpmcwf 8.8.0)
+# Stop classes of build-engine.js (ccpmcwf 8.9.0)
 
 yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in
 script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or
@@ -30,9 +30,9 @@ Rules:
 - A hook-surface stop is transient only for ruleset_surface.py's own error shape with no HTTP
   status; hook_surface.py makes no GitHub call, and its errors name repo files.
 - 8.8.0 changes no behaviour except the hook_surface text above: no stop becomes a repair. Step 6
-  (`recover` and the skill re-run) keys on this class.
+  (8.9.0: `recover` on every stop result and the skill re-run) keys on this class only.
 
-Counts of the call sites (a two-class site counts in both): safety 310, judgment 29, transient 5, mechanical 0, per caller 2; 341 sites. The
+Counts of the call sites (a two-class site counts in both): safety 311, judgment 29, transient 5, mechanical 0, per caller 2; 342 sites. The
 three stops that return without `halt` are listed after the table.
 
 <!-- prettier-ignore -->
@@ -379,6 +379,7 @@ three stops that return without `halt` are listed after the table.
 | 339 | `main` | (stop) | safety | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust) |
 | 340 | `main` | (stop) | safety | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust) |
 | 341 | `main` | (stop) | safety | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust) |
+| 342 | `main` | (stop) | safety | "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON | an argument check (run-state, plan-ref or checkpoint trust) |
 
 ## Stops that return without halt
 

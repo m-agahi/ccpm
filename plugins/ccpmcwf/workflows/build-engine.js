@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.8.0";
+const FLEET_VERSION="8.9.0";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -3353,18 +3353,26 @@ inputsLine(inputs)+
 );
 }
 class Stop extends Error{
-constructor(status,reason){
+constructor(status,reason,from){
 super(reason);
 this.status=status;
 this.reason=reason;
+const f=from||{cls:state.stopClass,gate:state.stopGate,options:state.options||null,seq:state.stopLog.length-1};
+this.cls=f.cls;
+this.gate=f.gate;
+this.options=f.options;
+this.seq=f.seq;
 }
 }
 const STOP_CLASS={s:"safety",m:"mechanical",t:"transient",j:"judgment"};
 function stop(cls,status,reason){
 state.stopClass=cls&&cls.j?"judgment":(typeof cls==="string"&&Object.prototype.hasOwnProperty.call(STOP_CLASS,cls)&&STOP_CLASS[cls])||"safety";
 if(cls&&cls.j)state.options=cls.j;
+state.stopLog.push(state.stopClass);
 throw new Stop(status,reason);
 }
+const SEVERITY=["mechanical","transient","judgment","safety"];
+const worse=(a,b)=>(SEVERITY.indexOf(b)>SEVERITY.indexOf(a)?b:a);
 const state={
 mode:null,
 nonce:null,
@@ -3384,6 +3392,13 @@ roleSha:null,
 refreezeLog:[],
 stopGate:null,
 stopClass:null,
+stopLog:[],
+launch:null,
+buildRef:null,
+milestone:null,
+dirty:null,
+parkDirty:false,
+rerunOf:null,
 review:null,
 repo:null,
 pathChecks:0,
@@ -3588,6 +3603,7 @@ opts=Object.assign({},opts,{agentType:at});
 const tier=state.models[role];
 if(!tier)halt("s","needs_human","role "+role+" has no DISPATCH tier from preflight","contract");
 gate("model used: "+label+" -> "+tier.model);
+if(at===BUILDER_AGENT&&role!=="scope-and-plan")state.dirty=role==="fleet-test-writer"||state.dirty==="tests"?"tests":"code";
 const r=await agentT(prompt,Object.assign({},opts,{label,model:tier.model}));
 if(r!=null||!tier.fallback)return r;
 if(capped()+1>MAX_AGENTS){
@@ -3906,9 +3922,41 @@ warnings:state.warnings||[],
 ...(state.ciWriteBack?{ci_write_back:state.ciWriteBack}:{}),
 ...(state.unattended?{unattended:true,unattended_source:state.unattended,auto_decisions:state.autoDecisions}:state.autoDecisions.length?{auto_decisions:state.autoDecisions}:{}),
 ...(state.options&&status==="needs_human"?{options:state.options}:{}),
+recover:recoverOf(status),
 };
 }
-function finishStop(status,reason){
+function recoverOf(status){
+if(status==="ok"||status==="awaiting_confirmation")return null;
+const c=state.stopClass||"safety";
+if(c==="judgment")return{class:c,action:"ask",options:state.options||[]};
+if(c==="mechanical"&&state.buildRef)return{class:c,action:"resume_build",args:{mode:"build",plan_ref:state.buildRef}};
+if(c!=="transient")return{class:c==="mechanical"?c:"safety",action:"none"};
+const no=(why)=>({class:c,action:"none",why});
+if(state.rerunOf)return no("this run is already the automatic re-run of run "+state.rerunOf);
+const a={mode:state.launch};
+if(state.launch==="plan"&&!state.buildRef){
+if(state.parkDirty)return no("the draft plan is still in the worktree (the park failed)");
+if(state.checkpoint)a.checkpoint=state.checkpoint;
+}else if(state.launch!=="probe"){
+a.mode="build";
+a.plan_ref=state.buildRef;
+if(state.launch==="plan")a.confirm="auto";
+if(state.milestone){
+if(state.dirty)return no("a coder or test writer ran after the run-state "+state.milestone);
+}else if(state.freezeDigest){
+if(state.dirty==="tests"||state.refreezeLog.length)return no("the frozen tests changed after the freeze");
+a.freeze_digest=state.freezeDigest;
+}else if(state.dirty)return no("the test writers wrote before the freeze");
+}
+a.rerun_of=state.nonce;
+return{class:c,action:"rerun",args:a};
+}
+function finishStop(e){
+state.stopClass=state.stopLog.slice(e.seq+1).reduce(worse,e.cls||"safety");
+state.stopGate=e.gate;
+state.options=e.options;
+const status=e.status;
+const reason=e.reason;
 const out=finish(status,reason);
 if(state.relaunch)out.relaunch=state.relaunch;
 if(state.checkpoint)out.checkpoint=state.checkpoint;
@@ -6059,6 +6107,7 @@ const rtiny=sref?{branch:lay.branch,plan_commit:sref.target,plan_ref:sref.name,r
 if(rtiny&&!tinyRefProblem(rtiny)){
 state.stopGate="resume";
 state.stopClass="mechanical";
+state.buildRef=rtiny;
 gate("branch has build commits (first: "+built[0].sha+"); resume_with build: plan_ref "+sref.name+" at "+sref.target);
 return Object.assign(finish("needs_human","branch has build commits; resume_with build: run build with plan_ref "+sref.name+" (it resumes at the last completed gate)"),{resume_with:"build",plan_ref:rtiny});
 }
@@ -6129,7 +6178,8 @@ log("park-plan"+note);
 throw e;
 }
 gate("park-plan"+note);
-throw new Stop(e.status,e.reason+note);
+state.parkDirty=!(parkOk&&pr.clean===true);
+throw new Stop(e.status,e.reason+note,e);
 };
 const confirm0=input.confirm===undefined||markerAsk?"ask":input.confirm;
 const confirm=un&&input.user_confirm!=="ask"&&!(input.confirm==="ask"&&!input.brief_marker)?"auto":confirm0;
@@ -6460,6 +6510,7 @@ if(input.plan_ref&&typeof input.plan_ref==="object"&&"ref_path"in input.plan_ref
 const tp=tinyRefProblem(input.plan_ref);
 if(tp)stop("s","needs_human","args.plan_ref "+tp+": run /build-task again to re-plan");
 const tiny=input.plan_ref;
+state.buildRef=tiny;
 const repo=cleanRepo(tiny.repo);
 const lay=layoutKey(tiny.branch.slice("fleet/".length),repo);
 state.branch=lay.branch;
@@ -6545,6 +6596,7 @@ return{joined,partOk,countOf,readParts};
 }
 async function buildFromRef(input,date,tiny,lay,ws,opt){
 state.mode="build";
+state.buildRef=tiny;
 const repo=cleanRepo(tiny.repo);
 phase("Verify");
 const refTask=PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
@@ -7037,12 +7089,14 @@ if(r.head!==approvedSha)halt("s","failed",label+": the run-state landed on "+r.h
 if(typeof r.state_sha!=="string"||!/^[0-9a-f]{40}$/.test(r.state_sha))halt("s","failed",label+" returned no usable state_sha");
 if(frozen)frozen.git[FLEETREF+stateRef]=r.state_sha;
 gate("run-state "+lastGate+" at "+approvedSha);
+state.milestone=lastGate;
+state.dirty=null;
 }
 async function ship(from){
 try{
 return await shipSteps(from);
 }catch(e){
-if(e instanceof Stop&&skipWb)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop&&skipWb)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 }
@@ -7433,7 +7487,7 @@ async function ciGuard(fn){
 try{
 return await fn();
 }catch(e){
-if(e instanceof Stop)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 }
@@ -7571,6 +7625,7 @@ comment_status:resume.comment_status,
 comment_text:resume.comment_text,
 };
 const next=RESUME_NEXT[resume.last_gate];
+state.milestone=resume.last_gate;
 if(next==="done"){
 gate("resuming at done: run-state shipped at "+approvedSha+"; returning the recorded result");
 return finishOk("done");
@@ -7924,6 +7979,7 @@ frozen.git[FLEETREF+freezeRefName]=freezeTree;
 setFreezeDigest();
 }
 function setFreezeDigest(){
+state.dirty=null;
 state.freezeDigest=freezeDigestOf(tiny.ref_sha256,freezeTree,frozen,state.refreezeLog.length>0);
 state.freezePlanRef=tiny;
 }
@@ -8308,7 +8364,7 @@ lastRoundGate=fix.gate;
 phase("Code");
 }
 }catch(e){
-if(e instanceof Stop&&state.prUpdated)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop&&state.prUpdated)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 return finishOk(frozenResume?"frozen":resumedAt);
@@ -8922,6 +8978,7 @@ const mode=input.mode;
 if(MODES.indexOf(mode)<0)
 stop("s","needs_human","args.mode must be \"plan\", \"build\" or \"probe\", got "+JSON.stringify(mode===undefined?null:mode)+": run /build-task <task>");
 state.mode=mode;
+state.launch=mode;
 log(mode+" "+String(input.input||(input.plan_ref||{}).plan_ref||input.repo).slice(0,60));
 if(input.confirm!==undefined&&CONFIRMS.indexOf(input.confirm)<0)
 stop("s","needs_human","args.confirm must be \"ask\", \"auto\" or \"default\", got "+JSON.stringify(input.confirm));
@@ -8944,6 +9001,13 @@ stop("s","needs_human","args.freeze_digest must be the 64-hex freeze_digest a bu
 const ck=input.checkpoint;
 if(ck!==undefined&&(mode!=="plan"||!ck||typeof ck.run!=="string"||!NONCE_RE.test(ck.run)||typeof ck.sha256!=="string"||!/^[0-9a-f]{64}$/.test(ck.sha256)))
 stop("s","needs_human","args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got "+JSON.stringify(ck));
+const ro=input.rerun_of;
+if(ro!==undefined&&(typeof ro!=="string"||!NONCE_RE.test(ro)||ro===input.run_nonce))
+stop("s","needs_human","args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got "+JSON.stringify(ro));
+if(ro!==undefined){
+state.rerunOf=ro;
+autoDecide("rerun","rerun","the automatic re-run of run "+ro+" after a transient stop");
+}
 try{
 return await(mode==="plan"?planMode(input,input.date):mode==="probe"?probeMode(input):buildMode(input,input.date));
 }finally{
@@ -8973,6 +9037,6 @@ reason:
 try{
 return await main(input);
 }catch(e){
-if(e instanceof Stop)return finishStop(e.status,e.reason);
+if(e instanceof Stop)return finishStop(e);
 throw e;
 }

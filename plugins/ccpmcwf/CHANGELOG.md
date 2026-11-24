@@ -1,5 +1,43 @@
 # Changelog
 
+## [8.9.0] - 2026-11-24
+
+ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,547 B (+2,640 B; cap 520,000 B, ADR-1353).
+
+### Added
+
+- Every result carries `recover` (null on `ok` and `awaiting_confirmation`): safety
+  `{action: "none"}`; judgment `{action: "ask", options}` (the script options, for a human only);
+  mechanical (`resume_with: "build"`) `{action: "resume_build", args: {mode: "build", plan_ref}}`;
+  transient `{action: "rerun", args}` or `{action: "none", why}`.
+- A transient re-run's `args` hold `mode`, the resume handle and `rerun_of` (this run's nonce). A
+  plan launch stopped before its build re-runs the plan (with the parked `checkpoint` when there is
+  one). A launch that reached the build re-runs the build with `plan_ref`: from the start (no
+  builder wrote yet), from the freeze (`freeze_digest`, at the coder) or from the last run-state
+  milestone (the step after it). A plan launch that built in the same run adds `confirm: "auto"`,
+  so the intent, command and scope gates run again. Each re-entry is at or before the failed check.
+- No clean resume point gives `action: "none"`: test writers wrote before the freeze, the frozen
+  tests changed after it, a coder or test writer wrote after the last milestone, or the plan park
+  left the draft in the worktree.
+- `args.rerun_of` (any mode): a run nonce other than this run's (typeof checked before
+  `NONCE_RE`). The engine records it in `auto_decisions` (gate `rerun`) and answers `none` to a
+  second transient stop: at most one automatic re-run per user launch.
+- The skill (`build-task`): a new section "Recover". On `rerun` it re-launches the same Workflow
+  once, in the same turn, with the stopped launch's args minus `checkpoint` and `freeze_digest`, a
+  fresh `run_nonce` and every key of `recover.args`; `ask` shows the options verbatim and stops,
+  never picks one; `none` reports. It keeps `rerun_of` in every later launch of the request and
+  reports each automatic re-run.
+
+### Changed
+
+- The class, gate and options ride on the `Stop` object, with its place in the run's stop order
+  (review S3 of #115). A cleanup step that halts and swallows its own stop (the park, a CI
+  write-back, main's teardown) no longer relabels the real stop's gate or options; when it is more
+  severe (safety > judgment > transient), the result takes that class, so a swallowed relay
+  mismatch blocks the re-run (ADR-1406). A stop raised before the real one does not count.
+- The CI write-back after a stop takes its stop code from the real Stop's gate.
+- `docs/stop-classes.md` regenerated (the `rerun_of` argument stop, safety).
+
 ## [8.8.0] - 2026-11-24
 
 ccpmcwf 8.8.0 (yaadgaar `#108` step 5, ADR-1397): a stop class on every stop site. The class is fixed in script code at each site; no agent grades it. No stop becomes a repair (step 6 adds `recover` and the skill re-run, keyed on the class). The dist grows from 471,307 B to 474,907 B (+3,600 B; cap 520,000 B, ADR-1353).
