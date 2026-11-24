@@ -141,7 +141,8 @@ function digestOk(o) {
 test("8.0.0 G2-1: an uncovered added line gives a finding with its path and line; the copy holds the judged tree", { skip: !HAVE_PY }, () => {
   const x = fixture();
   assert.equal(x.r.status, 0, x.r.stderr);
-  assert.equal(x.out.status, "ran");
+  // CI flake aid (review of #115): a not_run names its reason
+  assert.equal(x.out.status, "ran", x.out.reason + " | " + x.r.stderr);
   assert.deepEqual(x.out.findings, [{ path: "pkg/mod.py", lines: [9] }]);
   assert.equal(x.out.reason, "1 uncovered added line(s) in 1 file(s)");
   assert.deepEqual(x.out.args, x.args);

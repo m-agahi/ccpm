@@ -537,6 +537,15 @@ const READS = {
     "c0 object": PARSED_ROUND,
   },
   // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
+  // 8.8.0 (#108 step 5): only an identifier-shaped name reaches the judgment options
+  J_SYMS: { "x string-re": "parsed: a symbol the script holds (changed_symbols or a caller part), named in the options text only" },
+  // 8.8.0 (review of #115): S2, a class code is a script literal; a non-string or a prototype key is safety
+  stop: { "cls string": "parsed: a class code literal of the call site (typeof-checked, own key of STOP_CLASS)" },
+  // B1: gh is the literal true of the rulesetSurface caller; err is a program's error string, anchored
+  hookReadStop: {
+    "gh boolean": "parsed: the literal true of the rulesetSurface caller (=== true)",
+    "err string-re": "prog:ruleset_surface:error",
+  },
   planFindingsStop: {
     "f.human_only boolean": PARSED_LOCAL,
     "x string": "parsed: a finding's symbol or criterion, named in the options text only",
@@ -1294,7 +1303,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.7\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.7\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.8\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.8\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

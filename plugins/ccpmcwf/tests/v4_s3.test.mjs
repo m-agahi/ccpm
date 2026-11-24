@@ -167,7 +167,7 @@ test("4.0.0 1990: a label with no INFRA_TIER entry stops the run (no default tie
     return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
   };
   const m = /\/\/ INFRA_TIER_BEGIN\n([\s\S]*?)\n\/\/ INFRA_TIER_END/.exec(SOURCE);
-  const halt = (status, msg) => {
+  const halt = (cls, status, msg) => {
     const e = new Error(msg);
     e.status = status;
     throw e;
@@ -576,7 +576,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.7.0");
+  assert.equal(p.fleet_version, "8.8.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/ccpmcwf/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -641,7 +641,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.7\.0/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.8\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { ARGS, SOURCE, happy, run, runOne, remoteUrlOut, scriptsProbe } from "./harness.mjs";
 
 const PLAN_HALT_LINE = /\n[^\n]*const oh = originHalt\(ws\);\n[^\n]*\n/;
-const BUILD_HALT_LINE = /\n[^\n]*if \(!validRemoteUrl\(remoteUrl\)\) halt\("needs_human", "plan ref "[^\n]*\n/;
+const BUILD_HALT_LINE = /\n[^\n]*if \(!validRemoteUrl\(remoteUrl\)\) halt\("s", "needs_human", "plan ref "[^\n]*\n/;
 
 function planHaltsInWorkspace(out, re) {
   assert.equal(out.result.status, "needs_human", out.result.reason);

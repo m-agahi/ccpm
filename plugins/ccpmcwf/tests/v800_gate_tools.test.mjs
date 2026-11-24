@@ -285,7 +285,7 @@ function gateRig(results) {
     canonical: (v) => JSON.stringify(v),
     relayDigestOk: (x) => !!x && typeof x === "object" && x.digest === "good",
     gate: (m) => logs.push(m),
-    halt: (status, msg, g) => {
+    halt: (cls, status, msg, g) => {
       throw new Stop(status + "|" + g + "|" + msg);
     },
     dispatch: async (label, prompt) => {

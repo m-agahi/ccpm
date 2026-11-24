@@ -107,7 +107,7 @@ test("8.5.5 (a) non-weakening: a blank tldr plus a refused criterion test_args s
 
 // PR #110 review M1: a draft at another path cannot be recovered by a re-plan round (format-plan stops at scope)
 test("8.5.5: a plan path other than the ingested plan's still halts at once, with no re-plan round", () => {
-  assert.match(SOURCE, /halt\("needs_human", "planner wrote " \+ planPath \+ " but the ingested plan is "/);
+  assert.match(SOURCE, /halt\("s", "needs_human", "planner wrote " \+ planPath \+ " but the ingested plan is "/);
   assert.doesNotMatch(SOURCE, /dr\("planner wrote /);
 });
 
