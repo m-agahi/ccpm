@@ -1193,6 +1193,25 @@ CI write-back once more).
 - `args.rerun_of` is the nonce of the run this launch re-runs (a run nonce, not this launch's).
   The engine records it in `auto_decisions` (gate `rerun`) and answers `action: "none"` to a
   second transient stop: never more than one automatic re-run per user launch.
+- The engine does not rely on the skill to copy `rerun_of` forward. Before a result leaves with
+  `action: "rerun"`, the engine checks and sets a marker,
+  `<git-common-dir>/fleet/reruns/<task_id>.json` (`{nonce, time}`), with `parked.py rerun`
+  (`infra:run-lock:rerun`, after the run lock release). The key is the task id of the run lock this run claimed, in plan and build mode alike:
+  each in-run re-plan seals a new `ref_sha256`, so a ref key would never bound a loop of re-plan and
+  transient stop. The marker sits beside the run locks, not in the worktree's scratch dir: that path
+  holds the branch slug and goes with the worktree after a merge.
+  - No marker, this run's own marker, or one over 24 h old: the program writes this run's marker and
+    the re-run stays. 24 h: a real re-run follows its stop within minutes, and the run lock already
+    takes 12 h as the age of a dead run.
+  - Another run's marker under 24 h old: `none`, why "already re-run once (engine marker)", with or
+    without `rerun_of`.
+  - A malformed, unreadable or symlinked marker, one over 300 s in the future, a failed or
+    off-digest relay, or a stop before the run lock is claimed (no task id; for example a null
+    intake result): `none`. The marker fails closed.
+  - The marker can only take a re-run away. The engine reads it for no other stop class and for no
+    check.
+  - A human launch within 24 h of an automatic re-run of the same task answers `none` to its own
+    transient stop. Launch it again by hand. After 24 h it re-runs as usual.
 
 ### Push-access probe (4.0.0, ledger 1985)
 

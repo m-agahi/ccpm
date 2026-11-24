@@ -699,6 +699,10 @@ const READS = {
   lockClaim: {
     "r.claimed boolean": ["prog:parked:claimed", 2],
   },
+  // 8.9.0 (#108 step 6): the engine re-run marker relay
+  rerunGuard: {
+    "r.marked boolean": ["prog:parked:marked", 2],
+  },
   planAndAudit: {
     // PR #110 review B1: the command allowlists run before any re-plan return
     "plan.test_cmd object": SP + "test_cmd",

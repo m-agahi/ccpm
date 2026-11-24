@@ -46,6 +46,7 @@ const SAMPLES = [
   // 8.0.1 (#76)
   "infra:run-lock",
   "infra:run-lock:release",
+  "infra:run-lock:rerun",
   // 7.3.0 (#9)
   "infra:purge-bytecode:code-r1",
   "infra:park-plan",

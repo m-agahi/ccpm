@@ -2,7 +2,7 @@
 
 ## [8.9.0] - 2026-11-24
 
-ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,899 B (+2,992 B; cap 520,000 B, ADR-1353).
+ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 479,110 B (+4,203 B; cap 520,000 B, ADR-1353).
 
 ### Added
 
@@ -28,6 +28,14 @@ ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` 
 - `args.rerun_of` (any mode): a run nonce other than this run's (typeof checked before
   `NONCE_RE`). The engine records it in `auto_decisions` (gate `rerun`) and answers `none` to a
   second transient stop: at most one automatic re-run per user launch.
+- The engine-side once-only guard (Max's ruling on #116): a result with `action: "rerun"` checks
+  and sets `<git-common-dir>/fleet/reruns/<task id>.json` with the new `parked.py rerun` mode
+  (`infra:run-lock:rerun`, after the lock release). Another run's marker under 24 h old gives
+  `none` ("already re-run once (engine marker)"), so a skill that drops `rerun_of` cannot loop.
+  A malformed, unreadable or future marker, a bad relay, or a stop before the run lock (no task
+  id) also gives `none`. The marker only removes a re-run. A transient stop before the run lock,
+  such as a null intake result, therefore no longer re-runs. A human launch within 24 h of an
+  automatic re-run of the same task gets `none` on a transient stop.
 - The skill (`build-task`): a new section "Recover". On `rerun` it re-launches the same Workflow
   once, in the same turn, with the stopped launch's args minus `checkpoint` and `freeze_digest`, a
   fresh `run_nonce` and every key of `recover.args`; `ask` shows the options verbatim and stops,

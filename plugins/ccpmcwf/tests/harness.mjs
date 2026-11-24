@@ -462,7 +462,7 @@ export async function runOne(script, args0) {
       return parkedPartOut(PARKED_STORE.get(i.run) || "", i.part, [i.scratch, i.run, String(i.part)]);
     }
     // 8.0.1 (#76): an unscripted run lock claim holds the lock; a release releases it
-    if (!(label in script) && /^infra:run-lock(:release)?$/.test(label)) return lockOut(prompt);
+    if (!(label in script) && /^infra:run-lock(:release|:rerun)?$/.test(label)) return lockOut(prompt);
     // 7.3.0 (#43): unscripted fleet-branch reads find no fleet branch of the task
     if (!(label in script) && /^infra:fleet-branch$/.test(label)) {
       const i = inputsOf(prompt);
@@ -1020,12 +1020,13 @@ export function roleTestEnv(key, extra) {
 // result is made (in main's finally, as the database teardown does)
 // 8.0.1 (#76): the last label before the run lock release (main's finally releases it last)
 export function lastBeforeRelease(labels) {
-  const l = labels.filter((x) => x !== "infra:run-lock:release");
+  const l = labels.filter((x) => x !== "infra:run-lock:release" && x !== "infra:run-lock:rerun");
   return l[l.length - 1];
 }
 export function countedCalls(calls) {
   // 8.0.1 (#76): the run lock release runs after the result too
-  return calls.filter((c) => c.label !== "infra:build-clean" && c.label !== "infra:run-lock:release");
+  // 8.9.0 (#108 step 6): and the engine re-run marker after it
+  return calls.filter((c) => c.label !== "infra:build-clean" && c.label !== "infra:run-lock:release" && c.label !== "infra:run-lock:rerun");
 }
 // 5.0.6 (ledger 2019): the emit-site check (v506_build_env and the
 // multi-round, auto and database scenarios run it).
@@ -1487,6 +1488,7 @@ export const PROGRAM_LABELS = [
   [/^infra:fleet-branch$/, [[null, "fleet_branch", PROGRAM_KEYS["fleet_branch"] || null]]],
   // 8.0.1 (#76)
   [/^infra:run-lock:release$/, [[null, "parked", PROGRAM_KEYS["parked:release"] || null]]],
+  [/^infra:run-lock:rerun$/, [[null, "parked", PROGRAM_KEYS["parked:rerun"] || null]]],
   [/^infra:run-lock$/, [[null, "parked", PROGRAM_KEYS["parked:claim"] || null]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
@@ -1563,11 +1565,13 @@ function pick(o, keys) {
 // that was wrong stays wrong; a missing one is computed.
 // 8.0.1 (#76): the run lock programs (parked.py claim|release) echo their args
 export function lockOut(prompt, over) {
-  const m = /parked\.py' '(claim|release)' '([^']*)' '([^']*)' '([^']*)'(?: '([^']*)')?/.exec(prompt);
+  const m = /parked\.py' '(claim|release|rerun)' '([^']*)' '([^']*)' '([^']*)'(?: '([^']*)')?/.exec(prompt);
   const args = m[1] === "claim" ? [m[2], m[3], m[4], m[5]] : [m[2], m[3], m[4]];
   const lock = m[2] + "/.git/fleet/locks/" + m[3] + ".json";
-  const base = m[1] === "claim" ? { claimed: true, again: false, stale: null, held_by: null, lock } : { released: true, absent: false, held_by: null, lock };
-  return Object.assign({ status: "ok", reason: m[1] === "claim" ? "claimed" : "released" }, base, over || {}, { args: (over && over.args) || args });
+  // 8.9.0 (#108 step 6): rerun marks a fresh marker by default
+  const base =
+    m[1] === "claim" ? { claimed: true, again: false, stale: null, held_by: null, lock } : m[1] === "rerun" ? { marked: true, blocked: null, held_by: null, marker: m[2] + "/.git/fleet/reruns/" + m[3] + ".json" } : { released: true, absent: false, held_by: null, lock };
+  return Object.assign({ status: "ok", reason: m[1] }, base, over || {}, { args: (over && over.args) || args });
 }
 // 8.5.6 (#108 step 3): parked.py unpark <worktree> <plan path> <scratch> <run> <sha256>
 export function unparkOut(prompt, over) {

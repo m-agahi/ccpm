@@ -14,9 +14,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { ARGS, PB, NONCE, DIST, SOURCE, HERE, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf, commitStub } from "./harness.mjs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { ARGS, PB, NONCE, DIST, SOURCE, HERE, SCRIPTS_SRC, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf, commitStub, lockOut, spawnSync } from "./harness.mjs";
 
 const SKILL = readFileSync(join(HERE, "..", "skills", "build-task", "SKILL.md"), "utf8");
 const README = readFileSync(join(HERE, "..", "README.md"), "utf8");
@@ -89,7 +90,7 @@ test("8.9.0: resume_with build (mechanical) recovers with action resume_build an
 
 test("8.9.0: a transient plan stop recovers with action rerun and plan args naming this run", async () => {
   const s = happy();
-  s.intake = [null, null];
+  s["infra:branch-scan"] = [null, null];
   const out = await runOne(s, ARGS);
   assert.equal(out.result.stop_class, "transient");
   assert.deepEqual(out.result.recover, { class: "transient", action: "rerun", args: { mode: "plan", rerun_of: NONCE } });
@@ -137,14 +138,14 @@ test("8.9.0: budget, agent cap, hook surface and relay mismatch stops are never 
 
 // ---------------------------------------------------------------- 3: each transient site re-enters at or before its check
 
-test("8.9.0 site dispatch (a read-only step's null): the plan re-run runs intake again", async () => {
+test("8.9.0 site dispatch (a read-only step's null): the plan re-run runs intake and the branch scan again", async () => {
   const s = happy();
-  s.intake = [null, null];
+  s["infra:branch-scan"] = [null, null];
   const out = await runOne(s, ARGS);
   assert.equal(out.result.recover.action, "rerun");
   const r = await runOne(happy(), relaunch(ARGS, out.result.recover));
   assert.equal(r.result.status, "awaiting_confirmation", r.result.reason);
-  assert.ok(has(r, "intake"));
+  assert.ok(has(r, "intake") && has(r, "infra:branch-scan"));
   assert.ok(r.result.auto_decisions.some((d) => d.gate === "rerun" && d.reason.includes(NONCE)), JSON.stringify(r.result.auto_decisions));
 });
 
@@ -414,6 +415,7 @@ test("8.9.0 review B1: an unattended plan launch with a relaxed plan that stops 
   assert.ok(out.labels.includes("role:fleet-code-judge:r1"), out.labels.join(", "));
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
+  assert.ok(!has(out, "infra:run-lock:rerun"), "the B1 guard wins before the engine marker");
 });
 
 test("8.9.0 review B1: an in-run re-plan with a relaxed list that stops in its build answers none", async () => {
@@ -443,6 +445,7 @@ test("8.9.0 review B1: an in-run re-plan with a relaxed list that stops in its b
   assert.deepEqual(inputsOf(out.calls.find((c) => c.label === "role:fleet-intent-judge:replan").prompt).relaxed, [RELAXED]);
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
+  assert.ok(!has(out, "infra:run-lock:rerun"), "the B1 guard wins before the engine marker");
 });
 
 test("8.9.0 review B1: recover.args never carries relaxed", () => {
@@ -477,6 +480,164 @@ test("8.9.0: a second transient stop in the re-run is reported, never re-run aga
   assert.equal(out.result.stop_class, "transient");
   assert.equal(out.result.recover.action, "none");
   assert.match(out.result.recover.why, /already the automatic re-run of run n0-0000009/);
+});
+
+// ---------------------------------------------------------------- 5b: the engine-side once-only marker (Max's ruling on #116)
+
+const MARK = "infra:run-lock:rerun";
+const markStub = (over) => (p) => lockOut(p, over);
+const transientRun = (over) => {
+  const s = happy();
+  s["infra:branch-scan"] = [null, null];
+  if (over !== undefined) s[MARK] = typeof over === "function" ? over : markStub(over);
+  return s;
+};
+test("8.9.0 marker: a re-run checks and sets the marker keyed by the task id, and keeps rerun only on marked true", async () => {
+  const out = await runOne(transientRun(), ARGS);
+  assert.equal(out.result.recover.action, "rerun", JSON.stringify(out.result.recover));
+  assert.equal(out.labels.filter((l) => l === MARK).length, 1);
+  assert.equal(out.labels[out.labels.length - 1], MARK, "after main's finally (the lock release)");
+  assert.match(out.calls.find((c) => c.label === MARK).prompt, /parked\.py' 'rerun' '\/r' 'y42' 'n1-0000001'/);
+});
+
+test("8.9.0 marker: the skill drops rerun_of; the second run's transient stop gets none (already re-run once)", async () => {
+  const first = await runOne(transientRun(), ARGS);
+  assert.equal(first.result.recover.action, "rerun");
+  const a = relaunch(ARGS, first.result.recover);
+  delete a.rerun_of;
+  const second = await runOne(transientRun({ marked: false, blocked: "recent", held_by: { nonce: NONCE, time: "2026-11-24T10:00:00Z" } }), a);
+  assert.equal(second.result.stop_class, "transient");
+  assert.deepEqual(second.result.recover, { class: "transient", action: "none", why: "already re-run once (engine marker)" });
+});
+
+test("8.9.0 marker: a malformed, unreadable or future marker, and a failed or mismatched relay, give none (fail closed)", async () => {
+  for (const [over, why] of [
+    [{ marked: false, blocked: "malformed" }, /unreadable or malformed \(engine marker\)/],
+    [{ marked: false, blocked: "unreadable" }, /unreadable or malformed \(engine marker\)/],
+    [{ marked: false, blocked: "future" }, /from the future \(engine marker\)/],
+    [{ marked: true, blocked: "recent" }, /already re-run once/],
+    [{ marked: "yes" }, /marker step failed/],
+    [{ args: ["/r", "y42", "n9-9999999"] }, /marker step failed/],
+    [{ status: "failed" }, /marker step failed/],
+    [() => null, /marker step failed/],
+    [(p) => Object.assign(lockOut(p), { digest: "0".repeat(64) }), /marker step failed/],
+  ]) {
+    const out = await runOne(transientRun(over), ARGS);
+    assert.equal(out.result.recover.action, "none", JSON.stringify(over));
+    assert.match(out.result.recover.why, why, JSON.stringify(over));
+    assert.equal(out.result.recover.args, undefined);
+  }
+});
+
+test("8.9.0 marker: a stop before the run lock (no task id) gets none; the marker never runs for safety, judgment, rerun_of or B1", async () => {
+  const s = happy();
+  s.intake = [null, null];
+  const early = await runOne(s, ARGS);
+  assert.equal(early.result.stop_class, "transient");
+  assert.deepEqual(early.result.recover, { class: "transient", action: "none", why: "no task run lock was claimed, so the engine marker has no key" });
+  assert.ok(!has(early, MARK));
+  // a marker that would say marked true never adds a re-run
+  const safety = await runOne(Object.assign(happy(), { [MARK]: markStub() }), Object.assign({}, ARGS, { confirm: "maybe" }));
+  assert.equal(safety.result.recover.action, "none");
+  assert.ok(!has(safety, MARK));
+  const again = await runOne(transientRun(), Object.assign({}, ARGS, { rerun_of: "n0-0000009" }));
+  assert.equal(again.result.recover.action, "none");
+  assert.ok(!has(again, MARK));
+  assert.match(SOURCE, /async function rerunGuard\(out\) \{\n  const rc = out && out\.recover;\n  if \(!rc \|\| rc\.action !== "rerun"\) return out;/);
+  assert.match(SOURCE, /\nreturn await rerunGuard\(out\);\n?$/);
+});
+
+test("8.9.0 marker: a judgment stop asks; the marker step does not run", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].criteria[1].id = "AC1";
+  s[MARK] = markStub();
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.stop_class, "judgment", out.result.reason);
+  assert.equal(out.result.recover.action, "ask");
+  assert.ok(!has(out, MARK), out.labels.join(", "));
+});
+
+// program level: parked.py rerun on a real temp repo
+const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+const GITBIN = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+const PENV = { PATH: dirname(GITBIN) + ":/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+function markRepo() {
+  const root = mkdtempSync(join(tmpdir(), "fleet-890-"));
+  const r = join(root, "repo");
+  mkdirSync(r);
+  assert.equal(spawnSync(GITBIN, ["-C", r, "init", "-q"], { env: PENV }).status, 0);
+  return { repo: r, dir: join(r, ".git", "fleet", "reruns"), file: join(r, ".git", "fleet", "reruns", "y42.json"), done: () => rmSync(root, { recursive: true, force: true }) };
+}
+const mark = (t, nonce) => {
+  const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "parked.py"), "rerun", t.repo, "y42", nonce], { encoding: "utf8", env: PENV });
+  return { status: r.status, stderr: r.stderr, out: r.status === 0 ? JSON.parse(r.stdout.trim().split("\n").pop()) : null };
+};
+const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+test("8.9.0 marker program: absent and same nonce mark; another nonce within 24 h blocks; an expired one is overwritten", () => {
+  const t = markRepo();
+  try {
+    const a = mark(t, "n1-aaaaaa");
+    assert.equal(a.status, 0, a.stderr);
+    assert.deepEqual([a.out.marked, a.out.blocked, a.out.held_by, a.out.marker], [true, null, null, t.file]);
+    assert.deepEqual(a.out.args, [t.repo, "y42", "n1-aaaaaa"]);
+    assert.equal(a.out.program.name, "parked");
+    assert.equal(statSync(t.file).mode & 0o777, 0o600);
+    const j = JSON.parse(readFileSync(t.file, "utf8"));
+    assert.equal(j.nonce, "n1-aaaaaa");
+    assert.match(j.time, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    // the same nonce does not block
+    assert.equal(mark(t, "n1-aaaaaa").out.marked, true);
+    // another nonce within the window blocks, the marker stays
+    const before = readFileSync(t.file, "utf8");
+    const b = mark(t, "n2-bbbbbb");
+    assert.deepEqual([b.out.marked, b.out.blocked, b.out.held_by.nonce], [false, "recent", "n1-aaaaaa"]);
+    assert.equal(readFileSync(t.file, "utf8"), before);
+    // 23 h old still blocks; 25 h old is expired: re-marked by the new nonce
+    writeFileSync(t.file, JSON.stringify({ nonce: "n1-aaaaaa", time: iso(Date.now() - 23 * 3600e3) }));
+    assert.equal(mark(t, "n2-bbbbbb").out.blocked, "recent");
+    writeFileSync(t.file, JSON.stringify({ nonce: "n1-aaaaaa", time: iso(Date.now() - 25 * 3600e3) }));
+    const c = mark(t, "n2-bbbbbb");
+    assert.deepEqual([c.out.marked, c.out.blocked], [true, null]);
+    assert.equal(JSON.parse(readFileSync(t.file, "utf8")).nonce, "n2-bbbbbb");
+  } finally {
+    t.done();
+  }
+});
+
+test("8.9.0 marker program: a malformed, future, oversized or symlinked marker blocks and is left as it is; a symlinked dir is refused", () => {
+  const t = markRepo();
+  try {
+    assert.equal(mark(t, "n1-aaaaaa").out.marked, true);
+    for (const [body, want] of [
+      ["not json", "malformed"],
+      [JSON.stringify(["n1-aaaaaa"]), "malformed"],
+      [JSON.stringify({ nonce: "bad nonce!", time: iso(Date.now()) }), "malformed"],
+      [JSON.stringify({ nonce: "n1-aaaaaa", time: "yesterday" }), "malformed"],
+      [JSON.stringify({ nonce: "n1-aaaaaa", time: iso(Date.now() + 3600e3) }), "future"],
+      [JSON.stringify({ nonce: "n1-aaaaaa", pad: "x".repeat(5000), time: iso(Date.now()) }), "malformed"],
+    ]) {
+      writeFileSync(t.file, body);
+      const r = mark(t, "n2-bbbbbb");
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual([r.out.marked, r.out.blocked], [false, want], body.slice(0, 60));
+      assert.equal(readFileSync(t.file, "utf8"), body);
+    }
+    // a future marker blocks its own nonce too
+    writeFileSync(t.file, JSON.stringify({ nonce: "n2-bbbbbb", time: iso(Date.now() + 3600e3) }));
+    assert.equal(mark(t, "n2-bbbbbb").out.blocked, "future");
+    rmSync(t.file);
+    writeFileSync(t.file + ".real", "{}");
+    symlinkSync(t.file + ".real", t.file);
+    assert.deepEqual([mark(t, "n2-bbbbbb").out.marked, mark(t, "n2-bbbbbb").out.blocked], [false, "unreadable"]);
+    rmSync(t.dir, { recursive: true, force: true });
+    mkdirSync(t.dir + "-real");
+    symlinkSync(t.dir + "-real", t.dir);
+    const d = mark(t, "n2-bbbbbb");
+    assert.notEqual(d.status, 0);
+    assert.match(d.stderr, /refusing a symlink/);
+  } finally {
+    t.done();
+  }
 });
 
 // ---------------------------------------------------------------- 6: the SKILL and README text

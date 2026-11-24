@@ -1740,7 +1740,7 @@ const PROGRAM_SHA256 = {
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
   "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "f30a4a7cc8b4efe72bb564c5fe8d20aa0d605b9f49e2e424837fa85da610a6e1",
+  "parked": "60f378be58e54214b9d8688a0ba905feac5ab053f7e52981faeb7cbd2970d6ff",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
   "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
@@ -1948,6 +1948,7 @@ const PROGRAM_KEYS = {
   // 8.0.1 (#76)
   "parked:claim": ["claimed", "again", "stale", "held_by", "lock", "args"],
   "parked:release": ["released", "absent", "held_by", "lock", "args"],
+  "parked:rerun": ["marked", "blocked", "held_by", "marker", "args"],
   "exclude_add": ["added", "exclude", "args"],
   "purge": ["purged", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
@@ -2074,6 +2075,10 @@ const PROGRAM_OUT = {
     lock: STR,
     released: BOOL,
     absent: BOOL,
+    // 8.9.0 (#108 step 6): rerun mode (held_by above: the prior marker {nonce, time})
+    marked: BOOL,
+    blocked: STR_OR_NULL,
+    marker: STR,
     args: STRS,
     digest: STR,
   },
@@ -3807,6 +3812,8 @@ const state = {
   dirty: null,
   parkDirty: false,
   rerunOf: null,
+  // 8.9.0 (#108 step 6): [repo, task id] of the run lock this run claimed (the engine re-run marker's key)
+  rerunKey: null,
   // 8.9.0 (review B1 of #116): the relaxed list of a plan this run sent to autoGates (never relayed)
   relaxed: null,
   review: null,
@@ -4794,7 +4801,8 @@ async function lockClaim(repo, task, ph) {
   const r = await infra("infra:run-lock", lockStep("claim", a), ph, INFRA_AGENT);
   requireProgram(r, "parked", "infra:run-lock");
   // a relay that claimed is released (nonce-matched), even when it fails its check
-  if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
+  // 8.9.0 (#108 step 6): the held lock's task id also keys the engine re-run marker
+  if (r.claimed === true) (state.lock = { a: a.slice(0, 3), path: r.lock }), (state.rerunKey = [repo, task]);
   if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("s", "failed", "infra:run-lock: relay off its digest or args");
   const h = r.held_by || {};
   if (!r.claimed) halt("s", "needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); a closed session does not end a run: check /workflows (or the run's task output) for run " + h.nonce + " before you delete " + r.lock);
@@ -4813,6 +4821,35 @@ async function lockRelease() {
     r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   } catch (e) {}
   gate((r && r.status === "ok" && lockOk(r, "release", l.a) && (r.released || r.absent) ? "" : "warning: not confirmed: ") + "run lock " + l.path + " released");
+}
+// 8.9.0 (#108 step 6, Max's ruling on #116): the engine-side once-only guard. A result whose recover is a
+// re-run checks and sets <git-common-dir>/fleet/reruns/<task id>.json (parked.py rerun) after main's
+// finally; only a digest-checked marked true keeps the re-run, anything else is none. The marker can only
+// remove a re-run: it is never read for any other stop or for any check. Never halts (it runs after the
+// result is made).
+async function rerunGuard(out) {
+  const rc = out && out.recover;
+  if (!rc || rc.action !== "rerun") return out;
+  const no = (why) => {
+    out.recover = { class: rc.class, action: "none", why };
+    return out;
+  };
+  const k = state.rerunKey;
+  if (!k) return no("no task run lock was claimed, so the engine marker has no key");
+  const a = [k[0], k[1], state.nonce];
+  const label = "infra:run-lock:rerun";
+  let r = null;
+  try {
+    state.agents++;
+    const ic = infraCall(label, lockStep("rerun", a), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Cleanup" });
+    r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  } catch (e) {
+    r = null;
+  }
+  if (!r || r.status !== "ok" || programProblem(r, "parked") || !lockOk(r, "rerun", a) || typeof r.marked !== "boolean") return no("the engine marker step failed (no digest-checked relay)");
+  if (r.marked === true && r.blocked === null) return out;
+  if (r.blocked === "recent") return no("already re-run once (engine marker)");
+  return no("the engine marker is " + (r.blocked === "future" ? "from the future" : "unreadable or malformed") + " (engine marker)");
 }
 // 7.3.0 (#43): the slug of the one existing local branch fleet/<task id>-<slug> (an intake title varies per run)
 // review fix: only a slug the program proves this task's (the sealed plan ref names its branch and this source)
@@ -10164,9 +10201,11 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
   };
 }
 
+let out;
 try {
-  return await main(input);
+  out = await main(input);
 } catch (e) {
-  if (e instanceof Stop) return finishStop(e);
-  throw e;
+  if (!(e instanceof Stop)) throw e;
+  out = finishStop(e);
 }
+return await rerunGuard(out);
