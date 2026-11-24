@@ -221,6 +221,6 @@ test("5.0.3 the post-commit gate still refuses mysql:// (backstop unchanged)", a
   assert.equal(out.result.plan_ref, undefined);
 });
 
-test("5.0.3 the workflow stays at most 520000 bytes (ADR-1316 amended 2026-11-19; was 495000)", () => {
+test("5.0.3 the workflow stays at most 520000 bytes (ADR-1353; was 495000)", () => {
   assert.ok(statSync(WORKFLOW).size <= 520000, "build-engine.js is " + statSync(WORKFLOW).size + " bytes");
 });

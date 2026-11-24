@@ -2430,8 +2430,12 @@ node plugins/ccpmcwf/scripts/build-workflow.mjs --check  # what the tests check
 
 The build keeps the `export const meta` block byte for byte, cuts each other line's indentation,
 and drops the empty lines and the lines that are only a `//` comment (the table markers stay).
-Nothing inside a line changes. It then checks that esbuild `--minify-whitespace` (pinned
-`ESBUILD_VERSION`, run by `npx`) gives the same bytes for the source and the workflow, and fails
-when they differ (a string, template or comment that spans a line). The workflow must stay at most
-520000 bytes (ADR-1316 as amended on 2026-11-19; was 495000, and 480000 under ADR-1189; Claude Code skips a workflow file over 524288
-bytes).
+Since 8.6.0 (ADR-1403) it then collapses the whitespace inside each line: a space or tab run
+outside string, template, regex and comment text is dropped, or cut to one space where two tokens
+could join (`a+ +b`, `return x`). Newlines stay, so line numbers and the column-0 definitions do
+not change. The lines from a `// <NAME>_BEGIN` marker to the next `// <NAME>_END` marker stay as
+they are. `scripts/changed_defs.py` (`gen_build`) is a byte-for-byte port of this build. The build
+then checks that esbuild `--minify-whitespace` (pinned `ESBUILD_VERSION`, run by `npx`) gives the
+same bytes for the source and the workflow, and fails when they differ (a string or comment that
+spans a line) or when esbuild cannot run. The workflow must stay at most 520000 bytes (ADR-1353;
+was 495000, and 480000 under ADR-1189; Claude Code skips a workflow file over 524288 bytes).

@@ -1,5 +1,45 @@
 # Changelog
 
+## [8.6.0] - 2026-11-24
+
+ccpmcwf 8.6.0 (ADR-1403, yaadgaar `#113`; part of `#108`): the build collapses the whitespace inside the lines of the dist workflow. The dist shrinks from 511,254 B to 470,417 B (40,837 B freed) under the unchanged 520,000 B cap (ADR-1353). The source stays readable. No behaviour change: the esbuild `--minify-whitespace` check passes, and an acorn AST of the old and the new dist is the same.
+
+### Changed
+
+- `scripts/build-workflow.mjs`: `buildWorkflow` is now `stripLines` (the old line cut) and then
+  `collapse`, a dependency-free tokenizer. It drops each space or tab run outside string, template
+  (with nested `${}`), regex and comment text. It keeps one space where two tokens could join: two
+  word characters, `+ +`, `- -`, `/ /`, `/ *`, `- >`, `< !`, a digit and `.`, `? .`, and a regex
+  literal followed by a word. Newlines stay, so line numbers and the column-0 definitions do not
+  change. The lines from a `// <NAME>_BEGIN` marker to the next `// <NAME>_END` marker stay as they
+  are (gen.mjs and the test harness rewrite those tables in the dist). A string, template or regex
+  that does not close fails the build.
+- `scripts/changed_defs.py`: `gen_build` ports the collapse byte for byte (`gen_collapse`). A
+  literal that does not close gives no build, so the dist is scanned. The PROGRAM_SHA256 table
+  changes with it.
+- The size citations move from ADR-1316 as amended to ADR-1353 (build-workflow.mjs header, README,
+  size tests).
+- Transition: an 8.5.7 fleet sees an 8.6.0 dist as not fresh, and an 8.6.0 fleet sees an 8.5.7
+  base dist as not fresh. Then the dist is scanned (the L2190 callers-gate stop can come back)
+  until the plugin and both ends of the diff are 8.6.0.
+
+### Tests
+
+- `v860_dist_collapse` (new): the collapse rules, the kept literals and marker tables, the build
+  failure on an open literal, the line count, a committed-dist check with its own literal
+  stripper (no droppable space), at least 35,000 B freed against `stripLines`, the same column-0
+  definitions for changed_defs.py, and `--check` exits non-zero (never skips) when npx fails.
+- `v701_build_parity`: new parity fixtures for each collapse branch and an open-literal case; the
+  "trailing whitespace inside lines is kept" fixture is now "trailing whitespace is dropped"; the
+  deviation variants use the collapsed `const a=1;` and add two collapse deviations.
+- `v631_dist`: the line check compares the non-whitespace characters of each line; the
+  `FLEET_VERSION` checks read `const FLEET_VERSION="`.
+- `v730_review_minors`, `v853_caller_budget_doclock`: the agent-cap fault injection replaces
+  `MAX_AGENTS=100` and asserts that the replace changed the dist.
+- `v701_generated_mismatch`: the dist hand edits replace `a+1` and `b*2` and assert that the
+  replace changed the dist.
+- `size_guard`, `v503_dsn_precheck`, `v504_pycache`, `v631_dist`: cite ADR-1353 (and ADR-1403).
+
 ## [8.5.7] - 2026-11-24
 
 ccpmcwf 8.5.7: the dist workflow shrinks from 519,132 B to 511,254 B (7,878 B freed) under the 520,000 B cap (ADR-1353), to make room for yaadgaar `#108` step 4. No behaviour change: each split string concatenates back to the same text, the v5010 prompt snapshots pass unchanged (no pin re-pinned, no prompt text shortened), the full suite passes, and no safety check's condition or order changed.

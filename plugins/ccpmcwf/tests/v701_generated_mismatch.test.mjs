@@ -101,10 +101,17 @@ function scan(base, tree, exclude = []) {
 const withA = (n) => SRC0.replace("a + 1", "a + " + n);
 const withB = (n) => SRC0.replace("b * 2", "b * " + n);
 const defsAt = (out, path) => out.defs.filter((d) => d.at.startsWith(path + ":"));
+// a hand edit of the built dist; 8.6.0 (ADR-1403): the dist writes `a+1` and `b*2` (whitespace collapsed)
+function handEdit(from, to) {
+  const d = buildWorkflow(SRC0);
+  const e = d.replace(from, to);
+  assert.notEqual(e, d, "the dist holds " + from);
+  return e;
+}
 
 test("AC2: hand edit in the dist, src unchanged: the dist is scanned and not generated", () => {
   // AC2: hand edit (a + 1 -> a + 9 in D only)
-  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: SRC0, [D]: buildWorkflow(SRC0).replace("a + 1", "a + 9") });
+  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: SRC0, [D]: handEdit("a+1", "a+9") });
   assert.equal(status, 0);
   assert.deepEqual(out.generated, []);
   assert.deepEqual(out.defs, [
@@ -115,7 +122,7 @@ test("AC2: hand edit in the dist, src unchanged: the dist is scanned and not gen
 
 test("AC2 triangulation: a different hand edit (b * 2 -> b * 7) is scanned, not generated", () => {
   // AC2: hand edit, different line and value
-  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: SRC0, [D]: buildWorkflow(SRC0).replace("b * 2", "b * 7") });
+  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: SRC0, [D]: handEdit("b*2", "b*7") });
   assert.equal(status, 0);
   assert.deepEqual(out.generated, []);
   assert.ok(defsAt(out, D).some((d) => d.name === "r" && d.at === D + ":9" && d.end === 9), JSON.stringify(out.defs));
@@ -123,7 +130,7 @@ test("AC2 triangulation: a different hand edit (b * 2 -> b * 7) is scanned, not 
 
 test("AC2: src and dist both changed but the dist is not the build of the src", () => {
   // AC2: both changed, mismatch (S has a + 2, D has a + 3)
-  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: withA(2), [D]: buildWorkflow(SRC0).replace("a + 1", "a + 3") });
+  const { status, out } = scan({ [S]: SRC0, [D]: buildWorkflow(SRC0) }, { [S]: withA(2), [D]: handEdit("a+1", "a+3") });
   assert.equal(status, 0);
   assert.deepEqual(out.generated, []);
   assert.deepEqual(out.defs, [

@@ -5,7 +5,7 @@
 // outside workflows/. scripts/build-workflow.mjs writes
 // workflows/build-engine.js from it: the `export const meta` block verbatim,
 // then the body through a line stripper (indentation, empty and comment-only
-// lines cut); esbuild --minify-whitespace (a pinned version) is an equivalence
+// lines cut) and, since 8.6.0 (ADR-1403), a whitespace collapse inside lines; esbuild --minify-whitespace (a pinned version) is an equivalence
 // check of source and dist, not the build. The dist is committed: the plugin installs from
 // git. These tests fail when the dist is stale, and they fail (never skip) when
 // esbuild cannot run.
@@ -53,9 +53,10 @@ test("6.3.1 2129: the source and the dist minify (esbuild --minify-whitespace) t
   }
   assert.equal(diff, null);
   // the check sees a change inside a line
-  const i = DIST.indexOf('const FLEET_VERSION = "');
+  // 8.6.0 (ADR-1403): the dist writes `const FLEET_VERSION="..."` (whitespace collapsed)
+  const i = DIST.indexOf('const FLEET_VERSION="');
   assert.ok(i > 0);
-  assert.notEqual(B.equivalence(SOURCE, DIST.slice(0, i) + DIST.slice(i).replace('= "', '= "x')), null);
+  assert.notEqual(B.equivalence(SOURCE, DIST.slice(0, i) + DIST.slice(i).replace('="', '="x')), null);
 });
 
 test("6.3.1 2129: build-workflow.mjs --check passes on the committed files", () => {
@@ -63,7 +64,7 @@ test("6.3.1 2129: build-workflow.mjs --check passes on the committed files", () 
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
-test("6.3.1 2129: the dist keeps the meta block byte for byte, the table markers and the lines; it drops only comment lines, empty lines and indentation", () => {
+test("6.3.1 2129: the dist keeps the meta block byte for byte, the table markers and the lines; it drops only comment lines, empty lines and whitespace", () => {
   const { meta, body } = B.splitMeta(SOURCE);
   assert.ok(meta.startsWith("export const meta = {\n"));
   assert.ok(meta.endsWith("\n};\n"));
@@ -76,11 +77,15 @@ test("6.3.1 2129: the dist keeps the meta block byte for byte, the table markers
   assert.deepEqual(comments, markers, "only the table markers stay as comment lines");
   assert.ok(lines.every((l) => l !== "" && !/^[ \t]/.test(l)));
   const kept = body.split("\n").map((l) => l.replace(/^[ \t]+/, "")).filter((l) => l !== "" && (!l.startsWith("//") || B.MARKER_RE.test(l)));
-  assert.deepEqual(lines, kept);
+  // 8.6.0 (ADR-1403): the same lines in the same order, each with the same non-whitespace characters
+  // (the build collapses whitespace inside lines; v860_dist_collapse pins which spaces stay)
+  assert.equal(lines.length, kept.length);
+  const ink = (l) => l.replace(/[ \t]+/g, "");
+  assert.deepEqual(lines.map(ink), kept.map(ink));
   assert.equal(typeof compile(DIST), "function");
   // the FLEET_VERSION literal survives (the preflight looks for fleet/<version>/scripts)
   const v = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE)[1];
-  assert.match(DIST, new RegExp('^const FLEET_VERSION = "' + v.replace(/\./g, "\\.") + '";$', "m"));
+  assert.match(DIST, new RegExp('^const FLEET_VERSION="' + v.replace(/\./g, "\\.") + '";$', "m"));
 });
 
 test("6.3.1 2129: gen.mjs reads the same tables from the dist as from the source", () => {
@@ -99,8 +104,8 @@ test("6.3.1 2129: the dist holds no control or invisible format character (the l
   assert.deepEqual(bad, []);
 });
 
-// ADR-1316 as amended 2026-11-19 (#91): 520000, the size guard's limit (was 495000, 480000)
-test("6.3.1 2129: the dist stays at most 520000 bytes, under Claude Code's 524288-byte cap (ADR-1189)", () => {
+// ADR-1353 (#91): 520000, the size guard's limit (was 495000, and 480000 under ADR-1189)
+test("6.3.1 2129: the dist stays at most 520000 bytes, under Claude Code's 524288-byte cap (ADR-1353)", () => {
   const n = statSync(DIST_PATH).size;
   assert.ok(520000 < 524288);
   assert.ok(n <= 520000, "dist is " + n + " bytes");
