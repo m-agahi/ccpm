@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const PLUGINS = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Claude Code's cap, and the limit this repo holds itself to
 const CLAUDE_CODE_WORKFLOW_CAP = 524288;
-// ADR-1316 as amended 2026-11-19 (#91): 520000 (8.0.0: 495000; was 480000)
+// ADR-1353 (#91): 520000 (8.0.0: 495000; was 480000)
 const WORKFLOW_MAX_BYTES = 520000;
 
 // every plugins/*/workflows/*.js, or the files a caller names
@@ -41,17 +41,20 @@ test("4.0.1 1996: the size limit leaves headroom under Claude Code's workflow ca
   assert.ok(WORKFLOW_MAX_BYTES < CLAUDE_CODE_WORKFLOW_CAP);
 });
 
-test("4.0.1 1996: every plugins/*/workflows/*.js is at most 520000 bytes (ADR-1316 amended 2026-11-19; was 495000)", () => {
+test("4.0.1 1996: every plugins/*/workflows/*.js is at most 520000 bytes (ADR-1353; was 495000)", () => {
   const files = workflowFiles();
   assert.ok(files.some((f) => f.endsWith(join("ccpmcwf", "workflows", "build-engine.js"))), "the fleet workflow is checked");
   assert.deepEqual(oversized(files), [], "workflow files over " + WORKFLOW_MAX_BYTES + " bytes (Claude Code skips files over " + CLAUDE_CODE_WORKFLOW_CAP + " bytes silently)");
 });
 
 // #91: the build script header and the README state the same limit as the guard
-test("#91: build-workflow.mjs and the README state the 520000-byte limit and cite ADR-1316 as amended", () => {
-  const head = readFileSync(join(PLUGINS, "ccpmcwf", "scripts", "build-workflow.mjs"), "utf8").split("\n").slice(0, 10).join("\n");
-  assert.match(head, /at most 520000 bytes/);
-  assert.match(head, /ADR-1316 as\n\/\/ amended on 2026-11-19/);
+// 8.6.0: the citation moves from ADR-1316 as amended to ADR-1353, which holds the 520000 limit, plus ADR-1403 (the collapse)
+test("#91: build-workflow.mjs and the README state the 520000-byte limit and cite ADR-1353 and ADR-1403", () => {
+  const head = readFileSync(join(PLUGINS, "ccpmcwf", "scripts", "build-workflow.mjs"), "utf8").split("\n").slice(0, 20).join("\n");
+  assert.match(head, /at most 520000 bytes \(ADR-1353;/);
+  assert.match(head, /8\.6\.0 \(ADR-1403\): then the whitespace inside each line is collapsed/);
   assert.equal(WORKFLOW_MAX_BYTES, 520000);
-  assert.match(readFileSync(join(PLUGINS, "ccpmcwf", "README.md"), "utf8"), /520000 bytes \(ADR-1316 as amended on 2026-11-19/);
+  const readme = readFileSync(join(PLUGINS, "ccpmcwf", "README.md"), "utf8");
+  assert.match(readme, /at most 520000 bytes \(ADR-1353;/);
+  assert.match(readme, /Since 8\.6\.0 \(ADR-1403\) it then collapses the whitespace inside each line/);
 });

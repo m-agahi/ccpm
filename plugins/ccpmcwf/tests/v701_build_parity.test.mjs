@@ -98,7 +98,19 @@ test("AC6: triangulation, equality holds across marker, whitespace and meta vari
     "lower-case marker and marker with a suffix are dropped": head + "// a_BEGIN\n// FOO_BEGIN trailing\n  // FOO_BEGINX\n" + tail,
     "whitespace-only lines with tabs and spaces": head + " \t \n\t\n   \n" + tail,
     "meta block with a comment and a blank line is kept verbatim": 'export const meta = {\n  // keep me\n\n  name: "x",\n};\n' + tail,
-    "trailing whitespace inside lines is kept": head + "const b = 2;  \t\n" + tail,
+    // 8.6.0 (ADR-1403): the build collapses whitespace inside lines (was: "trailing whitespace inside lines is kept")
+    "trailing whitespace is dropped": head + "const b = 2;  \t\n" + tail,
+    "unary plus and minus after an operator keep one space": head + "x = a + +b - -c + ++d;\ny = a++ + b;\n" + tail,
+    "a regex after a division keeps one space; regex text is kept": head + "x = y / /re  x/.source.length;\nz = (a) / 2 / c;\n" + tail,
+    "a regex after return or ( keeps its spaces": head + "if ( /^a  b$/.test(s) ) return  /x  y/g;\nconst r = /[/ ]+/g;\n" + tail,
+    "a word after a regex keeps one space": head + "x = /x/ instanceof RegExp;\n" + tail,
+    "number then dot, ? then dot, < then !, - then >": head + "x = 1 .toString() + (a ? .5 : 1);\ny = a < !--b || a-- > b;\n" + tail,
+    "strings, nested templates and comments are kept": head + "const s = \"a  b\" + 'c  \\' d' + `e  ${ { a : 1 }.a }  ${ `in  ${ z }  ner` }`;  // keep  this\n/* a  b */  x  =  1;\n" + tail,
+    "a template spans lines": head + "const t = `a  b\n  c  ${ d  +  e }\n  f`;\n" + tail,
+    "non-ASCII in identifiers, strings, regex and templates": head + "const é  =  \"ü  x\" + /ö  y/.source + `ß  ${ é }`;\n" + tail,
+    "marker tables are kept as they are": head + "const  a  =  1;\n// FOO_BEGIN\nconst T = { \"a\": 1 };\n// FOO_END\nconst  u  =  2;\n" + tail,
+    "a BEGIN marker with no END keeps the rest": head + "const  a  =  1;\n// FOO_BEGIN\n" + tail,
+    "an END marker with no BEGIN is a plain line": head + "const  a  =  1;\n// FOO_END\nconst  u  =  2;\n" + tail,
     "a later `};` line in the body is not the meta end": head + "const o = {\n  k: 1,\n};\n" + tail,
     "meta end is the first line that is exactly `};`, not a line that only starts with it": 'export const meta = {\n  a: 1,\n};x\n};\n' + tail,
     "no final newline in the body": head + "function f() {\n  return a;\n}",
@@ -139,7 +151,10 @@ test("AC6: triangulation, any byte-level deviation of the dist from the build is
   const dist = build(next);
   const variants = {
     "marker FOO_BEGIN removed": dist.replace("// FOO_BEGIN\n", ""),
-    "tab indentation kept on the const line": dist.replace("const a = 1;", TAB + TAB + "const a = 1;"),
+    // 8.6.0 (ADR-1403): the build writes `const a=1;` (whitespace collapsed); E1's FOO_BEGIN..BAR_END lines stay as they are
+    "tab indentation kept on the const line": dist.replace("const a=1;", TAB + TAB + "const a=1;"),
+    "a collapsed space kept on the const line": dist.replace("const a=1;", "const a = 1;"),
+    "a space dropped inside a marker table": dist.replace("return a + 1;", "return a+1;"),
     "indented plain comment kept": dist.replace("function f() {", "// plain comment\nfunction f() {"),
     "whitespace-only line kept": dist.replace("function f() {", "   \nfunction f() {"),
     "lower_BEGIN marker kept": dist.replace("return a + 1;", "// lower_BEGIN\nreturn a + 1;"),
@@ -164,6 +179,16 @@ test("AC6: triangulation, meta head without a closing `};` line gives no build",
   const next = 'export const meta = {\n  name: "x",\nconst a = 2;\n';
   const out = scan({ [S]: base, [D]: base }, { [S]: next, [D]: next });
   assert.deepEqual(out.generated, []);
+});
+
+test("8.6.0 ADR-1403: a literal that does not close gives no build in either port, so the dist is scanned", () => {
+  const head = 'export const meta = {\n  name: "x",\n};\n';
+  for (const tailBad of ['const s = "abc;\n', "const s = `a ${ b;\n", "x = /abc;\n"]) {
+    assert.throws(() => build(head + tailBad), undefined, JSON.stringify(tailBad));
+    const mk = (n) => head + "const a = " + n + ";\n" + tailBad;
+    const out = scan({ [S]: mk(1), [D]: "const a = 1;\n" }, { [S]: mk(2), [D]: "const a = 2;\n" });
+    assert.deepEqual(out.generated, [], JSON.stringify(tailBad));
+  }
 });
 
 test("AC6: triangulation, meta head must start the source byte for byte", () => {

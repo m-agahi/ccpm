@@ -4,21 +4,30 @@
 // The source is plugins/ccpmcwf/src/build-engine.js; the Claude Code plugin
 // loader registers every plugins/<p>/workflows/*.js, so the source lives outside
 // workflows/. The dist plugins/ccpmcwf/workflows/build-engine.js is committed
-// (the plugin installs from git) and must stay at most 520000 bytes (ADR-1189, ADR-1316 as
-// amended on 2026-11-19; Claude Code skips a workflow file over 524288 bytes).
+// (the plugin installs from git) and must stay at most 520000 bytes (ADR-1353;
+// Claude Code skips a workflow file over 524288 bytes).
 //
 // The dist is the source's `export const meta = {...};` block byte for byte,
 // then every other source line with its leading whitespace cut, minus the
-// lines that are only a `//` comment and the empty lines. The `// <NAME>_BEGIN`
-// and `// <NAME>_END` table markers stay. Nothing inside a line changes: no
-// identifier, string or token is touched.
+// lines that are only a `//` comment and the empty lines (stripLines). The
+// `// <NAME>_BEGIN` and `// <NAME>_END` table markers stay.
 //
-// The cut is safe only while no string, template or comment spans a line. The
+// 8.6.0 (ADR-1403): then the whitespace inside each line is collapsed
+// (collapse): a space or tab run outside string, template, regex and comment
+// text is dropped, or cut to one space where dropping it could join two
+// tokens (two word characters, `+ +`, `- -`, `/ /`, `/ *`, `- >`, `< !`,
+// a digit and `.`, `? .`, a regex literal and a word). Newlines stay, so the
+// line count and the column-0 definitions do not change; no identifier,
+// string or token is touched. The lines from a BEGIN marker to the next END
+// marker stay as they are (gen.mjs and the tests rewrite those tables).
+//
+// The line cut is safe only while no string or comment spans a line. The
 // build proves it each time: esbuild --minify-whitespace of the source body and
 // of the dist body (each wrapped in one async function, since the body holds
 // top-level return and await) must be the same bytes, or the build fails.
 // esbuild's own output is not shipped: it renames identifiers that shadow an
 // outer name (args -> args2) and rewrites `undefined` to `void 0`.
+// scripts/changed_defs.py gen_build is a byte-for-byte port of buildWorkflow.
 //
 //   node plugins/ccpmcwf/scripts/build-workflow.mjs           gen.mjs (tables into the source), then write the dist
 //   node plugins/ccpmcwf/scripts/build-workflow.mjs --check   exit 1 when gen.mjs --check fails, the dist is stale,
@@ -55,8 +64,9 @@ export function splitMeta(source) {
   return { meta: source.slice(0, i + META_TAIL.length), body: source.slice(i + META_TAIL.length) };
 }
 
-// the dist text for a source text (pure; no esbuild)
-export function buildWorkflow(source) {
+// the line-stripped dist text for a source text: meta, then the body lines
+// with indentation, empty lines and comment-only lines cut (pure)
+export function stripLines(source) {
   const { meta, body } = splitMeta(source);
   const out = [];
   for (const line of body.split("\n")) {
@@ -65,6 +75,140 @@ export function buildWorkflow(source) {
     if (t.startsWith("//") && !MARKER_RE.test(t)) continue;
     out.push(t);
   }
+  return meta + out.join("\n") + "\n";
+}
+
+// 8.6.0 (ADR-1403): the tokens after which a `/` starts a regex literal, not a division
+const REGEX_AFTER = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+// an identifier, keyword or number character (any non-ASCII character counts)
+const isWord = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$" || c === "\\" || c === "#" || c >= "\x80";
+const JOINS = new Set(["++", "--", "//", "/*", "->", "<!"]);
+
+// 8.6.0 (ADR-1403): `text` with each space or tab run outside string, template,
+// regex and comment text dropped, or cut to one space where the chars on both
+// sides could join; newlines stay. Throws on a literal that does not close.
+export function collapse(text) {
+  const out = [];
+  const tpl = []; // open `${` per template level: the depth of { inside it
+  const n = text.length;
+  let i = 0;
+  let last = ""; // the last token: "w" word, "r" regex, "v" other value, "p" punctuator
+  let word = "";
+  const tplText = () => {
+    const s = i;
+    for (;;) {
+      if (i >= n) throw new Error("a template literal does not close");
+      const c = text[i];
+      if (c === "\\") i += 2;
+      else if (c === "`") {
+        out.push(text.slice(s, ++i));
+        last = "v";
+        return;
+      } else if (c === "$" && text[i + 1] === "{") {
+        i += 2;
+        out.push(text.slice(s, i));
+        tpl.push(0);
+        last = "p";
+        return;
+      } else i++;
+    }
+  };
+  while (i < n) {
+    const c = text[i];
+    if (c === " " || c === "\t") {
+      let j = i;
+      while (text[j] === " " || text[j] === "\t") j++;
+      const a = out.length ? out[out.length - 1].slice(-1) : "";
+      const b = j < n ? text[j] : "";
+      if (a !== "" && a !== "\n" && b !== "" && b !== "\n" && ((isWord(a) && isWord(b)) || JOINS.has(a + b) || (a >= "0" && a <= "9" && b === ".") || (a === "?" && b === ".") || (last === "r" && a === "/" && isWord(b)))) out.push(" ");
+      i = j;
+    } else if (c === "\n") {
+      out.push(c);
+      i++;
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (text[j] !== c) {
+        if (j >= n || text[j] === "\n") throw new Error("a string does not close on its line");
+        j += text[j] === "\\" ? 2 : 1;
+      }
+      out.push(text.slice(i, ++j));
+      i = j;
+      last = "v";
+    } else if (c === "`") {
+      out.push(c);
+      i++;
+      tplText();
+    } else if (c === "/" && text[i + 1] === "/") {
+      const j = text.indexOf("\n", i);
+      out.push(text.slice(i, j < 0 ? n : j));
+      i = j < 0 ? n : j;
+    } else if (c === "/" && text[i + 1] === "*") {
+      const j = text.indexOf("*/", i + 2);
+      if (j < 0) throw new Error("a block comment does not close");
+      out.push(text.slice(i, j + 2));
+      i = j + 2;
+    } else if (c === "/" && (last === "w" ? REGEX_AFTER.has(word) : last !== "v" && last !== "r")) {
+      let j = i + 1;
+      let cls = false;
+      while (j < n && text[j] !== "\n" && (cls || text[j] !== "/")) {
+        if (text[j] === "\\") j++;
+        else if (text[j] === "[") cls = true;
+        else if (text[j] === "]") cls = false;
+        j++;
+      }
+      if (text[j] !== "/") throw new Error("a regex literal does not close on its line");
+      j++;
+      while (j < n && isWord(text[j])) j++;
+      out.push(text.slice(i, j));
+      i = j;
+      last = "r";
+    } else if (isWord(c)) {
+      let j = i;
+      while (j < n && isWord(text[j])) j++;
+      word = text.slice(i, j);
+      out.push(word);
+      i = j;
+      last = "w";
+    } else {
+      i++;
+      if (c === "}" && tpl.length && tpl[tpl.length - 1] === 0) {
+        tpl.pop();
+        out.push(c);
+        tplText();
+        continue;
+      }
+      if (c === "{" && tpl.length) tpl[tpl.length - 1]++;
+      if (c === "}" && tpl.length) tpl[tpl.length - 1]--;
+      out.push(c);
+      last = c === ")" || c === "]" || c === "}" ? "v" : "p";
+    }
+  }
+  if (tpl.length) throw new Error("a template expression does not close");
+  return out.join("");
+}
+
+// the dist text for a source text (pure; no esbuild): stripLines, then each
+// run of lines outside the BEGIN..END marker tables through collapse
+export function buildWorkflow(source) {
+  const stripped = stripLines(source);
+  const { meta, body } = splitMeta(stripped);
+  const out = [];
+  let run = [];
+  let table = false;
+  const flush = () => {
+    if (run.length) out.push(collapse(run.join("\n")));
+    run = [];
+  };
+  for (const line of body.slice(0, -1).split("\n")) {
+    if (!table && MARKER_RE.test(line) && line.endsWith("_BEGIN")) {
+      flush();
+      table = true;
+    }
+    if (table) out.push(line);
+    else run.push(line);
+    if (table && MARKER_RE.test(line) && line.endsWith("_END")) table = false;
+  }
+  flush();
   return meta + out.join("\n") + "\n";
 }
 

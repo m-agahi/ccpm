@@ -104,7 +104,9 @@ const SAME_RUN = {
 async function sameRunAt(cap) {
   const { s } = realRun();
   Object.assign(s, JSON.parse(JSON.stringify(SAME_RUN)));
-  s.__source = DIST.replace("MAX_AGENTS = 100", "MAX_AGENTS = " + cap);
+  // 8.6.0 (ADR-1403): the dist writes `MAX_AGENTS=100` (whitespace collapsed)
+  s.__source = DIST.replace("MAX_AGENTS=100", "MAX_AGENTS=" + cap);
+  assert.notEqual(s.__source, DIST, "the dist holds MAX_AGENTS=100");
   return runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
 }
 

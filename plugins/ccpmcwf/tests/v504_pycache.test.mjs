@@ -383,6 +383,6 @@ test("5.0.4 2013: the hooks that run in the real worktree write no bytecode (for
   assert.match(readFileSync(join(SCRIPTS_SRC, "format_files.py"), "utf8"), /env = dict\(os\.environ, PYTHONDONTWRITEBYTECODE='1'\)/);
 });
 
-test("5.0.4 2013: the workflow stays at most 520000 bytes (ADR-1316 amended 2026-11-19; was 495000)", () => {
+test("5.0.4 2013: the workflow stays at most 520000 bytes (ADR-1353; was 495000)", () => {
   assert.ok(statSync(WORKFLOW).size <= 520000, String(statSync(WORKFLOW).size));
 });

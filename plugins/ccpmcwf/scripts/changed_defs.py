@@ -142,21 +142,145 @@ def span(lines, i):
 defs, excluded, unclassified, unattributed = {}, set(), set(), set()
 GEN_DIST = 'plugins/ccpmcwf/workflows/build-engine.js'
 GEN_SRC = 'plugins/ccpmcwf/src/build-engine.js'
-GEN_MARK = re.compile(rb'// [A-Z0-9_]+_(BEGIN|END)\Z')
+GEN_MARK = re.compile(r'// [A-Z0-9_]+_(BEGIN|END)\Z')
 generated = set()
+# 8.6.0 (ADR-1403): port of collapse (scripts/build-workflow.mjs), char for char
+GEN_RX_AFTER = {'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'}
+GEN_JOINS = {'++', '--', '//', '/*', '->', '<!'}
+GEN_WORD = re.compile('[A-Za-z0-9_$\\\\#\x80-\U0010ffff]+')
+GEN_SPACE = re.compile('[ \t]+')
+def gen_isword(c):
+    return c != '' and (c >= '\x80' or (c.isascii() and (c.isalnum() or c in '_$\\#')))
+def gen_collapse(t):
+    # each space or tab run outside string, template, regex and comment text dropped, or cut to one
+    # space where the chars on both sides could join; ValueError on a literal that does not close
+    out, tpl, n = [], [], len(t)
+    i, last, word = 0, '', ''
+    def tpl_text():
+        nonlocal i, last
+        s = i
+        while True:
+            if i >= n:
+                raise ValueError('template')
+            c = t[i]
+            if c == '\\':
+                i += 2
+            elif c == '`':
+                i += 1
+                out.append(t[s:i])
+                last = 'v'
+                return
+            elif c == '$' and t[i + 1:i + 2] == '{':
+                i += 2
+                out.append(t[s:i])
+                tpl.append(0)
+                last = 'p'
+                return
+            else:
+                i += 1
+    while i < n:
+        c = t[i]
+        if c == ' ' or c == '\t':
+            j = GEN_SPACE.match(t, i).end()
+            a = out[-1][-1] if out else ''
+            b = t[j] if j < n else ''
+            if a not in ('', '\n') and b not in ('', '\n') and ((gen_isword(a) and gen_isword(b)) or a + b in GEN_JOINS or ('0' <= a <= '9' and b == '.')
+                                                              or (a == '?' and b == '.') or (last == 'r' and a == '/' and gen_isword(b))):
+                out.append(' ')
+            i = j
+        elif c == '\n':
+            out.append(c)
+            i += 1
+        elif c == '"' or c == "'":
+            j = i + 1
+            while j >= n or t[j] != c:
+                if j >= n or t[j] == '\n':
+                    raise ValueError('string')
+                j += 2 if t[j] == '\\' else 1
+            j += 1
+            out.append(t[i:j])
+            i, last = j, 'v'
+        elif c == '`':
+            out.append(c)
+            i += 1
+            tpl_text()
+        elif c == '/' and t[i + 1:i + 2] == '/':
+            j = t.find('\n', i)
+            j = n if j < 0 else j
+            out.append(t[i:j])
+            i = j
+        elif c == '/' and t[i + 1:i + 2] == '*':
+            j = t.find('*/', i + 2)
+            if j < 0:
+                raise ValueError('comment')
+            out.append(t[i:j + 2])
+            i = j + 2
+        elif c == '/' and (word in GEN_RX_AFTER if last == 'w' else last not in ('v', 'r')):
+            j, cls = i + 1, False
+            while j < n and t[j] != '\n' and (cls or t[j] != '/'):
+                if t[j] == '\\':
+                    j += 1
+                elif t[j] == '[':
+                    cls = True
+                elif t[j] == ']':
+                    cls = False
+                j += 1
+            if t[j:j + 1] != '/':
+                raise ValueError('regex')
+            m = GEN_WORD.match(t, j + 1)
+            j = m.end() if m else j + 1
+            out.append(t[i:j])
+            i, last = j, 'r'
+        elif gen_isword(c):
+            j = GEN_WORD.match(t, i).end()
+            word = t[i:j]
+            out.append(word)
+            i, last = j, 'w'
+        else:
+            i += 1
+            if c == '}' and tpl and tpl[-1] == 0:
+                tpl.pop()
+                out.append(c)
+                tpl_text()
+                continue
+            if c == '{' and tpl:
+                tpl[-1] += 1
+            if c == '}' and tpl:
+                tpl[-1] -= 1
+            out.append(c)
+            last = 'v' if c in ')]}' else 'p'
+    if tpl:
+        raise ValueError('template')
+    return ''.join(out)
 def gen_build(src):
-    # port of buildWorkflow (scripts/build-workflow.mjs): keep the meta block, cut each body line's indent, drop blank and comment-only lines
+    # port of buildWorkflow (scripts/build-workflow.mjs): keep the meta block, cut each body line's indent, drop blank and
+    # comment-only lines, then collapse the whitespace of each run of lines outside the BEGIN..END marker tables (8.6.0)
     head, tail = b'export const meta = {\n', b'\n};\n'
     i = src.find(tail)
     if not src.startswith(head) or i < 0:
         return None
     i += len(tail)
     kept = []
-    for t in src[i:].split(b'\n'):
-        t = t.lstrip(b' \t')
-        if t and (not t.startswith(b'//') or GEN_MARK.match(t)):
+    for t in src[i:].decode('utf-8', 'surrogateescape').split('\n'):
+        t = t.lstrip(' \t')
+        if t and (not t.startswith('//') or GEN_MARK.match(t)):
             kept.append(t)
-    return src[:i] + b'\n'.join(kept) + b'\n'
+    out, run_, table = [], [], False
+    try:
+        for t in kept:
+            if not table and GEN_MARK.match(t) and t.endswith('_BEGIN'):
+                if run_:
+                    out.append(gen_collapse('\n'.join(run_)))
+                run_, table = [], True
+            (out if table else run_).append(t)
+            if table and GEN_MARK.match(t) and t.endswith('_END'):
+                table = False
+        if run_:
+            out.append(gen_collapse('\n'.join(run_)))
+    except ValueError:
+        # a literal that does not close: no build, so the dist is scanned
+        return None
+    return src[:i] + '\n'.join(out).encode('utf-8', 'surrogateescape') + b'\n'
 def gen_blob(rev, p):
     r = subprocess.run(G + ['cat-file', 'blob', rev + ':' + p], capture_output=True)
     return r.stdout if r.returncode == 0 else None

@@ -120,7 +120,9 @@ const pieces = (t) => {
 test("7.3.0 review: parked part reads over the agent cap are soft (the draft is ignored), never the cap stop", async () => {
   const s = happy();
   // 9 agents run before the parts; p1 is the 10th; p2 meets the cap
-  s.__source = DIST.replace("MAX_AGENTS = 100", "MAX_AGENTS = 10");
+  // 8.6.0 (ADR-1403): the dist writes `MAX_AGENTS=100` (whitespace collapsed)
+  s.__source = DIST.replace("MAX_AGENTS=100", "MAX_AGENTS=10");
+  assert.notEqual(s.__source, DIST, "the dist holds MAX_AGENTS=100");
   s["infra:load-parked"] = (p) => {
     const i = inputsOf(p);
     return { status: "ok", reason: "read", parked: { run: "n0-1234567", plan_path: "docs/plans/x.md", draft_chunks: pieces("# d\n" + "d".repeat(70000)), findings_chunks: [] }, args: [i.scratch, "null"] };
