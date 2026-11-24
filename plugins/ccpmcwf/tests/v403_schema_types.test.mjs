@@ -537,6 +537,15 @@ const READS = {
     "prior.findings array": PARSED_ROUND,
     "c0 object": PARSED_ROUND,
   },
+  // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
+  planFindingsStop: {
+    "f.human_only boolean": PARSED_LOCAL,
+    "x string": "parsed: a finding's symbol or criterion, named in the options text only",
+    // PR #110 review M3: only an identifier-shaped name reaches the options
+    "x string-re": ["parsed: a finding's symbol or criterion, named in the options text only", 2],
+  },
+  // PR #110 review M3: the criterion id regex is a named constant now (the id is String() of the agent value)
+  normCriteria: { "id string-re": PARSED_LOCAL },
   replanWithFindings: {
     "e object": SP + "changed_symbols[]",
     "rawMap array": SP + "changed_symbols",
@@ -683,6 +692,9 @@ const READS = {
     "r.claimed boolean": ["prog:parked:claimed", 2],
   },
   planAndAudit: {
+    // PR #110 review B1: the command allowlists run before any re-plan return
+    "plan.test_cmd object": SP + "test_cmd",
+    "plan.test_cmd.command string": SP + "test_cmd.command",
     // 6.0.0 (ledger 2042): the component fallback, a slug of the remote name
     "fb string-re": PARSED_LOCAL,
     // release review of #48: an approving audit's advisory findings go to the gate log
@@ -708,6 +720,9 @@ const READS = {
     "fmt.changed_paths array": "infra:changed_paths",
     // 7.3.0 (#9): the plan-mode format_files relay (digest-checked)
     "ff.hook_failures array": "prog:format_files:hook_failures",
+    // 8.5.5 (#108 step 2): the early DSN check in the plan surfaces step
+    "ed.holds boolean": "prog:plan_dsn:holds",
+    "ed.lines array": "prog:plan_dsn:lines",
     // 5.0.3 (ledger 2010)
     "dc.holds boolean": "prog:plan_dsn:holds",
     "dc.lines array": "prog:plan_dsn:lines",
@@ -1276,7 +1291,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.5\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.5\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

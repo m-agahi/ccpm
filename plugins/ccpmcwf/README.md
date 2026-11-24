@@ -996,6 +996,21 @@ the plan commit. A run that stops before its plan commit parks its draft and fin
 plan run gives them to the planner as inputs only. A parked read that is unusable fails closed
 under `default` and `auto` ("parked prior unreadable (fail closed)").
 
+Since 8.5.5 (yaadgaar #108 step 2, ADR-1397) the script decides, at each site, whether a round can
+help. A planner-contract problem that the script's own checks find after the role schema (an empty
+`plan_diff` or a non-string entry, a blank `tldr`, a `test_cmd` with no command, a bad `repo_obligations`
+entry, `changed_symbols` not an array; in plan mode a bad or
+duplicate criterion id and overlapping `test_files`) is a re-plan finding. A wrong JSON type or a missing
+key is role-schema drift as before: one retry of the planner, then a stop. The `test_cmd` and `test_args`
+allowlists still stop at once (`commands`), before any re-plan return, so a refused command stops in every
+round even when the same round has a re-plan finding. A plan path other than the ingested plan's also
+stops at once (the draft at the other path stays in the worktree). A finding its script producer tags `human_only` (today: the
+caller check's "too common a name to check by grep") stops at once. Each round logs `plan findings
+fingerprint round <n>: <hex>`; a round whose findings repeat the round before stops at once with "no
+progress (round n repeats round n-1)". Each of these stops has a stop gate (`plan` unless the site names
+`contract`, `audit`, `db` or `intent`) and an `options` list of 2-3 script-written choices; the first
+names at most 5 findings by an identifier-shaped symbol or criterion id, and leaves any other name out.
+
 ### Push-access probe (4.0.0, ledger 1985)
 
 Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs `push.py probe`
@@ -1003,7 +1018,9 @@ Plan mode only, right after the workspace step: a PATH re-check, then `infra:pus
 120 s timeout). The dry run sends nothing, but it runs the repo's pre-push hook. The program
 classifies the output. An auth failure stops the run with `needs_human` before any role runs. Anything the
 program cannot classify, or a relay that is not the program's own, logs "push access unknown"
-and the run goes on: the real push is still gated later.
+and the run goes on: the real push is still gated later. Since 8.5.5 a gh check at the workspace step
+in which every installed command answered no push access stops plan mode before the planner (`stop_gate:
+"push"`); an unknown answer goes on (ADR-1201).
 
 ### Frozen resume: freeze_digest (4.0.0, ledger 1987)
 
@@ -1122,7 +1139,9 @@ note never to write it into the plan, a finding, a commit message or a PR.
 reset the fleet branch past that commit before the next plan run, which does not re-check
 earlier plan commits. Since 5.0.3, `infra:format-plan` runs `plan_dsn.py` on the plan doc first
 (the same test, any case, placeholders included): a hit is a re-plan finding before the audit,
-and with the re-plan rounds spent the run stops with `stop_gate: "db"` before any commit.
+and with the re-plan rounds spent the run stops with `stop_gate: "db"` before any commit. Since
+8.5.5 `infra:surfaces:plan` also runs `plan_dsn.py` on the planner's draft; the script reads it after
+the hook gate and before the caller check and the format agent; the post-format check stays (it hashes the bytes the audit reads).
 Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
 `db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
 `stop_gate: "db"`.
@@ -2107,9 +2126,12 @@ The script pins the role contract, not the prose:
   `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci`,
   `merge`, `gates` (8.0.0: a gate program that errs or relays no digest-checked result twice),
   `audit` (8.5.4: the plan-audit verdict after the re-plan rounds), `rounds` (8.5.4: the test or
-  code rounds ran out) or `relay-size` (8.5.4: the hasher output is over the relay cap)
-  (`null` when the run did not stop at one of them). `cap`, `rounds`, `audit` and `relay-size`
-  each mean one thing; `role` and `hash` still cover other cases, which a later step classifies.
+  code rounds ran out), `relay-size` (8.5.4: the hasher output is over the relay cap), `plan`
+  (8.5.5: a plan-findings stop whose site names no other gate), `push` (8.5.5: no push access, or
+  push access still unknown at the PR step) or `refs` (8.5.5: a refs/replace ref exists)
+  (`null` when the run did not stop at one of them). `cap`, `rounds`, `audit`, `relay-size`,
+  `push` and `refs` each mean one thing; `role` and `hash` still cover other cases, which a later
+  step classifies.
   A rounds stop names the gate that rejected the last round (hash, obligations
   gate, commit hook, push hook or review).
 

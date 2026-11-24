@@ -88,7 +88,8 @@ test("6.2.2 2106: foreign refs are no violation in the judge fingerprint and the
 test("6.2.2 2106: replacement refs still stop every hasher read, own task or not", async () => {
   const out = await run(writerRound({}, { ["refs/replace/" + "c".repeat(40)]: SHA_A }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "hash");
+  // 8.5.5 (#108 step 2): gate refs (was hash)
+  assert.equal(out.result.stop_gate, "refs");
   assert.match(out.result.reason, /refs\/replace\/c{40} exists/);
 });
 

@@ -34,6 +34,8 @@ function relay(name, o) {
 const hsArgs = (p) => [inputsOf(p).worktree, inputsOf(p).rev, JSON.stringify(inputsOf(p).targets)];
 const hsRelay = (p, over) => relay("hook_surface", Object.assign({ surface: [], make_paths: {}, error: null, args: hsArgs(p) }, over));
 const rsRelay = (p, over) => relay("ruleset_surface", Object.assign({ surface: [], sources: [], read: ["x"], unreadable: [], error: null, args: inputsOf(p).args }, over));
+// 8.5.5 (#108 step 2): the early DSN read on the planner's draft, a slot of the plan surfaces step
+const pdRelay = (p) => relay("plan_dsn", { holds: false, lines: [], plan_sha256: null, args: [inputsOf(p).worktree, "docs/plans/x.md"] });
 const pcRelay = (p) =>
   relay("pr_convention", {
     title: { style: "conventional", types: ["feat", "fix"], key_required: false },
@@ -137,14 +139,14 @@ test("8.0.0 B2-3 order: an obligations failure routes to fix_code before a broke
 
 test("8.0.0 B2-3 order: the plan-scope hook gate stops before a broken pr_convention slot is read", async () => {
   const s = happy();
-  s["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "pr_convention.py exited 1", hook_surface: hsRelay(p, { surface: ["tests/"] }), ruleset_surface: rsRelay(p), pr_convention: null });
+  s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "pr_convention.py exited 1", hook_surface: hsRelay(p, { surface: ["tests/"] }), ruleset_surface: rsRelay(p), pr_convention: null });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "hooks");
   assert.match(out.result.reason, /hook change needs Max's confirmation: the plan scope touches/);
   // with no hook path in the plan scope the broken slot halts as the step did
   const t = happy();
-  t["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "pr_convention.py exited 1", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: null });
+  t["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "pr_convention.py exited 1", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: null });
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "failed", o2.result.reason);
   assert.match(o2.result.reason, /^infra:surfaces:plan returned failed: pr_convention\.py exited 1/);
@@ -154,7 +156,7 @@ test("8.0.0 B2-4: a hook_surface error in the merged relay reaches the hooks sto
   const err = "repo o/r not readable (HTTP 404)";
   for (const [status, rs] of [["ok", true], ["failed", true], ["failed", false]]) {
     const s = happy();
-    s["infra:surfaces:plan"] = (p) => ({ status, reason: "x", hook_surface: hsRelay(p, { error: err }), ruleset_surface: rs ? rsRelay(p) : null, pr_convention: rs ? pcRelay(p) : null });
+    s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status, reason: "x", hook_surface: hsRelay(p, { error: err }), ruleset_surface: rs ? rsRelay(p) : null, pr_convention: rs ? pcRelay(p) : null });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", status + " " + out.result.reason);
     assert.equal(out.result.stop_gate, "hooks");
@@ -163,7 +165,7 @@ test("8.0.0 B2-4: a hook_surface error in the merged relay reaches the hooks sto
   }
   // the ruleset_surface error branch too, behind a clean hook surface
   const s = happy();
-  s["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "x", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p, { error: "repo o/r not readable (HTTP None: runtime: out of memory)" }), pr_convention: pcRelay(p) });
+  s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "x", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p, { error: "repo o/r not readable (HTTP None: runtime: out of memory)" }), pr_convention: pcRelay(p) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.stop_gate, "hooks", out.result.reason);
   assert.ok(out.result.reason.startsWith("hook surface cannot be computed (repo o/r not readable (HTTP None: runtime: out of memory)); transient GitHub read failure; re-run"), out.result.reason);
@@ -189,7 +191,7 @@ test("8.0.0 B2-4: an error relay with a broken digest gets one retry, then the g
   assert.ok(out.result.reason.startsWith("infra:surfaces:plan returned failed: the program reported an error"), out.result.reason);
   // an error relay run on other arguments is not routed either
   const t = happy();
-  t["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "y", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p, { error: "x", args: ["/elsewhere", "gh", "o/r", "master"] }), pr_convention: pcRelay(p) });
+  t["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "y", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p, { error: "x", args: ["/elsewhere", "gh", "o/r", "master"] }), pr_convention: pcRelay(p) });
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "failed", o2.result.reason);
   assert.ok(o2.result.reason.startsWith("infra:surfaces:plan returned failed: y"), o2.result.reason);
@@ -197,7 +199,7 @@ test("8.0.0 B2-4: an error relay with a broken digest gets one retry, then the g
 
 test("8.0.0 B2-3: a failed top level that no slot explains still halts", async () => {
   const s = happy();
-  s["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "z", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
+  s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "z", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "failed", out.result.reason);
   assert.ok(out.result.reason.startsWith("infra:surfaces:plan returned failed: z"), out.result.reason);
@@ -216,14 +218,14 @@ test("8.0.0 B2: every surface program still runs at its sites (plan, the approvi
 test("8.0.0 B2 (review): an ok step with a null slot reaches that program's own stop, as its own step did with no program key", async () => {
   // hook_surface: needs_human at hooks (requireProgram, the hooks gate)
   const s = happy();
-  s["infra:surfaces:plan"] = (p) => ({ status: "ok", reason: "x", hook_surface: null, ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
+  s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "ok", reason: "x", hook_surface: null, ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "hooks");
   assert.match(out.result.reason, /infra:surfaces:plan hook_surface: did not run the shipped program hook_surface/);
   // ruleset_surface: the same hooks stop
   const t = happy();
-  t["infra:surfaces:plan"] = (p) => ({ status: "ok", reason: "x", hook_surface: hsRelay(p), ruleset_surface: null, pr_convention: pcRelay(p) });
+  t["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "ok", reason: "x", hook_surface: hsRelay(p), ruleset_surface: null, pr_convention: pcRelay(p) });
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.stop_gate, "hooks", o2.result.reason);
   assert.match(o2.result.reason, /infra:surfaces:plan ruleset_surface: did not run the shipped program ruleset_surface/);
@@ -260,7 +262,7 @@ test("8.0.0 B2 (review): a failed status no slot explains halts before an npm wa
   const s = happy();
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { test_cmd: { command: "npm test", paths_placeholder: null, env: {}, tools: [] } });
   // no package.json script at HEAD (make_paths names no target): a walk-up finding when the step is ok
-  s["infra:surfaces:plan"] = (p) => ({ status: "failed", reason: "v", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
+  s["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "failed", reason: "v", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "failed", out.result.reason);
   assert.ok(out.result.reason.startsWith("infra:surfaces:plan returned failed: v"), out.result.reason);
@@ -268,7 +270,7 @@ test("8.0.0 B2 (review): a failed status no slot explains halts before an npm wa
   // an ok step: the walk-up finding as before
   const t = happy();
   t["role:scope-and-plan"] = Object.assign({}, t["role:scope-and-plan"], { test_cmd: { command: "npm test", paths_placeholder: null, env: {}, tools: [] } });
-  t["infra:surfaces:plan"] = (p) => ({ status: "ok", reason: "v", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
+  t["infra:surfaces:plan"] = (p) => ({ plan_dsn: pdRelay(p), status: "ok", reason: "v", hook_surface: hsRelay(p), ruleset_surface: rsRelay(p), pr_convention: pcRelay(p) });
   const o2 = await runOne(t, ARGS);
   assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix"), o2.labels.join(", "));
 });

@@ -163,9 +163,11 @@ test("5.0.3 the re-plan budget spent: the run stops at stop_gate db before any c
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "db");
-  assert.match(out.result.reason, /after 2 re-plan rounds/);
+  // 8.5.5 (#108 step 2): the same DSN finding in round 1 is no progress: the stop comes after round 1
+  assert.match(out.result.reason, /: no progress \(round 1 repeats round 0\): .*\(after 1 re-plan round\)/);
   assert.ok(!DSN_RE.test(out.result.reason));
-  assert.ok(out.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(out.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix-2"));
   assert.ok(!out.labels.some((x) => /^infra:(stage|commit)-plan|^role:plan-audit/.test(x)), "no audit and no commit");
 });
 

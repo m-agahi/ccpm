@@ -418,12 +418,24 @@ test("4.0.0 1983 AC-3: script-side re-plans count toward the 2 rounds", async ()
 test("4.0.0 1983: script-side refusals in every round stop after round 2, never a third", async () => {
   const s = happy();
   s["role:scope-and-plan"].changed_symbols = [{ symbol: "foo", occurrences: [{ at: "src/x.py:1", criterion: "AC1", dont_care: null }] }];
-  s["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { foo: ["src/x.py:1", "src/y.py:2"] }, capped: [], auto_dont_care: { foo: [] }, doctest_md: [] };
+  // 8.5.5 (#108 step 2): a different finding each round (an identical one stops after round 1, below)
+  const grepped = (n) => ({ status: "ok", reason: "grepped", occurrences: { foo: ["src/x.py:1", "src/y.py:" + n] }, capped: [], auto_dont_care: { foo: [] }, doctest_md: [] });
+  s["infra:callers"] = grepped(2);
+  s["infra:callers:audit-fix"] = grepped(3);
+  s["infra:callers:audit-fix-2"] = grepped(4);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /src\/y\.py:2 is an occurrence.*\(after 2 re-plan rounds\)/);
+  assert.match(out.result.reason, /src\/y\.py:4 is an occurrence.*\(after 2 re-plan rounds\)/);
   assert.deepEqual(out.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix", "role:scope-and-plan:audit-fix-2"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:plan-audit")));
+  // 8.5.5: the same finding in round 1 as in round 0 is no progress: the run stops after round 1
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = s["role:scope-and-plan"].changed_symbols;
+  t["infra:callers"] = grepped(2);
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /: no progress \(round 1 repeats round 0\): foo: src\/y\.py:2 is an occurrence.*\(after 1 re-plan round\)/);
+  assert.deepEqual(o2.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix"]);
 });
 
 test("4.0.0 1983: a relaxed round stays relaxed when a later round restores round 0", async () => {
@@ -852,8 +864,9 @@ test("4.0.0 1986: a plan stop parks the draft with findings.json of every refuse
   assert.deepEqual(f.rounds[0].criteria, criteria(2).map((c) => ({ id: c.id, text: c.text })));
   assert.ok(!("findings" in inputsOf(pk)), "the chunks are not repeated in the inputs");
   // a stop before any refused round still parks the draft, with no rounds
+  // (8.5.5: a contract drift is a re-plan round now; the test_cmd allowlist still stops at once)
   const t = happy();
-  t["role:scope-and-plan"].plan_diff = [];
+  t["role:scope-and-plan"].test_cmd = { command: "pytest `id`" };
   const o2 = await runOne(t, ARGS);
   const f2 = JSON.parse(chunkedContentOf(call(o2, "infra:park-plan").prompt));
   assert.deepEqual(f2.rounds, []);
