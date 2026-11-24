@@ -779,7 +779,9 @@ longer stops the build.
   (hook surface, IaC, work-owner merge, orchestrator PR, intent refusal, scope fence, command
   allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift,
   DSN, and relaunch when the relayed message is a request; a general delegation in an unattended
-  run passes as an `auto_decisions` entry with gate `relaunch`, decision `pass`). Each decision is recorded as `{gate, decision, reason}` in the result
+  run passes as an `auto_decisions` entry with gate `relaunch`, decision `pass`; 8.7.0: the
+  mechanical repairs and transient retries are entries too, see "Mechanical repairs and transient
+  retries"). Each decision is recorded as `{gate, decision, reason}` in the result
   (`auto_decisions`, with `unattended_source`), the run-state and the PR body's
   `### Unattended run` section under Risks, which the stats step checks in the real body. Plan
   mode reads the policy too (`infra:policy:plan`).
@@ -1042,7 +1044,7 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
   full plan" and runs today's path. A park is used once: the plan commit moves it to
   `parked/used`. A relaxed audited plan stays relaxed (its prior round is in the checkpoint). The
   resumed seal's history counts the audit (`audits` 1) and names the run (`resumed_from`).
-  `args.checkpoint` must be `{run, sha256}` (the run-nonce shape, 64 hex) and only in plan mode;
+  `args.checkpoint` must be `{run, sha256}` (the run-nonce shape, 64 hex; 8.7.0: both strings) and only in plan mode;
   anything else stops `needs_human`.
 - Round carry (P3). The park also holds the round count and the last findings fingerprint. A
   re-run of the same task source continues the count (it does not reset to 0), and a first round
@@ -1055,8 +1057,45 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
   still does). The default is 600000 output tokens (about 4x a full plan+build of the smoke repos,
   120-135k); the policy's `run_budget` replaces it. The check runs only between steps: before a
   re-plan round, after the approving audit (before the plan commit), and in build mode after the
-  freeze (before the coder). Over the budget the run stops `needs_human` at gate `budget` with
-  options; a plan stop parks its checkpoint, a build stop returns `freeze_digest` (frozen resume).
+  freeze (before the coder), before each later code round until the first build commit (8.7.0;
+  after it, the run-state resume refuses the coder's uncommitted edits, and the review check
+  bounds each fix cycle), before each test-writer round
+  after the freeze (8.7.0: a fix_tests or augmentation round, before its writers write) and
+  before each review (8.7.0: after the `pr_open` run-state). Over the budget the run stops
+  `needs_human` at gate `budget` with options; a plan stop parks its checkpoint, a build stop
+  returns `freeze_digest` and `plan_ref` (frozen resume at the coder; a stop before a review
+  resumes from the run-state at the review). A resume after a fix_tests re-freeze is refused as
+  for any other stop ("re-frozen after fix_tests"). The test rounds before the first freeze are
+  not checked: no saved state resumes them (the writers' files are uncommitted).
+
+### Mechanical repairs and transient retries (8.7.0, yaadgaar #108 step 4, ADR-1397)
+
+Each repair below is fixed in script code at its site (no agent grades it), runs at most once,
+and is recorded as an `auto_decisions` entry (`{gate, decision, reason}`) and a gate line
+(`unattended: ...` in an unattended run, else `auto: ...`). Since 8.7.0 an attended run's result
+also carries `auto_decisions` when it holds an entry. A second failure stops as before, and every
+safety check runs on the repaired attempt again.
+
+- Transient (`transient`, `retry`): a read-only step (agent type `ccpmcwf:judge`) that returns no
+  result runs once more on the same model, agent type and label. The runtime returns no result
+  both for a terminal API error and for a skip in the UI, so a judge step that the user skips
+  runs once more; a second skip stops the run. A write step (any other agent type) still stops
+  (`agent <label> returned no result`): its first attempt may have written. A role agent that
+  returns no result already gets its one retry on its fallback tier (see "Models"); there is no
+  further retry.
+- PR body blocks (`pr-body`, `regenerate`): the test block (`infra:pr-tests*`) and the stats block
+  (`infra:pr-stats*`) are written between their markers, so a second write is the same write. A
+  refused block is written once more (`<label>:regen`) for a program `error` or a block sha256
+  that is not the script's (both blocks), or a `claims` list that is not strings (the test block;
+  the stats block has no claims). Still stops at once, for both blocks: a result that is not the
+  shipped program and a relay whose digest or args do not match (after the digest or args retry
+  of the test block); also a missing `### Unattended run` section (stats block) and a truncated
+  claims list (test block). An entry recorded after the pr-opener wrote the body is in the result
+  (and, in an unattended run, the run-state), not in the body's `### Unattended run` section.
+- Relay size (`relay-size`, `page`): one changed symbol whose caller-check output is over the
+  65536-byte relay cap goes on the on-disk caller path (summary plus paged reads) instead of
+  stopping. Still stops: one symbol whose on-disk summary is over its cap, and a hasher output
+  over the relay cap (gate `relay-size`; the hasher has no paged relay).
 
 ### Push-access probe (4.0.0, ledger 1985)
 

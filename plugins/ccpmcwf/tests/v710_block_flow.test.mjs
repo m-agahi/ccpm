@@ -126,19 +126,20 @@ test("AC4 ex7: no PR: a stop and no infra:pr-tests step", async () => {
 test("AC4 ex8: a program error stops needs_human, stop gate stats", async () => {
   const s = happy();
   s.__mutate = forgeAll((r, prompt, real) => redigest(real, Object.assign(r, { error: "gh pr edit: HTTP 422" }), prompt));
-  stop(await run(s, ARGS), "stats", "infra:pr-tests: gh pr edit: HTTP 422; check the body of " + URL7);
+  // 8.7.0 (#108 step 4): changed on purpose: the block is written once more (infra:pr-tests:regen) before the stop
+  stop(await run(s, ARGS), "stats", "infra:pr-tests:regen: gh pr edit: HTTP 422; check the body of " + URL7);
 });
 
 test("AC4 ex9: a block sha that is not the script's block stops", async () => {
   const s = happy();
   s.__mutate = forgeAll((r, prompt, real) => redigest(real, Object.assign(r, { block_sha256: "0".repeat(64) }), prompt));
-  stop(await run(s, ARGS), "stats", "infra:pr-tests: the PR body's test block is not the script's block; check " + URL7);
+  stop(await run(s, ARGS), "stats", "infra:pr-tests:regen: the PR body's test block is not the script's block; check " + URL7);
 });
 
 test("AC4 ex10: claims that is not a list of strings stops", async () => {
   const s = happy();
   s.__mutate = forgeAll((r, prompt, real) => redigest(real, Object.assign(r, { claims: "x" }), prompt));
-  stop(await run(s, ARGS), "stats", "infra:pr-tests: claims is not a list of strings");
+  stop(await run(s, ARGS), "stats", "infra:pr-tests:regen: claims is not a list of strings");
 });
 
 test("AC4 ex11: claims_truncated stops with stop gate role before any rewrite", async () => {
@@ -154,6 +155,8 @@ test("AC4 ex12: a bad digest on the step and its digest retry stops", async () =
   s.__mutate = forgeAll((r) => Object.assign(r, { digest: "f".repeat(64) }));
   const out = await run(s, ARGS);
   assert.ok(out.labels.includes("infra:pr-tests:digest-retry"), out.labels.join(", "));
+  // 8.7.0 (#108 step 4, Max): a relay mismatch stops at once; it is never written again
+  assert.ok(!out.labels.includes("infra:pr-tests:regen"), out.labels.join(", "));
   stop(out, "stats", "infra:pr-tests: the relayed result does not match the program's digest or arguments");
 });
 
@@ -171,6 +174,8 @@ test("AC4 ex14: other args on the step and its args retry stops", async () => {
   s.__mutate = forgeAll((r, prompt, real) => redigest(real, Object.assign(r, { args: ["gh", "o/r", "8"].concat(r.args.slice(3)) }), prompt));
   const out = await run(s, ARGS);
   assert.ok(out.labels.includes("infra:pr-tests:args-retry"), out.labels.join(", "));
+  // 8.7.0 (#108 step 4, Max): a relay mismatch stops at once; it is never written again
+  assert.ok(!out.labels.includes("infra:pr-tests:regen"), out.labels.join(", "));
   stop(out, "stats", "infra:pr-tests: the relayed result does not match the program's digest or arguments");
 });
 

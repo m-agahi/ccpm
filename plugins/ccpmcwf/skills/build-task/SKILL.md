@@ -271,13 +271,15 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
    - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
      after the freeze returns both. This includes a build that ran in the same run as the plan
      (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8
-     with both resumes at the coder (see "Re-running").
+     with both resumes at the coder (see "Re-running"); a budget stop before a review (8.7.0)
+     resumes from the run-state at the review.
    - `pr_url` when present. The PR opens ready for review; it is a draft only when the plan names a
      `merge_after` condition (the reason and the PR body name it) or the policy sets `pr_ready: false`.
      The user reviews and merges it. Never merge it, never enable auto-merge.
    - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
-   - `unattended_source` and every `auto_decisions` entry, when `unattended` is true.
+   - `unattended_source` and every `auto_decisions` entry, when `unattended` is true. Also every
+     `auto_decisions` entry of an attended run (8.7.0: a transient retry or a mechanical repair).
    - `gates_not_run`: list every gate the run did not execute.
    - Write-back: `ledger_adapter` (`yaadgaar`, `tracker` or `none`, with `ledger_reason`),
      `ledger_status` and `comment_status`. On `failed` or `unavailable`, show `comment_text` (and
