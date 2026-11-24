@@ -2,15 +2,17 @@
 
 ## [8.5.4] - 2026-11-24
 
-ccpmcwf 8.5.4: each `stop_gate` name means one thing, and the plan_ref checks for fleet 2.1.3 and earlier give one plain refusal (yaadgaar `#108` step 1, ADR-1397).
+ccpmcwf 8.5.4: `cap`, `rounds`, `audit` and `relay-size` each mean one thing (`role` and `hash` still cover other cases, which a later step classifies), and the plan_ref checks for fleet 2.1.3 and earlier give one plain refusal (yaadgaar `#108` step 1, ADR-1397).
 
 ### Changed
 
 - New gates `audit`, `rounds` and `relay-size` in `STOP_GATES` (26 names). The plan-audit verdict stop
   after the re-plan rounds is `audit` (was `role`). The test-round and code-round exhaustion stops, and
   the `pre_freeze_hooks` stop after the last test round, are `rounds` (were `cap`); `cap` is now the agent
-  cap only. The hasher relay-size overflow (`FLEET_HASHER_RELAY_CAP`) is `relay-size` (was `hash`); `hash`
-  is now a hash mismatch only. Stop texts and stop behaviour are unchanged. `ciStopCode` maps only
+  cap only. The hasher relay-size overflow (`FLEET_HASHER_RELAY_CAP`) is `relay-size` (was `hash`).
+  `role` and `hash` still cover other cases (`role`: no push access, PR-body phrase overflow, pr-opener
+  mismatches; `hash`: refs/replace exists, hook config differs from HEAD, augmentation original touched),
+  which a later step classifies. Stop texts and stop behaviour are unchanged. `ciStopCode` maps only
   `merge` and `review`, so the CI write-back codes do not change.
 - The build-mode checks "plan_ref predates 2.1.4" (a `ref_path` ref), "plan_ref predates 2.0.3" (no
   `plan_facts.test_cmd`/`repo_obligations`/`commands`) and "plan_ref predates 2.1.0" (no `plan_diff` under

@@ -2108,8 +2108,9 @@ The script pins the role contract, not the prose:
   `merge`, `gates` (8.0.0: a gate program that errs or relays no digest-checked result twice),
   `audit` (8.5.4: the plan-audit verdict after the re-plan rounds), `rounds` (8.5.4: the test or
   code rounds ran out) or `relay-size` (8.5.4: the hasher output is over the relay cap)
-  (`null` when the run did not stop at one of them). `cap` is the agent cap only, `hash` a hash
-  mismatch only. A rounds stop names the gate that rejected the last round (hash, obligations
+  (`null` when the run did not stop at one of them). `cap`, `rounds`, `audit` and `relay-size`
+  each mean one thing; `role` and `hash` still cover other cases, which a later step classifies.
+  A rounds stop names the gate that rejected the last round (hash, obligations
   gate, commit hook, push hook or review).
 
 ### Models
