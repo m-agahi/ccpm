@@ -33,7 +33,7 @@ function bodyBlock(dir, tpl, t0, headers) {
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
-const TPL = "<details><summary>Built with ccpmcwf 8.6.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
+const TPL = "<details><summary>Built with ccpmcwf 8.7.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
 
 // ---------------------------------------------------------------- 2044: pr_body_block.py
 
@@ -123,7 +123,7 @@ test("6.0.0 2044: after the write-back the build writes a stats block of script 
   // the default policy stub prints no now: the wall time is not measured
   assert.deepEqual([a[0], a[1], a[2], a[4], a[5]], ["gh", "o/r", String(out.result.pr_number), "-", "[]"]);
   const block = blockOf(out);
-  assert.ok(block.startsWith("<details><summary>Built with ccpmcwf 8.6.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
+  assert.ok(block.startsWith("<details><summary>Built with ccpmcwf 8.7.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
   assert.ok(block.endsWith("</details>\n<!-- ccpm-fleet-stats -->"), block);
   for (const row of ["| acceptance criteria | 2 |", "| code rounds | 1 |", "| wall time (build) | @@WALL@@ |", "| independent review | approve (sweep: not triggered) |", "| output tokens (approx.) | "])
     assert.ok(block.indexOf(row) >= 0, row + " in\n" + block);
@@ -163,7 +163,8 @@ test("6.0.0 2044: policy stats false skips the block; a block mismatch or a prog
   assert.ok(out.build.logs.indexOf("stats block off (policy stats false)") >= 0);
   for (const [over, re] of [[{ block_sha256: "0".repeat(64) }, /stats block is not the script's block/], [{ error: "the re-read body lost header(s): ## Summary" }, /lost header/]]) {
     const s2 = happy();
-    s2["infra:pr-stats"] = (p) => {
+    // 8.7.0 (#108 step 4): a refused block is written once more (infra:pr-stats:regen); a second refusal stops
+    s2["infra:pr-stats"] = s2["infra:pr-stats:regen"] = (p) => {
       const a = inputsOf(p).args;
       return Object.assign({ status: "ok", reason: "w", replaced: false, wall_s: 5, block_sha256: sha256(Buffer.from(a[3], "base64").toString("utf8").replace("@@WALL@@", "5s")), body_sha256_before: null, body_sha256_after: null, headers_missing: [], error: null, args: a }, over);
     };

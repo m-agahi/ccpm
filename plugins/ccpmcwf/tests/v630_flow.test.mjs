@@ -67,7 +67,8 @@ test("6.3.0 A1 (ADR-1238): 31 changed symbols are checked in 2 dispatches (30 + 
   assert.ok(out.logs.includes("infra:callers: 31 symbols in 2 caller-check dispatches (at most 30 symbols each)"), out.logs.join("\n"));
 });
 
-test("6.3.0 A1 (re-review): a batch of 30 over the relay cap splits in halves until each part fits; one symbol alone over it stops with its name", async () => {
+// 8.7.0 (#108 step 4): changed on purpose: one symbol alone over the relay cap goes on the disk path (its summary cap stops)
+test("6.3.0 A1 (re-review): a batch of 30 over the relay cap splits in halves until each part fits; one symbol alone over it goes on the disk path", async () => {
   const s = happy();
   const syms = Array.from({ length: 30 }, (_, i) => "g" + i);
   s["role:scope-and-plan"].changed_symbols = syms.map(one);
@@ -84,10 +85,12 @@ test("6.3.0 A1 (re-review): a batch of 30 over the relay cap splits in halves un
   const t = happy();
   t["role:scope-and-plan"].changed_symbols = ["big", "b2"].map(one);
   script(t, 3, { over: 0 });
+  t["infra:callers:b2:file"] = (p) => ({ status: "failed", reason: "FLEET_CALLERS_RELAY_CAP: the callers summary is over the 16384-byte summary cap (20000 bytes; symbols: " + inputsOf(p).symbols.join(", ") + ")" });
   const o2 = await runOne(t, ARGS);
+  assert.ok(o2.logs.some((l) => /^auto: relay-size: page \(infra:callers:b2: the occurrences of big are over the 65536-byte relay cap; on-disk handoff\)$/.test(l)), o2.logs.join("\n"));
   assert.equal(o2.result.status, "needs_human");
   assert.equal(o2.result.stop_gate, "callers");
-  assert.match(o2.result.reason, /: the occurrences of big are over the 65536-byte relay cap \(relay size; at most 100 call-shaped hits, long paths\)/);
+  assert.match(o2.result.reason, /^infra:callers:b2:file: the caller summary of big is over the /);
 });
 
 test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped symbol count as in one dispatch", async () => {

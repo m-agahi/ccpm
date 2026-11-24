@@ -602,7 +602,7 @@ test("review S2: a workspace remote_slug that is not the digest-checked origin s
 });
 
 test("review S8: the PR-tail steps stop with the no-push text when the repo has no checked gh command", async () => {
-  for (const [fn, gateName] of [["async function ciStep() {", "ci"], ["async function readyStep() {", "ci"], ["async function statsStep(tag) {", "stats"]]) {
+  for (const [fn, gateName] of [["async function ciStep() {", "ci"], ["async function readyStep() {", "ci"], ["async function statsStep(tag, again) {", "stats"]]) {
     const s = happy();
     s.__source = SOURCE.replace(fn, fn + " state.gh.repos = {};");
     assert.notEqual(s.__source, SOURCE, fn);

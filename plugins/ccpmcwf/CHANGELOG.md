@@ -1,5 +1,56 @@
 # Changelog
 
+## [8.7.0] - 2026-11-24
+
+ccpmcwf 8.7.0 (yaadgaar `#108` step 4, ADR-1397, ADR-1387): mechanical repairs and the transient gap. Each repair is fixed in script code at its site, runs once, and is recorded in `auto_decisions`; a second failure stops as before, and every safety check runs on the repaired attempt again. The dist grows from 470,417 B to 471,288 B (cap 520,000 B, ADR-1353).
+
+### Added
+
+- Transient: `dispatch` retries a null agent result (a terminal API error or a skip) once on the
+  same model, agent type and label when the step is read-only (agent type `ccpmcwf:judge`);
+  `auto_decisions` gate `transient`, decision `retry`. A write step (any other agent type) keeps
+  the stop: its first attempt may have written. The role path (`callRole`, `retryOnDrift`) is
+  unchanged: `roleAgent` already retries a null once on the role's fallback tier, and every role
+  has one, so its stop is already the second null.
+- Mechanical, PR body: a refused test block (`prTestsStep`: relay digest or args, `claims` shape,
+  program `error`, block sha256) or stats block (`statsStep`: program `error`, block sha256) is
+  written once more as `<label>:regen` (`pr-body`, `regenerate`). The blocks are written between
+  their markers, so a second write is the same write. The safety checks stay first: program
+  identity, the `### Unattended run` header, and (moved ahead of the rewrite) a truncated claims
+  list with a good relay.
+- Mechanical, relay size: one symbol whose inline caller output is over the 65536-byte relay cap
+  goes on the on-disk caller path (`relay-size`, `page`) instead of stopping. Left as stops: one
+  symbol over the on-disk summary cap (no smaller unit), and the hasher relay cap (gate
+  `relay-size`; no paged hasher relay exists, and adding one changes `hasher.py`).
+- Budget: `budgetStop` also runs before each later code round, before each test-writer round after
+  the freeze (fix_tests and augmentation rounds, before the writers write) and before each review
+  (after the `pr_open` run-state). Each stop returns `freeze_digest` and `plan_ref`; the review
+  stop resumes from the run-state at the review. The test rounds before the first freeze stay
+  unchecked: no saved state resumes them.
+
+### Changed
+
+- `autoDecide` logs `auto: ...` in an attended run (was `unattended: ...` in every run), and an
+  attended result carries `auto_decisions` when it holds an entry.
+- A build resumed from a run-state keeps this run's own decisions after the resumed ones (was: the
+  resumed list was dropped when this run had any).
+- `args.checkpoint`: `run` and `sha256` must be strings (`NONCE_RE.test(undefined)` matched
+  "undefined", and an array of one 64-hex string passed the sha256 test).
+- The build-task skill relays the `auto_decisions` of an attended run too.
+
+### Tests
+
+- `v870_mechanical` (new, 13 tests): the null retry (read-only step, a second null, a write
+  step), the test and stats block rewrites (once, a second refusal, a truncated claims list first),
+  the on-disk handoff of one symbol over the relay cap, the budget stops before a code re-round,
+  a fix_tests writer round and a review (each with its resume where one exists), no check before
+  the freeze, and the `args.checkpoint` shape.
+- Changed on purpose: `v710_block_flow` (ex8, ex9, ex10, ex12, ex14), `v740_error_routing`,
+  `v600_s3` (the stop now names `<label>:regen`); `v630_flow` (one symbol over the relay cap goes
+  on the disk path); `v600_s4` (`statsStep(tag, again)`); `v403_schema_types` (the READS counts
+  of the new reads).
+- Version pins: 8.6.0 -> 8.7.0.
+
 ## [8.6.0] - 2026-11-24
 
 ccpmcwf 8.6.0 (ADR-1403, yaadgaar `#113`; part of `#108`): the build collapses the whitespace inside the lines of the dist workflow. The dist shrinks from 511,254 B to 470,417 B (40,837 B freed) under the unchanged 520,000 B cap (ADR-1353). The source stays readable. No behaviour change: the esbuild `--minify-whitespace` check passes, and an acorn AST of the old and the new dist is the same.

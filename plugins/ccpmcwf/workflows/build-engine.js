@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.6.0";
+const FLEET_VERSION="8.7.0";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -3411,7 +3411,7 @@ log(msg);
 }
 function autoDecide(g,decision,reason){
 state.autoDecisions.push({gate:g,decision,reason});
-gate("unattended: "+g+": "+decision+" ("+reason+")");
+gate((state.unattended?"unattended: ":"auto: ")+g+": "+decision+" ("+reason+")");
 }
 const UNATT_HEAD="### Unattended run";
 function unattendedSection(){
@@ -3497,7 +3497,14 @@ if(TAIL_RE.test(label)||tailWriter(label))state.tail++;
 else if(AUTO_READ_RE.test(label))state.autoReads++;
 reserve(1,label);
 state.agents++;
-const r=await agentT(ic.prompt,agentOpts(ic.opts,label,model));
+let r=await agentT(ic.prompt,agentOpts(ic.opts,label,model));
+if(r==null&&ic.opts.agentType===JUDGE_AGENT&&capped()+1<=MAX_AGENTS){
+autoDecide("transient","retry",label+" returned no result; once more on "+model);
+if(TAIL_RE.test(label))state.tail++;
+else if(AUTO_READ_RE.test(label))state.autoReads++;
+state.agents++;
+r=await agentT(ic.prompt+"\nA first dispatch of this step returned no result: run it again.",agentOpts(ic.opts,label,model));
+}
 if(r==null)halt("failed","agent "+label+" returned no result");
 return digestRetry(label,prompt,opts,r,dispatch);
 }
@@ -3880,7 +3887,7 @@ follow_ups:state.followUps||[],
 warnings:state.warnings||[],
 ...(state.ci?{ci:state.ci}:{}),
 ...(state.ciWriteBack?{ci_write_back:state.ciWriteBack}:{}),
-...(state.unattended?{unattended:true,unattended_source:state.unattended,auto_decisions:state.autoDecisions}:{}),
+...(state.unattended?{unattended:true,unattended_source:state.unattended,auto_decisions:state.autoDecisions}:state.autoDecisions.length?{auto_decisions:state.autoDecisions}:{}),
 ...(state.options&&status==="needs_human"?{options:state.options}:{}),
 };
 }
@@ -4643,7 +4650,11 @@ continue;
 }
 const r=await dispatch(lb,callersPrompt({worktree,plan_path:planPath,symbols:part,cap:MAX_SYMBOL_HITS}),{schema:INFRA_SCHEMA,phase:phaseName,agentType:JUDGE_AGENT,digest:"callers"});
 if(r.status!=="ok"&&String(r.reason).indexOf(CALLERS_CAP_MARK)>=0){
-if(part.length===1)halt("needs_human",lb+": the occurrences of "+part[0]+" are over the 65536-byte relay cap (relay size; at most "+MAX_SYMBOL_HITS+" call-shaped hits, long paths); the caller check cannot relay them","callers");
+if(part.length===1){
+autoDecide("relay-size","page",lb+": the occurrences of "+part[0]+" are over the 65536-byte relay cap; on-disk handoff");
+queue.unshift(...(await callerDisk(lb,part,disk,all)));
+continue;
+}
 gate(lb+": "+part.length+" symbols are over the relay cap; split in two");
 queue.unshift({part:part.slice(0,part.length>>1),disk:false},{part:part.slice(part.length>>1),disk:false});
 continue;
@@ -6365,15 +6376,21 @@ return label+": the PR body still states test counts outside the script-written 
 function prTestsPrompt(inputs){
 return INFRA_STEP+"write the test block into the fleet's own PR body; only the block between its markers changes.\n"+inputsLine(inputs)+RUN_ONLY+progCmd("pr_test_block",inputs.args)+"\n"+PRINTS_ONE+printsKeys("pr_test_block")+COPY_DIGEST+'Return {status: "ok", reason, '+returnKeys("pr_test_block")+"}.";
 }
-async function prTestsStep(label,args,block,prUrl,supplied){
+async function prTestsStep(label,args,block,prUrl,supplied,again){
 const r=await infra(label,prTestsPrompt({args}),"PR",INFRA_AGENT,"pr_test_block",args);
 requireProgram(r,"pr_test_block",label,"needs_human","stats");
-if(!relayDigestOk(r,progKeys("pr_test_block"),"pr_test_block")||canonical(r.args)!==canonical(args))halt("needs_human",label+RELAY_MISMATCH,"stats");
-if(!Array.isArray(r.claims)||r.claims.some((x)=>typeof x!=="string"))halt("needs_human",label+": claims is not a list of strings","stats");
-if(r.error!==null)halt("needs_human",label+": "+r.error+"; check the body of "+prUrl,"stats");
-if(r.block_sha256!==sha256Hex(block))halt("needs_human",label+": the PR body's test block is not the script's block; check "+prUrl,"stats");
-if(r.claims_truncated===true)
+const relayOk=relayDigestOk(r,progKeys("pr_test_block"),"pr_test_block")&&canonical(r.args)===canonical(args);
+if(relayOk&&r.claims_truncated===true)
 halt("needs_human",label+": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of "+prUrl+" by hand, then "+SAME_PLAN_REF,"role");
+const bad=!relayOk?RELAY_MISMATCH
+:!Array.isArray(r.claims)||r.claims.some((x)=>typeof x!=="string")?": claims is not a list of strings"
+:r.error!==null?": "+r.error+"; check the body of "+prUrl
+:r.block_sha256!==sha256Hex(block)?": the PR body's test block is not the script's block; check "+prUrl:null;
+if(bad&&!again){
+autoDecide("pr-body","regenerate",label+bad);
+return prTestsStep(label+":regen",args,block,prUrl,supplied,true);
+}
+if(bad)halt("needs_human",label+bad,"stats");
 gate(label+": test block "+(r.edited===true?"written":"unchanged")+" in "+prUrl);
 const own=ownClaims(r.claims,supplied);
 if(own.length<r.claims.length)gate(label+": ignored "+(r.claims.length-own.length)+" claim(s) found in workflow-supplied text");
@@ -6728,7 +6745,7 @@ halt("needs_human","approved but unresumable: branch has build commits without r
 const policy=(state.policy=ref.policy?stricterPolicy(await policyStep(ws.remoteHost,remoteSlug,resume&&resume.policy),ref.policy,resume?"the run-state's":"the current file"):await policyStep(ws.remoteHost,remoteSlug,resume&&resume.policy));
 const prDraft=()=>mergeAfter!==null||!policy.caps.pr_ready;
 unattendedOn(policy,input);
-if(resume&&Array.isArray(resume.auto_decisions)&&!state.autoDecisions.length)state.autoDecisions=resume.auto_decisions.slice();
+if(resume&&Array.isArray(resume.auto_decisions))state.autoDecisions=resume.auto_decisions.concat(state.autoDecisions);
 const freezeRefName="refs/fleet/"+names.taskId+"/freeze";
 let frozenResume=null;
 if(typeof input.freeze_digest==="string"&&resume)gate("freeze_digest not used: the run-state at "+resume.last_gate+" resumes this build");
@@ -7082,6 +7099,7 @@ if(upd)await statsStep();
 await saveState("pr_open","infra:state:pr_open:p"+prOpens);
 }else if(step==="review"){
 if(!pr||!pr.pr_url||pr.pr_number==null)halt("needs_human","review: no PR to review (pr-opener returned no pr_url/pr_number)","review");
+budgetStop("the review v"+(reviews+1));
 reviews++;
 if(upd)upd.reviews++;
 const rv=await reviewStep(reviews,{
@@ -7447,7 +7465,7 @@ state.prReady=true;
 gate(label+": "+pr.pr_url+(r.was_draft?" marked ready for review":" was already ready")+" at "+approvedSha);
 }
 let statsRuns=0;
-async function statsStep(tag){
+async function statsStep(tag,again){
 if(!pr||pr.pr_number==null)return gate("stats block skipped: no PR");
 if(!policy.caps.stats)return gate("stats block off (policy stats false)"+(state.unattended?"; warning: the "+UNATT_HEAD+" section is not checked in the real body":""));
 const g=ghCmd("stats block","stats");
@@ -7462,13 +7480,17 @@ ci:state.ci?{verdict:state.ci.verdict,fixRounds:state.rounds.ci||0,waitS:state.c
 });
 const bc=ref.plan_facts.conventions.body;
 const args=[g,remoteSlug,String(pr.pr_number),base64Of(tpl),state.t0===null?"-":String(state.t0),JSON.stringify(((bc&&bc.required_sections)||[]).concat(state.unattended?[UNATT_HEAD]:[]))];
-const label=tag?"infra:pr-stats:"+tag:"infra:pr-stats"+(++statsRuns>1?":p"+statsRuns:"");
+const label=again||(tag?"infra:pr-stats:"+tag:"infra:pr-stats"+(++statsRuns>1?":p"+statsRuns:""));
 const r=await infra(label,prStatsPrompt({args}),"PR",INFRA_AGENT,undefined,args,"pr_body_block");
 requireProgram(r,"pr_body_block",label,"needs_human","stats");
 if(!relayDigestOk(r,progKeys("pr_body_block"),"pr_body_block")||canonical(r.args)!==canonical(args))halt("needs_human",label+RELAY_MISMATCH,"stats");
 if(state.unattended&&Array.isArray(r.headers_missing)&&r.headers_missing.indexOf(UNATT_HEAD)>=0)halt("needs_human",label+": the PR body has no "+UNATT_HEAD+" section (the unattended run's automatic decisions); fix the body of "+pr.pr_url,"stats");
-if(r.error!==null)halt("needs_human",label+": "+r.error+"; check the body of "+pr.pr_url,"stats");
-if(r.block_sha256!==sha256Hex(tpl.replace(STATS_WALL,fmtDur(r.wall_s))))halt("needs_human",label+": the PR body's stats block is not the script's block; check "+pr.pr_url,"stats");
+const bad=r.error!==null?": "+r.error+"; check the body of "+pr.pr_url:r.block_sha256!==sha256Hex(tpl.replace(STATS_WALL,fmtDur(r.wall_s)))?": the PR body's stats block is not the script's block; check "+pr.pr_url:null;
+if(bad&&!again){
+autoDecide("pr-body","regenerate",label+bad);
+return statsStep(tag,label+":regen");
+}
+if(bad)halt("needs_human",label+bad,"stats");
 gate(label+": stats block "+(r.replaced?"replaced":"added")+" in "+pr.pr_url);
 }
 function finishOk(resumedAt){
@@ -7751,6 +7773,7 @@ const n=state.rounds.tests;
 const judgeFirst=!!codeFindings&&i===0;
 let roundOut=[];
 if(!judgeFirst){
+if(freezes)budgetStop("test round "+n);
 reserve((shortPath?1:pending.length)+5+(last?0:1),"test round "+n);
 roundOut=await writerRound(n,pending,codeFindings);
 if(hookFail){
@@ -7923,6 +7946,7 @@ let expectedHead=v.head;
 let commitsMade=v.head!==planBase;
 let updRound=false;
 let augAt=state.augFiles?-1:0;
+const m0=state.rounds.code;
 try{
 for(;;){
 if(state.rounds.code>=MAX_CODE_ROUNDS)
@@ -7934,6 +7958,7 @@ halt(
 (updRound?"; re-plan on the new base or fix by hand":""),
 updRound?"review":"rounds",
 );
+if(state.rounds.code>m0)budgetStop("code round "+(state.rounds.code+1));
 state.rounds.code++;
 const m=state.rounds.code;
 lastRoundGate=null;
@@ -8895,7 +8920,7 @@ state.nonce=input.run_nonce;
 if(input.freeze_digest!==undefined&&(mode!=="build"||typeof input.freeze_digest!=="string"||!/^[0-9a-f]{64}$/.test(input.freeze_digest)))
 stop("needs_human","args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got "+JSON.stringify(input.freeze_digest));
 const ck=input.checkpoint;
-if(ck!==undefined&&(mode!=="plan"||!ck||!NONCE_RE.test(ck.run)||!/^[0-9a-f]{64}$/.test(ck.sha256)))
+if(ck!==undefined&&(mode!=="plan"||!ck||typeof ck.run!=="string"||!NONCE_RE.test(ck.run)||typeof ck.sha256!=="string"||!/^[0-9a-f]{64}$/.test(ck.sha256)))
 stop("needs_human","args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got "+JSON.stringify(ck));
 try{
 return await(mode==="plan"?planMode(input,input.date):mode==="probe"?probeMode(input):buildMode(input,input.date));

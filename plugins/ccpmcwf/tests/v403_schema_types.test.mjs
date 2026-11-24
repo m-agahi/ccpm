@@ -891,7 +891,8 @@ const READS = {
     "x integer": "parsed: a count or fix_rounds the script computed",
   },
   // 8.5.3 (#111): + AUTO_READ_RE (caller-check auto reads sit outside the agent cap)
-  dispatch: { "label string-re": ["parsed: the script's own step label", 2] },
+  // 8.7.0: and the null retry's TAIL_RE and AUTO_READ_RE counts
+  dispatch: { "label string-re": ["parsed: the script's own step label", 4] },
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
@@ -1073,6 +1074,8 @@ const READS = {
     "input.date string": PARSED_ARGS,
     "input.date string-re": PARSED_ARGS,
     "ck.run string-re": PARSED_ARGS,
+    "ck.run string": PARSED_ARGS,
+    "ck.sha256 string": PARSED_ARGS,
     "input.run_nonce string": PARSED_ARGS,
     "input.run_nonce string-re": PARSED_ARGS,
     "input.freeze_digest string": PARSED_ARGS,
@@ -1291,7 +1294,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.6\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.6\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.7\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.7\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

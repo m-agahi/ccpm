@@ -33,20 +33,22 @@ const LIST = 'const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface", 
 
 test("7.4.0 #66 E1: a failed pr_test_block relay for its own error stops at the caller's stats gate", async () => {
   const s = happy();
-  s["infra:pr-tests"] = testsRelay;
+  // 8.7.0 (#108 step 4): the block is written once more (infra:pr-tests:regen) before the stop
+  s["infra:pr-tests"] = s["infra:pr-tests:regen"] = testsRelay;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "stats");
-  assert.match(out.result.reason, /^infra:pr-tests: body over cap; check the body of /);
+  assert.match(out.result.reason, /^infra:pr-tests:regen: body over cap; check the body of /);
 });
 
 test("7.4.0 #66 E1: a failed pr_body_block relay for its own error stops at the caller's stats gate", async () => {
   const s = happy();
-  s["infra:pr-stats"] = statsRelay;
+  // 8.7.0 (#108 step 4): the block is written once more (infra:pr-stats:regen) before the stop
+  s["infra:pr-stats"] = s["infra:pr-stats:regen"] = statsRelay;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "stats");
-  assert.match(out.result.reason, /^infra:pr-stats: body over cap; check the body of /);
+  assert.match(out.result.reason, /^infra:pr-stats:regen: body over cap; check the body of /);
 });
 
 test("7.4.0 #66 E1 mutation: without the two names the stop is the generic 'returned failed'", async () => {

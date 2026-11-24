@@ -277,7 +277,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
      The user reviews and merges it. Never merge it, never enable auto-merge.
    - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
-   - `unattended_source` and every `auto_decisions` entry, when `unattended` is true.
+   - `unattended_source` and every `auto_decisions` entry, when `unattended` is true. Also every
+     `auto_decisions` entry of an attended run (8.7.0: a transient retry or a mechanical repair).
    - `gates_not_run`: list every gate the run did not execute.
    - Write-back: `ledger_adapter` (`yaadgaar`, `tracker` or `none`, with `ledger_reason`),
      `ledger_status` and `comment_status`. On `failed` or `unavailable`, show `comment_text` (and
