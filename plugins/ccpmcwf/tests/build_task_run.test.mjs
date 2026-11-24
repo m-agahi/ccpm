@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.5\.3 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.5\.4 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -2067,13 +2067,13 @@ test("a malformed tiny plan_ref is refused before any agent", async () => {
   }
 });
 
-test("2.1.4 a legacy plan_ref with ref_path (2.0.1-2.1.3) is refused before any agent: re-run plan", async () => {
+test("2.1.4 / 8.5.4 a legacy plan_ref with ref_path (2.0.1-2.1.3) is refused before any agent: the plain unsupported-version refusal", async () => {
   const tiny = await planRefFor(happy());
   const legacy = { branch: tiny.branch, plan_commit: tiny.plan_commit, ref_path: ".fleet/y42/plan_ref.json", ref_sha256: tiny.ref_sha256, repo: tiny.repo };
   for (const bad of [legacy, { ...tiny, ref_path: ".fleet/y42/plan_ref.json" }]) {
     const out = await runOne(happy(), buildArgs(bad));
     assert.equal(out.result.status, "needs_human");
-    assert.match(out.result.reason, /plan_ref predates 2\.1\.4; re-run plan/);
+    assert.equal(out.result.reason, "plan_ref from an unsupported fleet version; re-run plan");
     assert.equal(out.calls.length, 0);
   }
 });
@@ -3662,7 +3662,7 @@ test("2.0.3 awaiting_confirmation lists every command verbatim with env, tools, 
   assert.match(cmds[2].note, /^refused: /);
 });
 
-test("2.0.3 build from a 2.0.2 plan_ref stops: plan_ref predates 2.0.3", async () => {
+test("2.0.3 / 8.5.4 build from a 2.0.2 plan_ref stops with the plain unsupported-version refusal", async () => {
   const s = happy();
   const content = priorRef(PLAN_MD);
   s.__store[PC] = content;
@@ -3673,7 +3673,7 @@ test("2.0.3 build from a 2.0.2 plan_ref stops: plan_ref predates 2.0.3", async (
     project: "o/r",
   });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan_ref predates 2\.0\.3; re-run plan/);
+  assert.equal(out.result.reason, "plan_ref from an unsupported fleet version; re-run plan");
   assert.ok(!out.labels.includes("infra:verify-plan"));
 });
 
@@ -3725,7 +3725,7 @@ test("2.0.3 obligations gate failing every round stops at the cap with the gate 
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /code rounds exhausted \(3\).*obligations gate/);
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
 });
 
 test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the judge re-approves before the next push", async () => {
@@ -3766,7 +3766,7 @@ test("2.0.3 push hook rejection on the last round stops at the cap, naming the p
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /code rounds exhausted \(3\).*push hook/);
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
   assert.ok(!out.labels.includes("role:fleet-pr-opener"));
 });
 
@@ -3868,7 +3868,7 @@ test("2.0.3 B3: a clean coder needs_human reports the role's reason; contract dr
   t["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2 };
   t["hasher:post-coder:r3"] = { status: "ok", fingerprint: FP_M3 };
   const outT = await run(t, ARGS);
-  assert.equal(outT.result.stop_gate, "cap");
+  assert.equal(outT.result.stop_gate, "rounds");
   assert.match(outT.result.reason, /last round rejected by the contract gate/);
 });
 
@@ -3931,7 +3931,7 @@ test("2.0.3 build re-checks the sealed commands: a disallowed check_cmd or test_
   const badT = await buildFrom(refWithFacts({ test_cmd: { command: "pytest; id" } }));
   assert.match(badT.result.reason, /test_cmd refused/);
   const noCmds = await buildFrom(priorRef(PLAN_MD, { plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: TEST_CMD, repo_obligations: [] } }));
-  assert.match(noCmds.result.reason, /plan_ref predates 2\.0\.3/);
+  assert.equal(noCmds.result.reason, "plan_ref from an unsupported fleet version; re-run plan");
 });
 
 // ---------------------------------------------------------------- 2.0.4: deny-by-default test args, script path checks
@@ -6005,7 +6005,7 @@ test("2.1.5 a plan stop after the planner parks the run's own draft plan and kee
   assert.match(pk.prompt, /parked\.py' 'park' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/main' 'docs\/plans\/x\.md' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' 'n1-0000001'/);
   assert.match(pk.prompt, /Run only the commands given in the steps below, each as its own Bash call, exactly as written: no other command \(no git, cp, mv or rm of your own\)/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
-  assert.equal(out.result.stop_gate, "role");
+  assert.equal(out.result.stop_gate, "audit");
 });
 
 test("2.1.5 a failed park never replaces the stop reason", async () => {
@@ -6329,7 +6329,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.5\.3; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.5\.4; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7028,7 +7028,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.3\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.5\.3 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.5\.4 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8740,7 +8740,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.5\.3/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.5\.4/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

@@ -108,7 +108,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.5.3";
+const FLEET_VERSION = "8.5.4";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -179,7 +179,8 @@ const CALLER_LIMITS = [
 "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size"];
+const LEGACY_REF = "plan_ref from an unsupported fleet version; re-run plan";
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const BRIEF_MARKER = "<!-- fleet-brief:v1 -->";
@@ -1546,7 +1547,7 @@ const PROGRAM_SHA256 = {
 "gate_tools": "3f492577b49ecbebe80130029573b66faa9f137f717a0e933f0f26a71ee4cee6",
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
-"hasher": "b7470772776a9866b0a6cb7c319d8c8abcb9d039907b47b675a3a8042e37a9bd",
+"hasher": "4aaebd06411d8b103d74aedeb07b43caed0b0cb7c930fadba2d03e97883a812c",
 "held_out": "bf0a828f8463a1029b29430e2e27c1d55b1df0cdb06bf193051a7d018103c8f0",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
@@ -3686,7 +3687,7 @@ const mapsOk =
 const fp = r.fingerprint;
 if (r.status !== "ok" && typeof r.reason === "string" && r.reason.indexOf(RELAY_CAP_MARK) >= 0) {
 const m = /^FLEET_HASHER_RELAY_CAP: the hasher output is over the 65536-byte relay cap \(\d+ bytes; largest: ([a-z]+ \d+ keys(?:, [a-z]+ \d+ keys){0,2})\)$/.exec(r.reason.trim());
-halt("needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it", "hash");
+halt("needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a relayed field grows with this repo (run-state refs under refs/fleet/, suspicious or changed paths), so the run cannot relay it", "relay-size");
 }
 if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
 halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
@@ -5288,7 +5289,7 @@ const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion 
 halt(
 audit.verdict ? "needs_human" : "failed",
 "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : "") + afterRounds(ctx),
-"role",
+"audit",
 );
 }
 gate("plan-audit: approve");
@@ -6302,8 +6303,7 @@ const fix = head("fix");
 return { main, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
 }
 async function buildMode(input, date) {
-if (input.plan_ref && typeof input.plan_ref === "object" && "ref_path" in input.plan_ref)
-stop("needs_human", "plan_ref predates 2.1.4; re-run plan (it names a .fleet/ ref file; the sealed ref is now a local git object)");
+if (input.plan_ref && typeof input.plan_ref === "object" && "ref_path" in input.plan_ref) stop("needs_human", LEGACY_REF);
 const tp = tinyRefProblem(input.plan_ref);
 if (tp) stop("needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
 const tiny = input.plan_ref;
@@ -6468,7 +6468,7 @@ gate("project " + sealedProject + " from the sealed plan ref");
 }
 const pf = loaded.plan_facts;
 if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
-halt("needs_human", "plan_ref predates 2.0.3; re-run plan (" + tiny.plan_ref + " has no plan_facts.test_cmd/repo_obligations/commands)");
+halt("needs_human", LEGACY_REF);
 const refFacts = planFactsProblem(pf.test_cmd, pf.repo_obligations);
 if (refFacts) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + refFacts.msg, refFacts.gate);
 const refTc = testCmdProblem(pf.test_cmd);
@@ -6639,8 +6639,7 @@ gate("frozen resume: " + (hz.fingerprint.tree === refTree ? "worktree is the fre
 let intent = resume ? resume.intent || null : opt.intent;
 if (opt.rerunGates && !resume) {
 phase("Auto-confirm");
-if (!Array.isArray(ref.plan_diff))
-halt("needs_human", "plan_ref predates 2.1.0 (no plan_diff in " + tiny.plan_ref + "): re-run plan to use confirm auto");
+if (!Array.isArray(ref.plan_diff)) halt("needs_human", LEGACY_REF);
 if (planFacts.change_kind === null || planFacts.new_behaviour === null)
 return autoFailResult(
 { failedCheck: "intent", reasons: ["plan_ref sealed before 4.0.0 (no plan_facts change_kind/new_behaviour in " + tiny.plan_ref + "): re-plan to build under confirm auto"], intent: null },
@@ -7643,7 +7642,7 @@ const hf = hookFail;
 const whole = hf.failures.filter((x) => x[0] === "").map((x) => x[1]);
 const listed = hf.failures.map((x) => (x[0] === "" ? "the whole tree" : logPath(x[0])) + " (" + x[1] + ")").join(", ");
 if (i === maxTestRounds - 1)
-halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "cap");
+halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "rounds");
 const next = [];
 for (const p of pending) {
 const own = hf.failures.filter((x) => x[0] !== "" && p.criterion.test_files.indexOf(x[0]) >= 0);
@@ -7711,7 +7710,7 @@ jt = await judged("fleet-test-judge", tl, "test-judge:r" + n + ":again", Object.
 }
 gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
 }
-halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "cap");
+halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "rounds");
 }
 let freezes = 0;
 let freezeRef = null;
@@ -7816,7 +7815,7 @@ halt(
 (updRound ? " in the code rounds after update-branch" : "") +
 (lastRoundGate ? "; last round rejected by the " + lastRoundGate + " gate" : "") +
 (updRound ? "; re-plan on the new base or fix by hand" : ""),
-updRound ? "review" : "cap",
+updRound ? "review" : "rounds",
 );
 state.rounds.code++;
 const m = state.rounds.code;

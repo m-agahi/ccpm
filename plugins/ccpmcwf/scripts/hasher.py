@@ -810,7 +810,7 @@ if len(text.encode('utf-8')) > RELAY_CAP:
     if 'changed' in out:
         sizes.append((len(out['changed']), 'changed'))
     sizes = sorted(sizes, reverse=True)
-    # a fixed marker: the workflow maps it to its own stop text (stop_gate hash)
+    # a fixed marker: the workflow maps it to its own stop text (stop_gate relay-size)
     sys.exit('FLEET_HASHER_RELAY_CAP: the hasher output is over the %d-byte relay cap (%d bytes; largest: %s)' % (
         RELAY_CAP, len(text.encode('utf-8')), ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
 print(text)

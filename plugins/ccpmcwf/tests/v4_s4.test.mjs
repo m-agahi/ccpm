@@ -391,7 +391,7 @@ test("4.0.0 1983 AC-2: three audit refusals stop after :audit-fix-2", async () =
     s["role:plan-audit:audit-fix-2"] = REFUSE("r2");
     const out = await runOne(s, args);
     assert.equal(out.result.status, "needs_human", args.confirm);
-    assert.equal(out.result.stop_gate, "role");
+    assert.equal(out.result.stop_gate, "audit");
     assert.match(out.result.reason, /^plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);
     assert.deepEqual(out.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix", "role:scope-and-plan:audit-fix-2"]);
     assert.ok(!out.labels.includes("infra:commit-plan"));

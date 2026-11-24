@@ -138,7 +138,7 @@ test("1991 short path: at most MAX_SHORT_TEST_ROUNDS (2) test rounds, each with 
   s["role:fleet-test-writer:short:r2"] = { status: "ok", reason: "red", criterion_id: "short", tests: [{ name: "b", covers: "AC2: y" }], files: ["tests/test_b.py"] };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
   assert.match(out.result.reason, /test rounds exhausted \(2\)/);
   assert.ok(!out.labels.includes("role:fleet-test-writer:short:r3"));
   // round 2 rewrites only the routed criterion

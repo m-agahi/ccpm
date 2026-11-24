@@ -1,5 +1,33 @@
 # Changelog
 
+## [8.5.4] - 2026-11-24
+
+ccpmcwf 8.5.4: `cap`, `rounds`, `audit` and `relay-size` each mean one thing (`role` and `hash` still cover other cases, which a later step classifies), and the plan_ref checks for fleet 2.1.3 and earlier give one plain refusal (yaadgaar `#108` step 1, ADR-1397).
+
+### Changed
+
+- New gates `audit`, `rounds` and `relay-size` in `STOP_GATES` (26 names). The plan-audit verdict stop
+  after the re-plan rounds is `audit` (was `role`). The test-round and code-round exhaustion stops, and
+  the `pre_freeze_hooks` stop after the last test round, are `rounds` (were `cap`); `cap` is now the agent
+  cap only. The hasher relay-size overflow (`FLEET_HASHER_RELAY_CAP`) is `relay-size` (was `hash`).
+  `role` and `hash` still cover other cases (`role`: no push access, PR-body phrase overflow, pr-opener
+  mismatches; `hash`: refs/replace exists, hook config differs from HEAD, augmentation original touched),
+  which a later step classifies. Stop texts and stop behaviour are unchanged. `ciStopCode` maps only
+  `merge` and `review`, so the CI write-back codes do not change.
+- The build-mode checks "plan_ref predates 2.1.4" (a `ref_path` ref), "plan_ref predates 2.0.3" (no
+  `plan_facts.test_cmd`/`repo_obligations`/`commands`) and "plan_ref predates 2.1.0" (no `plan_diff` under
+  confirm auto) now give one refusal, "plan_ref from an unsupported fleet version; re-run plan"
+  (`LEGACY_REF`). Each check keeps its condition and its site, so an old ref still fails closed.
+- Kept: the 6.0.0 checks ("sealed before 6.0.0" in build mode, "carries a plan commit of fleet 5.x" in plan
+  mode). A scan of every `refs/fleet/` ref under `~/git` and `~/quinyx` found a live plan ref sealed by
+  fleet 5.0.10 (`quinyx/actions`, `refs/fleet/t27794f97/plan`, its `fleet/` branch still on the remote);
+  every other ref was sealed by 6.3.0 or later.
+- Tests: `v854_gate_names` (the new names at each site, `"cap"` only in `reserve`, the plain refusal for
+  each old ref shape). Updated pins: `build_task_run` (2.1.4 and 2.0.3 refusals, three code-round stops, the parked plan-audit stop),
+  `v4_s4` (audit), `v4_s5` (test rounds), `v600_s1`, `v622_fixes`, `v740_hook_dir_allow`, `v800_augment`
+  (rounds), `v505_hasher_relay` (relay-size), `v740_readme` (26 gates). README and the build-task skill name
+  the new gates and the refusal text; the `hasher.py` marker comment names `relay-size`.
+
 ## [8.5.3] - 2026-11-24
 
 ccpmcwf 8.5.3: doc and lock hits that the caller check auto-maps to dont_care no longer use the caller read budget (yaadgaar `#111`).

@@ -237,8 +237,8 @@ test("7.4.0 #15 F3: a coder edit to frozen scripts/tests/helpers.py passes forma
 
 // The AC says "stops at stop_gate hash". The shipped routing (unchanged) refuses the coder's
 // output at the hash check in every round and routes it back as a finding; when the code rounds
-// run out, the run stops with stop_gate cap and "last round rejected by the hash gate".
-test("7.4.0 #15 F3: the hash check refuses that edit in every code round after format-code passes; the run stops (cap, by the hash gate)", async () => {
+// run out, the run stops with stop_gate rounds (cap before 8.5.4) and "last round rejected by the hash gate".
+test("7.4.0 #15 F3: the hash check refuses that edit in every code round after format-code passes; the run stops (rounds, by the hash gate)", async () => {
   const freeze = H({ "tests/test_a.py": "ha", "tests/test_b.py": "hb", "pyproject.toml#tool.pytest": "hp", "scripts/tests/helpers.py": "c1" });
   const post = H({ "tests/test_a.py": "ha", "tests/test_b.py": "hb", "pyproject.toml#tool.pytest": "hp", "scripts/tests/helpers.py": "c2" });
   const s = happy();
@@ -254,7 +254,7 @@ test("7.4.0 #15 F3: the hash check refuses that edit in every code round after f
   assert.ok(!out.labels.includes("infra:commit:r1"));
   for (const m of [1, 2, 3]) assert.ok(out.logs.includes("code round " + m + ": hash violation on scripts/tests/helpers.py -> coder output rejected"), "round " + m);
   assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.equal(out.result.stop_gate, "cap", out.result.reason);
+  assert.equal(out.result.stop_gate, "rounds", out.result.reason);
   assert.match(out.result.reason, /last round rejected by the hash gate/);
 });
 

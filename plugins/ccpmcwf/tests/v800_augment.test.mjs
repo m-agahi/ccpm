@@ -306,7 +306,7 @@ test("8.0.0 G6-4: the round counts against MAX_CODE_ROUNDS: an augmentation in r
   delete s["infra:gates:r1"];
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.equal(out.result.stop_gate, "cap");
+  assert.equal(out.result.stop_gate, "rounds");
   assert.equal(out.result.reason, "code rounds exhausted (3) without code-judge approval; last round rejected by the mutation gate");
   assert.ok(out.build.labels.includes("hasher:freeze:f2"), "the round ran in code round 3");
   assert.ok(!out.build.labels.includes("role:fleet-coder:r4"));

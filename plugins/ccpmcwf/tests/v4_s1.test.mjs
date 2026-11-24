@@ -129,7 +129,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "8.5.3");
+  assert.equal(m[1], "8.5.4");
   assert.match(SCRIPTS_DIR, new RegExp("/ccpmcwf/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -362,24 +362,24 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/8.5.3/scripts", ["fleet/8.5.3/scripts"]],
+    ["fleet/8.5.4/scripts", ["fleet/8.5.4/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
     ["/home/u/.claude/plugins/cache/m/ccpmcwf/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/ccpmcwf/3.1.3/scripts"]],
-    ["/home/u/../x/ccpmcwf/8.5.3/scripts", ["/home/u/../x/ccpmcwf/8.5.3/scripts"]],
-    ["/home/u//ccpmcwf/8.5.3/scripts", ["/home/u//ccpmcwf/8.5.3/scripts"]],
-    ["/home/u/a b/ccpmcwf/8.5.3/scripts", ["/home/u/a b/ccpmcwf/8.5.3/scripts"]],
+    ["/home/u/../x/ccpmcwf/8.5.4/scripts", ["/home/u/../x/ccpmcwf/8.5.4/scripts"]],
+    ["/home/u//ccpmcwf/8.5.4/scripts", ["/home/u//ccpmcwf/8.5.4/scripts"]],
+    ["/home/u/a b/ccpmcwf/8.5.4/scripts", ["/home/u/a b/ccpmcwf/8.5.4/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/ccpmcwf/<version>/scripts
-    ["/home/u/x/ccpmcwf/8.5.3/scripts", ["/home/u/x/ccpmcwf/8.5.3/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.5.3/scripts", ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.5.3/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.5.3/scripts", ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.5.3/scripts"]],
-    ["/home/u/.claude/plugins/cache/../ccpmcwf/8.5.3/scripts", ["/home/u/.claude/plugins/cache/../ccpmcwf/8.5.3/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.5.3/scripts", ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.5.3/scripts"]],
+    ["/home/u/x/ccpmcwf/8.5.4/scripts", ["/home/u/x/ccpmcwf/8.5.4/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.5.4/scripts", ["/home/v/.claude/plugins/cache/m/ccpmcwf/8.5.4/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.5.4/scripts", ["/home/u/.claude/plugins/cache/a/b/ccpmcwf/8.5.4/scripts"]],
+    ["/home/u/.claude/plugins/cache/../ccpmcwf/8.5.4/scripts", ["/home/u/.claude/plugins/cache/../ccpmcwf/8.5.4/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.5.4/scripts", ["/home/u/.claude/plugins/cache/.x/ccpmcwf/8.5.4/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/ccpmcwf/8.5.3/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/ccpmcwf/8.5.4/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/ccpmcwf/8.5.3/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/ccpmcwf/8.5.4/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -400,7 +400,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.5.3/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/ccpmcwf/8.5.4/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -409,7 +409,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /ccpmcwf\/8\.5\.3\/scripts/);
+  assert.match(b.build.calls[0].prompt, /ccpmcwf\/8\.5\.4\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -720,7 +720,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.3", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.4", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -734,9 +734,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.3"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.3"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.3"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.4"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.4"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.5.4"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {
