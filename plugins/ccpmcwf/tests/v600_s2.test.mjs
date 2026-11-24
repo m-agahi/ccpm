@@ -632,7 +632,8 @@ test("6.0.0 2042 (security review): roles get the plan's own blob sha; verify an
   t["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { replace_refs: ["refs/replace/" + "1".repeat(40)] });
   const o2 = await run(t, ARGS);
   assert.equal(o2.result.status, "needs_human");
-  assert.equal(o2.result.stop_gate, "hash");
+  // 8.5.5 (#108 step 2): a refs/replace stop is gate refs (was hash)
+  assert.equal(o2.result.stop_gate, "refs");
   assert.match(o2.result.reason, /^verify: refs\/replace\/1{40} exists; replacement objects could change what a sealed object id reads as/);
   const u = happy();
   const h = JSON.parse(JSON.stringify(happy()["hasher:freeze:f1"]));

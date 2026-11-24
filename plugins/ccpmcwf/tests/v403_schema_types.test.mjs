@@ -537,6 +537,8 @@ const READS = {
     "prior.findings array": PARSED_ROUND,
     "c0 object": PARSED_ROUND,
   },
+  // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
+  planFindingsStop: { "f.human_only boolean": PARSED_LOCAL },
   replanWithFindings: {
     "e object": SP + "changed_symbols[]",
     "rawMap array": SP + "changed_symbols",
@@ -708,6 +710,9 @@ const READS = {
     "fmt.changed_paths array": "infra:changed_paths",
     // 7.3.0 (#9): the plan-mode format_files relay (digest-checked)
     "ff.hook_failures array": "prog:format_files:hook_failures",
+    // 8.5.5 (#108 step 2): the early DSN check in the plan surfaces step
+    "ed.holds boolean": "prog:plan_dsn:holds",
+    "ed.lines array": "prog:plan_dsn:lines",
     // 5.0.3 (ledger 2010)
     "dc.holds boolean": "prog:plan_dsn:holds",
     "dc.lines array": "prog:plan_dsn:lines",
@@ -1276,7 +1281,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.5\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.5\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

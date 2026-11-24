@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.5\.4 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.5\.5 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1977,8 +1977,10 @@ test("plan_diff that is not an array of strings is contract drift", async () => 
     s["role:scope-and-plan"].plan_diff = bad;
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    // the generic type check (an array) fires first for non-arrays
-    assert.match(out.result.reason, /contract drift: (scope-and-plan )?plan_diff/);
+    // the generic type check (an array) fires first for non-arrays; 8.5.5 (#108 step 2): a script
+    // contract check is a re-plan round, then a no-progress stop (gate contract either way)
+    assert.match(out.result.reason, /contract drift: (no progress \(round 1 repeats round 0\): )?(scope-and-plan )?plan_diff/);
+    assert.equal(out.result.stop_gate, "contract");
     assert.ok(!out.labels.includes("role:plan-audit"));
   }
 });
@@ -3438,14 +3440,15 @@ test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", a
 
 test("2.0.3 scope-and-plan: wrong types for repo_obligations or test_cmd are contract drift", async () => {
   for (const [k, v, re] of [
-    ["repo_obligations", "[]", /contract drift: scope-and-plan repo_obligations type/],
-    ["test_cmd", "pytest", /contract drift: scope-and-plan test_cmd type/],
-    ["test_cmd", { paths_placeholder: "<paths>" }, /contract drift: scope-and-plan test_cmd\.command/],
-    ["test_cmd", { command: "  " }, /contract drift: scope-and-plan test_cmd\.command/],
-    ["repo_obligations", [{ id: "OB1", kind: "bogus", instruction: "x" }], /contract drift: scope-and-plan repo_obligations/],
-    ["repo_obligations", [{ kind: "other", instruction: "x" }], /contract drift: scope-and-plan repo_obligations/],
-    ["repo_obligations", [OB_LOG, OB_LOG], /contract drift: scope-and-plan repo_obligations/],
+    ["repo_obligations", "[]", /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations type/],
+    ["test_cmd", "pytest", /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd type/],
+    ["test_cmd", { paths_placeholder: "<paths>" }, /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd\.command/],
+    ["test_cmd", { command: "  " }, /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan test_cmd\.command/],
+    ["repo_obligations", [{ id: "OB1", kind: "bogus", instruction: "x" }], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
+    ["repo_obligations", [{ kind: "other", instruction: "x" }], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
+    ["repo_obligations", [OB_LOG, OB_LOG], /contract drift: (no progress \(round 1 repeats round 0\): )?scope-and-plan repo_obligations/],
   ]) {
+    // 8.5.5 (#108 step 2): a re-plan round first, then the no-progress stop at gate contract
     const s = happy();
     s["role:scope-and-plan"][k] = v;
     const out = await runOne(s, ARGS);
@@ -5714,6 +5717,8 @@ const ARRAY_SITES = {
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
   "dc.lines @ planAndAudit": "infra:dsn_check.lines",
+  // 8.5.5 (#108 step 2): the early DSN read, a slot of the plan surfaces step
+  "ed.lines @ planAndAudit": "parsed: a plan_dsn program output in its surfaces slot (PROGRAM_OUT types it), digest-checked with it",
   "pf.files @ verifyPlanCommit": "infra:plan_files.files",
   "pf.dsn_paths @ verifyPlanCommit": "infra:plan_files.dsn_paths",
   "pr.refs @ verifyPlanCommit": "infra:plan_ref.refs",
@@ -6329,7 +6334,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.5\.4; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.5\.5; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6379,18 +6384,20 @@ test("2.1.5 confirm auto: a confusable character in the criteria goes to the one
   assert.ok(!l.includes("infra:format-plan") && !l.includes("role:plan-audit"), "no format or audit for the refused plan");
   const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
   assert.ok(b.sources.some((x) => x.kind === "text" && /AC2: .*U\+00A0/.test(x.body)));
-  // still bad after the rounds: 4.0.0 (1983) stops after round 2, never a third
+  // still bad after the rounds: 4.0.0 (1983) stops after round 2, never a third; 8.5.5 (#108 step 2):
+  // the same finding in round 1 is no progress, so the stop comes after round 1
   const t = autoHappy({ criteria: crit });
   t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
   const o2 = await runOne(t, AUTO);
   assert.equal(o2.result.status, "needs_human");
-  assert.match(o2.result.reason, /invisible or confusable.*\(after 2 re-plan rounds\)/);
-  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
-  assert.ok(!o2.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
+  assert.match(o2.result.reason, /invisible or confusable character: no progress \(round 1 repeats round 0\).*\(after 1 re-plan round\)/);
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(!o2.labels.some((x) => /audit-fix-2|audit-fix-3|audit-fix:audit-fix/.test(x)));
   // 4.0.0 (1983): confirm ask gets the same rounds
   const o3 = await runOne(happy({ criteria: crit }), ARGS);
   assert.equal(o3.result.status, "needs_human");
-  assert.ok(o3.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(o3.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(!o3.labels.includes("role:scope-and-plan:audit-fix-2"));
 });
 
 // 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
@@ -6425,11 +6432,13 @@ test("2.1.5 confirm auto: a third plan-audit refusal stops (4.0.0: 2 rounds); co
   assert.match(out.result.reason, /plan-audit verdict untestable_criteria.*\(after 2 re-plan rounds\)/);
   assert.ok(out.labels.includes("role:plan-audit:audit-fix-2"));
   assert.ok(!out.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
+  // 8.5.5 (#108 step 2): the same refusal in round 1 is no progress: confirm ask stops after round 1
   const a = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" } } });
   const o2 = await runOne(a, ARGS);
   assert.equal(o2.result.status, "needs_human");
   assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix"));
-  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.match(o2.result.reason, /^plan-audit verdict plan_defect: no progress \(round 1 repeats round 0\)/);
 });
 
 // 2.1.4 trial bug #6: a free-text task took its slug from the model-written
@@ -7028,7 +7037,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.4\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.5\.4 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.5\.5\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.5\.5 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8740,7 +8749,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.5\.4/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.5\.5/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

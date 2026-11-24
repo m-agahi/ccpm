@@ -260,7 +260,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
 
 9. **Report.** Relay, in this order:
    - `status` and `reason`. `needs_human` means a gate stopped the run on purpose: quote the reason
-     and the last `gate_log` lines, and say what a human must decide.
+     and the last `gate_log` lines, and say what a human must decide. When the result has
+     `options` (8.5.5: a plan-findings stop), show each option verbatim as a numbered choice.
    - `branch`, `rounds`, `cumulative`, `role_sha256`.
    - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
      after the freeze returns both. This includes a build that ran in the same run as the plan

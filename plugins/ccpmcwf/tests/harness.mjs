@@ -488,6 +488,11 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return pathRecheckOut({}, [i.repo, i.token]);
     }
+    // 8.5.5: an unscripted early DSN read finds no DSN
+    if (!(label in script) && /^infra:plan-dsn:/.test(label)) {
+      const m = /plan_dsn\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
+      return { status: "ok", reason: "read", holds: false, lines: [], plan_sha256: null, args: [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) };
+    }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     // 7.4.0 car 4 (#29 N5, #39): a sh:<path> target reads a script that sources nothing; at plan time an
     // npm:<name> target finds a tracked package.json script (no walk-up finding); car 5 (Z1): so does pkg:package.json
@@ -1269,7 +1274,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.5.4/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.5.5/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1443,6 +1448,8 @@ export const SURFACE_PARTS = [
   ["ruleset_surface", "infra:ruleset-surface:"],
   ["pr_convention", "infra:pr-convention:"],
   ["changed_defs", "infra:changed-defs:"],
+  // 8.5.5 (#108 step 2): the DSN check on the planner's draft (plan surfaces step only)
+  ["plan_dsn", "infra:plan-dsn:"],
 ];
 // [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
 export const PROGRAM_LABELS = [

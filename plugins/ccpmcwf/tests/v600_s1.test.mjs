@@ -35,7 +35,8 @@ test("6.0.0 2038: unknown twice (6.3.0: and at the scripted retry) -> halt with 
   s.__gh = { "o/r": UNKNOWN };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "role");
+  // 8.5.5 (#108 step 2): push-access stops are gate push (was role)
+  assert.equal(out.result.stop_gate, "push");
   assert.match(out.result.reason, /^PR step: push access to o\/r still not known after a second probe \(gh=null, gh-personal=null\)/);
   assert.doesNotMatch(out.result.reason, /no GitHub command with push access/);
   assert.deepEqual(out.build.labels.filter((l) => /^infra:gh-identity:pr/.test(l)), ["infra:gh-identity:pr", "infra:gh-identity:pr-2"]);
@@ -47,15 +48,18 @@ test("6.0.0 2038: unknown at the workspace, definite no at the re-probe -> the n
   s.__gh = { "o/r": UNKNOWN };
   s["infra:gh-identity:pr"] = reprobe(NO_PUSH);
   const out = await run(s, ARGS);
-  assert.equal(out.result.stop_gate, "role");
+  assert.equal(out.result.stop_gate, "push");
   assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r \(gh=false, gh-personal=false\)/);
 });
 
-test("6.0.0 2038: a definite no at the workspace still stops at build start; no re-probe", async () => {
+// 8.5.5 (#108 step 2): plan mode now stops on a definite no, before the planner (was: build start)
+test("6.0.0 2038 (8.5.5): a definite no at the workspace stops plan mode before the planner; no re-probe", async () => {
   const s = happy();
   s.__gh = { "o/r": NO_PUSH };
-  const out = await run(s, ARGS);
-  assert.match(out.result.reason, /^build start: no GitHub command with push access to o\/r/);
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.stop_gate, "push");
+  assert.match(out.result.reason, /^no GitHub command with push access to o\/r .*then run plan again$/);
+  assert.ok(!out.labels.includes("role:scope-and-plan"));
   assert.ok(!out.labels.some((l) => /^infra:gh-identity:pr/.test(l)));
 });
 

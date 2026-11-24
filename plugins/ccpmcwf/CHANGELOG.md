@@ -1,5 +1,47 @@
 # Changelog
 
+## [8.5.5] - 2026-11-24
+
+ccpmcwf 8.5.5: a re-plan round that cannot help is not spent, and a plan-findings stop offers options (yaadgaar `#108` step 2, ADR-1397). Plan run wf_a5e02d51-28c used 45 agents and 3.7M tokens, spent 2 re-plan rounds on a finding the planner could not fix, then stopped with no stop gate and a raw list of findings.
+
+### Changed
+
+- Planner-contract problems are re-plan findings (`planFindingsStop`, inside `MAX_AUDIT_ROUNDS`), at stop
+  gate `contract`: `plan_diff`, `tldr`, the `test_cmd`/`repo_obligations` types, a plan path other than
+  the ingested plan's, and `changed_symbols` not an array. In plan mode a bad criterion id, a duplicate id
+  and overlapping `test_files` are re-plan findings too (`criteria refused`). Build mode (a sealed ref)
+  still halts on them. Still a halt at once: the `test_cmd` and criterion `test_args` allowlists (gate
+  `commands`), a missing `plan_path` or `criteria`, and an unusable `plan_path`.
+- `human_only`: a finding that needs a human is tagged in script code at its producer. One producer has
+  the tag: the caller check's "too common a name to check by grep" (more than 100 call-shaped hits). A
+  `human_only` finding stops at once, with no re-plan round. The plan-audit findings come from an LLM;
+  any `human_only` key in them is dropped.
+- Progress fingerprint: each plan-findings round logs `plan findings fingerprint round <n>: <hex>` (the
+  stop reason, symbol or criterion, and the finding text, normalised and sorted). When a round's
+  fingerprint equals the round before it, the run stops at once: "<reason>: no progress (round n repeats
+  round n-1)". The plan-audit refusal goes through the same function.
+- Every plan-findings stop now has a stop gate (`plan` unless the site names one: `contract`, `audit`,
+  `db`, `intent`) and an `options` list in the result: 2-3 choices the script writes. The build-task
+  skill shows them as numbered choices.
+- Plan mode stops before the planner when push access is a definite no (gate `push`); an unknown answer
+  still goes on (ADR-1201). Before 8.5.5 plan mode only warned and the build stopped at its start.
+- The plan surfaces step runs `plan_dsn` on the planner's draft first, and the step, the hook gate and the
+  secret-like path check now run before the caller check. A DSN in the draft is a re-plan finding before
+  any caller or format agent runs. The post-format `plan_dsn` check stays: it hashes the bytes the audit
+  reads and the plan commit holds.
+- Stop gates `plan`, `push` and `refs` (29 names). `push`: no push access (plan mode, the push probe,
+  build start, the PR step, the test-block step). `refs`: a refs/replace ref exists (hasher, verify).
+  Still on `role`: the PR-body phrase overflow and the pr-opener mismatches. Still on `hash`: hook config
+  differs from HEAD, an augmentation original touched.
+- Tests: `v855_judgment_routing`. Updated pins: `build_task_run` (contract-drift texts gain the no-progress
+  form, the confusable and plan-audit round stops after round 1, the version, ARRAY_SITES), `v4_s4`
+  (changing caller findings take 2 rounds, identical ones 1; the pre-round park uses a refused
+  `test_cmd`), `v503_dsn_precheck` (the repeated DSN stops after round 1, gate `db`), `v508_gh_identity`
+  and `v600_s1` (no push stops plan mode; gate `push`), `v600_s2`, `v622_fixes`, `v630_unattended` (gate
+  `refs`), `v800_surfaces` (scripted plan surfaces relays carry the `plan_dsn` slot), `v507_digest_relays`
+  (`plan_dsn` is a read-only retrying program), `v403_schema_types` (READS for the new reads),
+  `v5010_prompt_snapshot` (the plan surfaces prompt), `v740_readme` (29 gates), and the version pins.
+
 ## [8.5.4] - 2026-11-24
 
 ccpmcwf 8.5.4: `cap`, `rounds`, `audit` and `relay-size` each mean one thing (`role` and `hash` still cover other cases, which a later step classifies), and the plan_ref checks for fleet 2.1.3 and earlier give one plain refusal (yaadgaar `#108` step 1, ADR-1397).

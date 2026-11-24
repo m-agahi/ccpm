@@ -137,7 +137,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.5.4";
+const FLEET_VERSION = "8.5.5";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -224,7 +224,7 @@ const CALLER_LIMITS = [
   "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs"];
 // 8.5.4 (#108): the one refusal for a plan_ref from fleet 2.1.3 or earlier (no 2.0.3 plan facts, no plan_diff, a ref_path)
 const LEGACY_REF = "plan_ref from an unsupported fleet version; re-run plan";
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
@@ -1886,7 +1886,7 @@ const PROGRAM_SLOTS = [
   // 6.0.0
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
   // 8.0.0 (#62 B2): each read-only surface program in its own slot
-  [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
+  [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"], ["plan_dsn", "plan_dsn"]]],
   // 8.0.0 (G2): one slot per gate, named after the gate
   [/^infra:gates:/, [["coverage", "cover_diff"], ["mutation", "mutants"], ["security_scan", "sec_scan"]]],
   // 8.0.0 (G3): a write step (no digest retry)
@@ -4143,7 +4143,7 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     if (m === "ignored" && g.settings !== null) view[m][SETTINGS_LOCAL] = g.settings;
   }
   const rr = Object.keys(view.git).filter((k) => k.indexOf(FLEETREF + "refs/replace/") === 0);
-  if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "hash");
+  if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "refs");
   // 6.2.2 (2106, ADR-1235): only this run's refs/fleet/<own id>/* enter the gates; another run's refs in the shared git dir are not this run's roles'
   const own = state.ownRefs;
   if (own) {
@@ -4322,6 +4322,7 @@ function finish(status, reason) {
     ...(state.ci ? { ci: state.ci } : {}),
     ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
     ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : {}),
+    ...(state.options && status === "needs_human" ? { options: state.options } : {}),
   };
 }
 function finishStop(status, reason) {
@@ -4595,7 +4596,7 @@ async function pushProbe(lay, ws) {
   if (!relayDigestOk(r, progKeys("push:probe"), "push") || canonical(r.args) !== canonical(args))
     return unknown(label + ": the relayed result does not match the program's digest or args");
   if (r.access === "denied")
-    halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again");
+    halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again", "push");
   if (r.access !== "ok") return unknown("dry run " + r.result + " (exit " + r.exit_code + ")");
   gate("push access ok: dry run " + r.result + " (exit " + r.exit_code + ")");
 }
@@ -4908,13 +4909,14 @@ function confusableFindings(criteria) {
 }
 
 // testCmd: the plan's test_cmd
-function normCriteria(raw, testCmd) {
+// out (plan mode, 8.5.5): the id and overlap problems go there as findings; a sealed ref halts
+function normCriteria(raw, testCmd, out) {
   const seen = {};
+  const bad = (m) => (out ? out.push({ criterion: null, finding: m }) : halt("needs_human", m));
   const criteria = raw.map((c) => {
     const id = String((c && c.id) || "");
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(id))
-      halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
-    if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(id)) bad("criterion id not usable in a branch name: " + JSON.stringify(id));
+    if (seen[id]) bad("duplicate criterion id " + id);
     seen[id] = true;
     const ta = criterionTestArgsProblem(testCmd, c);
     if (ta) halt("needs_human", "criterion " + id + " " + ta, "commands");
@@ -4927,7 +4929,7 @@ function normCriteria(raw, testCmd) {
     });
   });
   const overlaps = findOverlaps(criteria);
-  if (overlaps.length) halt("needs_human", "test_files overlap across criteria: " + overlaps.join("; "));
+  if (overlaps.length) bad("test_files overlap across criteria: " + overlaps.join("; "));
   return criteria;
 }
 
@@ -5392,6 +5394,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
         symbol: s.symbol,
         finding:
           s.symbol + ": more than " + MAX_SYMBOL_HITS + " call-shaped occurrences (git grep -w hits followed by `(`); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
+        human_only: true,
       });
       continue;
     }
@@ -5704,11 +5707,34 @@ function afterRounds(ctx) {
   const n = ctx.auditRound || 0;
   return n ? " (after " + n + " re-plan round" + (n === 1 ? "" : "s") + ")" : "";
 }
-function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate) {
-  if ((ctx.auditRound || 0) < ctx.maxRounds) return replanWithFindings(ctx, planPath, what, findings, what, rawMap, plan);
-  noteRound(ctx.auditRound || 0, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
+// 8.5.5 (#108 step 2, ADR-1397): a round's findings as one hash (kind, symbol or criterion, text; sorted)
+function findingsFp(what, findings) {
+  const n = (x) => String(x == null ? "" : x).toLowerCase().replace(/\s+/g, " ").trim();
+  return sha256Hex(JSON.stringify(findings.map((f) => JSON.stringify([n(what), n(f.symbol || f.criterion), n(f.finding)])).sort())).slice(0, 16);
+}
+// every plan-findings round ends here: a re-plan round, or a stop with options when a finding is
+// human_only (set by its script producer), the round repeats the one before, or the rounds are spent
+function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate, fallback) {
+  const r = ctx.auditRound || 0;
+  const fp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]);
+  gate("plan findings fingerprint round " + r + ": " + fp);
+  const human = findings.filter((f) => f.human_only === true);
+  const same = ctx.lastFp === fp;
+  if (!human.length && !same && r < ctx.maxRounds) return replanWithFindings(Object.assign({}, ctx, { lastFp: fp }), planPath, what, findings, fallback || what, rawMap, plan);
+  noteRound(r, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
-  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate);
+  const syms = Array.from(new Set(human.map((f) => f.symbol).filter(Boolean)));
+  state.options = [
+    human.length ? "edit the task so the plan does not change " + (syms.join(", ") || "what the findings name") + " (narrower names or a smaller scope), then run plan again" : "edit the task text to settle these findings, then run plan again",
+    "make the change outside the fleet, as a direct reviewed PR",
+    "drop the task",
+  ];
+  const why = same ? ": no progress (round " + r + " repeats round " + (r - 1) + ")" : "";
+  halt("needs_human", what + why + ": " + (shown.join("; ") || fallback || what) + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate || "plan");
+}
+function dsnFinding(planPath, lines) {
+  const at = lines.length ? " at line " + lines.join(", ") : " (unread: over 8 MiB)";
+  return "the plan doc " + planPath + " holds a URL with the mysql scheme" + at + "; placeholders count too, and the plan commit is refused. Name it as \"the YADGAR_TEST_DSN URL\" (or the URL of the repo's declared *_TEST_DSN variable) or describe the DSN in words; never write the scheme, a colon and two slashes";
 }
 async function planAndAudit(ctx0) {
   let ctx = Object.assign({ maxRounds: MAX_AUDIT_ROUNDS, auditRound: 0 }, ctx0);
@@ -5732,10 +5758,11 @@ async function planAndAudit(ctx0) {
   if (ppBad) halt("needs_human", "scope-and-plan plan_path " + JSON.stringify(plan.plan_path) + " " + ppBad);
   // from here on a stop leaves a draft plan in the worktree
   if (ctx.onPlanPath) ctx.onPlanPath(normPath(plan.plan_path));
-  if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
-    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
-  if (typeof plan.tldr !== "string" || !plan.tldr.trim())
-    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string", "contract");
+  // 8.5.5 (#108 step 2): a planner-contract problem is a re-plan finding (the allowlist halts stay)
+  const drift = [];
+  const dr = (m) => drift.push({ criterion: null, finding: m });
+  if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string")) dr("plan_diff must be a non-empty array of strings");
+  if (typeof plan.tldr !== "string" || !plan.tldr.trim()) dr("tldr must be a non-empty string");
   // car F (A-M6, review): no held-out example (its when and then together, case and spacing ignored) leaves in
   // another string of the plan: notes dropped, every other string leaf redacted
   const nz = (x) => (x === Object(x) ? JSON.stringify(x) : String(x)).toLowerCase().replace(/\s+/g, " ");
@@ -5745,14 +5772,10 @@ async function planAndAudit(ctx0) {
   for (const f of state.findings) f.notes = f.notes.filter((n) => !hoHit(n));
   red(plan);
   const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
-  if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
-  const tcProblem = testCmdProblem(plan.test_cmd);
-  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
-  const obligations = await screenCheckCmds(plan.repo_obligations, ctx.common.worktree, "Plan", sfx);
+  if (factsProblem) dr(factsProblem.msg.replace(/^role scope-and-plan contract drift: /, ""));
   const planPath = normPath(plan.plan_path);
-  if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
-    halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
-  const criteria = normCriteria(plan.criteria, plan.test_cmd);
+  if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path) dr("planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
+  if (!Array.isArray(plan.changed_symbols)) dr("changed_symbols must be an array");
   const prior = ctx.priorRound || null;
   if (prior) {
     const rx = (prior.relaxed || []).slice();
@@ -5763,10 +5786,15 @@ async function planAndAudit(ctx0) {
     for (const x of rx) if (!ws.some((w) => w.gate === "re-plan-relaxed" && w.reason === x)) ws.push({ gate: "re-plan-relaxed", criterion: (/^criterion (\S+) /.exec(x) || [])[1] || null, round: ctx.auditRound || 0, reason: x });
     ctx = Object.assign({}, ctx, { relaxed: rx });
   }
+  if (drift.length) return planFindingsStop(ctx, ctx.brief.plan_path || planPath, "role scope-and-plan contract drift", drift, plan.changed_symbols, plan, "contract");
+  const tcProblem = testCmdProblem(plan.test_cmd);
+  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
+  const obligations = await screenCheckCmds(plan.repo_obligations, ctx.common.worktree, "Plan", sfx);
+  const critF = [];
+  const criteria = normCriteria(plan.criteria, plan.test_cmd, critF);
+  if (critF.length) return planFindingsStop(ctx, planPath, "criteria refused", critF, plan.changed_symbols, plan);
   const conf = confusableFindings(criteria);
   if (conf.length) return planFindingsStop(ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
-  if (!Array.isArray(plan.changed_symbols))
-    halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
   const kept = prior ? keptSymbols(prior, plan) : [];
   const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
   if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
@@ -5777,22 +5805,6 @@ async function planAndAudit(ctx0) {
     if (dropped.length)
       return planFindingsStop(ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
   }
-  let callerOcc = null;
-  let autoDontCare = null;
-  let symbolMap = cs.clean;
-  if (cs.clean.length) {
-    const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
-    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
-    callerOcc = cc.occurrences;
-    autoDontCare = cc.auto;
-    symbolMap = cs.clean.map((s) => {
-      const have = s.occurrences.map((o) => occurrenceKey(o.at));
-      const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
-      return add.length ? { symbol: s.symbol, occurrences: s.occurrences.concat(add) } : s;
-    });
-    const nAuto = symbolMap.reduce((a, s, i) => a + s.occurrences.length - cs.clean[i].occurrences.length, 0);
-    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : ""));
-  }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
@@ -5801,7 +5813,8 @@ async function planAndAudit(ctx0) {
     test_cmd: stripHeldOut(plan.test_cmd),
     repo_obligations: stripHeldOut(obligations),
     commands: commandsOf(plan.test_cmd, obligations, criteria),
-    changed_symbols: symbolMap,
+    // 8.5.5: the planner's map until the caller check adds the auto entries (criterion null: no scope path)
+    changed_symbols: cs.clean,
     // origin's configured URL at plan time, before any role ran
     remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
     merge_after: typeof plan.merge_after === "string" && plan.merge_after.trim() ? plan.merge_after.trim() : null,
@@ -5842,9 +5855,18 @@ async function planAndAudit(ctx0) {
   const planGot = await surfaces(
     surfL,
     { worktree: ctx.common.worktree, rev: "HEAD", targets: planT, args: ghA },
-    [{ name: "hook_surface", args: [ctx.common.worktree, "HEAD", JSON.stringify(planT)], retry: true }, { name: "ruleset_surface", args: ghA, retry: true }, { name: "pr_convention", args: ghA, retry: true }],
+    [{ name: "plan_dsn", args: [ctx.common.worktree, planPath], retry: true }, { name: "hook_surface", args: [ctx.common.worktree, "HEAD", JSON.stringify(planT)], retry: true }, { name: "ruleset_surface", args: ghA, retry: true }, { name: "pr_convention", args: ghA, retry: true }],
     "Plan",
   );
+  // 8.5.5 (#108 step 2): the DSN check on the planner's draft, before the caller and format agents (the post-format check stays)
+  const ed = planGot("plan_dsn");
+  requireProgram(ed, "plan_dsn", surfL);
+  if (typeof ed.holds !== "boolean" || !Array.isArray(ed.lines) || !relayDigestOk(ed, progKeys("plan_dsn"), "plan_dsn") || canonical(ed.args) !== canonical([ctx.common.worktree, planPath]))
+    halt("failed", surfL + ": the relayed plan_dsn does not match the program's digest or arguments", "contract");
+  if (ed.holds) {
+    planGot.settle();
+    return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, ed.lines) }], plan.changed_symbols, plan, "db");
+  }
   const planHs = await hookSurface(surfL + " hook_surface", ctx.common.worktree, "HEAD", planT, "Plan", planGot);
   const planRs = await rulesetSurface(surfL + " ruleset_surface", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan", planGot);
   ctx.planRs = planRs;
@@ -5859,6 +5881,23 @@ async function planAndAudit(ctx0) {
     return planFindingsStop(ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
   const conventions = await prConvention(surfL + " pr_convention", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, planGot);
   planGot.end();
+  let callerOcc = null;
+  let autoDontCare = null;
+  let symbolMap = cs.clean;
+  if (cs.clean.length) {
+    const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
+    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
+    callerOcc = cc.occurrences;
+    autoDontCare = cc.auto;
+    symbolMap = cs.clean.map((s) => {
+      const have = s.occurrences.map((o) => occurrenceKey(o.at));
+      const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
+      return add.length ? { symbol: s.symbol, occurrences: s.occurrences.concat(add) } : s;
+    });
+    const nAuto = symbolMap.reduce((a, s, i) => a + s.occurrences.length - cs.clean[i].occurrences.length, 0);
+    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : ""));
+  }
+  planFacts.changed_symbols = symbolMap;
   // the scope of commit subjects and the PR title; the repo name when the planner gave none
   const fb = slugify(String(ctx.remoteSlug || "").split("/").pop(), 20);
   const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : COMPONENT_RE.test(fb) ? fb : "repo";
@@ -5888,11 +5927,7 @@ async function planAndAudit(ctx0) {
     halt("failed", fmtLabel + ": the relayed dsn_check does not match the program's digest", "contract");
   if (canonical(dc.args) !== canonical([ctx.common.worktree, planPath]))
     halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
-  if (dc.holds) {
-    const at = dc.lines.length ? " at line " + dc.lines.join(", ") : " (unread: over 8 MiB)";
-    const finding = "the plan doc " + planPath + " holds a URL with the mysql scheme" + at + "; placeholders count too, and the plan commit is refused. Name it as \"the YADGAR_TEST_DSN URL\" (or the URL of the repo's declared *_TEST_DSN variable) or describe the DSN in words; never write the scheme, a colon and two slashes";
-    return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding }], plan.changed_symbols, plan, "db");
-  }
+  if (dc.holds) return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, dc.lines) }], plan.changed_symbols, plan, "db");
 
   // the audit runs the planner's test_cmd in a scratch worktree
   const aEnv = dbInputs("audit");
@@ -5918,10 +5953,10 @@ async function planAndAudit(ctx0) {
     ),
   );
   const refusal = audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria";
-  if (refusal && ctx.auditRound < ctx.maxRounds)
-    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols, plan);
+  // 8.5.5: an LLM finding is never human_only
+  if (refusal)
+    return planFindingsStop(ctx, planPath, "plan-audit verdict " + audit.verdict, (audit.routed_findings || []).map(({ human_only, ...f }) => f), plan.changed_symbols, plan, "audit", audit.reason || audit.verdict);
   if (audit.verdict !== "approve") {
-    if (refusal) noteRound(ctx.auditRound, "plan-audit verdict " + audit.verdict, stripHeldOut(audit.routed_findings || []), roundSnapshot(plan), (prior && prior.symbols) || []);
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
       audit.verdict ? "needs_human" : "failed",
@@ -6609,7 +6644,8 @@ async function planMode(input, date) {
   const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
   const oh = originHalt(ws);
   if (oh) halt("needs_human", oh);
-  if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
+  // 8.5.5 (#108): a definite no stops before the planner (ADR-1201: unknown goes on)
+  if (ghNoPush(ws.remoteSlug)) halt("needs_human", noPushText(ws.remoteSlug).replace("re-run the build with the same plan_ref", "run plan again"), "push");
   await pushProbe(lay, ws);
   const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
   unattendedOn(planPolicy, input);
@@ -7074,7 +7110,7 @@ async function buildMode(input, date) {
   await preflightStep(repo);
   await lockClaim(repo, PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1], "Preflight");
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
-  if (ghNoPush(ws.remoteSlug)) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "role");
+  if (ghNoPush(ws.remoteSlug)) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "push");
   if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("build start: push access to " + ws.remoteSlug + " not known (" + ghTried(ws.remoteSlug) + "); the PR step checks again");
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
@@ -7318,7 +7354,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (!relayDigestOk(ph, progKeys("plan_hash"), "plan_hash") || canonical(ph.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(String(ph.blob)))
     halt("failed", "infra:verify-plan: the relayed plan hash does not match the program's digest, arguments or a full blob id");
   if (!Array.isArray(v.replace_refs)) halt("failed", "infra:verify-plan: no replace_refs list");
-  if (v.replace_refs.length) halt("needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "hash");
+  if (v.replace_refs.length) halt("needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "refs");
   const planBlob = v.plan_hash.blob;
   if (v.plan_sha256 !== ref.plan_sha256)
     halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
@@ -7567,10 +7603,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         g = ghFor(remoteSlug);
       }
       if (!g || (!g.push && !ghNoPush(remoteSlug)))
-        halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then re-run the build with the same plan_ref (it resumes at the PR)", "role");
+        halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then re-run the build with the same plan_ref (it resumes at the PR)", "push");
     }
     if (!g || !g.push)
-      halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
+      halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "push");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
     const opener = async (lb, more) => {
       const x = requireOk(
@@ -7731,7 +7767,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (resume && state.testsResumed !== true && ["review", "writeback", "stats"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
       state.testsResumed = true;
       const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
-      const targs = [ghCmd("test block", "role"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
+      const targs = [ghCmd("test block", "push"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
       const notes = state.review && Array.isArray(state.review.nits) ? state.review.nits : [];
       const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
       const own = await prTestsStep("infra:pr-tests:resume", targs, tb, pr.pr_url, supplied);

@@ -452,7 +452,8 @@ test("5.0.7 2020: the read-only program steps carry the retry; no write step doe
   assert.match(src, /\nasync function surfaces\([^]*?dispatch\(label, surfacesPrompt\(inputs, progs\), \{ schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, /);
   ro.push(...[...src.matchAll(/\{ name: "([a-z_]+)", args: [^{}]*?, retry: true \}/g)].map((m) => m[1]));
   // 7.3.0 (#43): fleet_branch
-  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch", "fleet_branch"];
+  // 8.5.5 (#108 step 2): plan_dsn, the read-only early DSN slot of the plan surfaces step
+  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch", "fleet_branch", "plan_dsn"];
   // the write steps allowed the retry: format_files (6.2.2 review M2: a second run finds the files settled) and pr_test_block (7.1.0, L2145 ruling AC4)
   const WRITE_RETRY = ["format_files", "pr_test_block"];
   assert.deepEqual([...new Set(ro)].sort(), RO.slice().sort());

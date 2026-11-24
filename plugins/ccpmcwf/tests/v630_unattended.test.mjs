@@ -267,7 +267,8 @@ const NEVER = [
   ["fingerprint", (s) => (s["hasher:fp-post:test-judge:r1"] = { status: "ok", fingerprint: { head: PB, tree: "MUTATED" } }), (o) => assert.equal(o.result.stop_gate, "fingerprint")],
   ["freeze", (s) => (s["hasher:freeze:f1"] = { status: "ok", fingerprint: { head: PB, tree: "OTHER" }, hashes: H(HASHES_FLAT) }), (o) => assert.equal(o.result.stop_gate, "fingerprint")],
   ["ownership", (s) => (s["hasher:post-writers:r1"] = { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: H(Object.assign({}, HASHES_FLAT, { ["git:fleetref:" + OWN]: "a".repeat(40) })) }), (o) => assert.equal(o.result.stop_gate, "ownership")],
-  ["hash", (s) => (s["hasher:post-writers:r1"] = { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: H(Object.assign({}, HASHES_FLAT, { ["git:fleetref:refs/replace/" + "c".repeat(40)]: "a".repeat(40) })) }), (o) => assert.equal(o.result.stop_gate, "hash")],
+  // 8.5.5 (#108 step 2): the refs/replace stop is gate refs (was hash); it still stops
+  ["hash", (s) => (s["hasher:post-writers:r1"] = { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: H(Object.assign({}, HASHES_FLAT, { ["git:fleetref:refs/replace/" + "c".repeat(40)]: "a".repeat(40) })) }), (o) => assert.equal(o.result.stop_gate, "refs")],
   ["terraform on PATH", (s) => (s["infra:path-check:plan-audit"] = (p) => { const i = inputsOf(p); return pathRecheckOut({ ["terra" + "form"]: { path: "/usr/bin/x", real: "/usr/bin/x", shim: false } }, [i.repo, i.token]); }), (o) => assert.equal(o.result.stop_gate, "iac")],
   ["IaC push gate", (s) => {
     let sha = null;
