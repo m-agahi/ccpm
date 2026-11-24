@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ARGS, happy, runOne, call, inputsOf, callersDisk } from "./harness.mjs";
+import { ARGS, PB, DIST, happy, runOne, call, inputsOf, callersDisk } from "./harness.mjs";
 
 const B3 = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "v853_callers_b3.json"), "utf8"));
 const REAL = Object.keys(B3).sort();
@@ -90,4 +90,55 @@ test("8.5.3 (#111): auto reads leave the code budget whole: a 4-page code list a
   assert.equal(reads(out, /:read:all:/).length, 4, reads(out).join(", "));
   const f = findingsOf(out);
   assert.deepEqual(f, ["c_miss: src/c_miss.py:1 is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason"]);
+});
+
+// review of PR #108: plan and build share one 100-agent cap in a same-run build (confirm auto), so the
+// auto reads must sit outside that cap too, and have their own bound per caller check
+const SAME_RUN = {
+  "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+  "role:fleet-intent-judge": { status: "ok", reason: "matches the task", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] }, classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task" } },
+  "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+};
+// the incident's 16-symbol plan, then the build in the same run, under a lowered agent cap. The real
+// agents of this run need a cap of 66; the 7 auto reads would need 73 if they counted.
+async function sameRunAt(cap) {
+  const { s } = realRun();
+  Object.assign(s, JSON.parse(JSON.stringify(SAME_RUN)));
+  s.__source = DIST.replace("MAX_AGENTS = 100", "MAX_AGENTS = " + cap);
+  return runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
+}
+
+test("8.5.3 (#111, PR #108 review a): the auto reads are outside the agent cap: the same-run plan+build fits a cap its real agents fit", async () => {
+  const out = await sameRunAt(66);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(reads(out, /:read:auto:/).length, 7, reads(out).join(", "));
+});
+
+test("8.5.3 (#111, PR #108 review c): the agent cap still stops on real agents (one under the cap the real agents need)", async () => {
+  const out = await sameRunAt(65);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /^agent cap 65 reached: /);
+});
+
+test("8.5.3 (#111, PR #108 review b): auto pages over the per-check bound (20 pages) stop at the callers gate, naming the symbols and the hit count", async () => {
+  const s = happy();
+  const d = { hits: code("huge_pin", 1).concat(docs("huge_pin", 1001)), auto: docs("huge_pin", 1001) };
+  s["role:scope-and-plan"].changed_symbols = [mapCode("huge_pin", d)];
+  callersDisk(s, "infra:callers", { huge_pin: d });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "callers");
+  assert.match(out.result.reason, /^infra:callers: the auto lists of huge_pin \(1001 doc or lock hit\(s\)\) need 21 read\(s\); over the 20 auto reads a caller check may take/);
+  assert.equal(reads(out).length, 0, reads(out).join(", "));
+});
+
+test("8.5.3 (#111, PR #108 review b): 1000 doc hits (exactly 20 pages) are read with no stop", async () => {
+  const s = happy();
+  const d = { hits: code("big_pin", 1).concat(docs("big_pin", 1000)), auto: docs("big_pin", 1000) };
+  s["role:scope-and-plan"].changed_symbols = [mapCode("big_pin", d)];
+  callersDisk(s, "infra:callers", { big_pin: d });
+  for (let k = 10; k < 20; k++) s["infra:callers:read:auto:" + k] = s["infra:callers:read:auto:0"];
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.equal(reads(out, /:read:auto:/).length, 20, reads(out).join(", "));
 });

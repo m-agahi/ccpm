@@ -876,7 +876,8 @@ const READS = {
     "counts array": "parsed: state.ciCounts, bucket counts the script computed",
     "x integer": "parsed: a count or fix_rounds the script computed",
   },
-  dispatch: { "label string-re": "parsed: the script's own step label" },
+  // 8.5.3 (#111): + AUTO_READ_RE (caller-check auto reads sit outside the agent cap)
+  dispatch: { "label string-re": ["parsed: the script's own step label", 2] },
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
