@@ -57,6 +57,9 @@ REPO_ONLY = ('pre_freeze_hooks',)
 # 6.3.0 (ADR-1239): unattended mode, a bool in a profile or a repos override; off when unset
 # (not a default cap: with no key, the caps carry none)
 OPTIONAL = ('unattended',)
+# 8.5.6 (#108 item 8): the run's budget of output tokens, an integer in a profile or a repos override
+# (not a default cap: with no key the workflow's RUN_BUDGET applies)
+INTS = ('run_budget',)
 path = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'fleet', 'policy.json')
 
 
@@ -94,6 +97,11 @@ def caps_of(o, at):
             if not isinstance(v, list) or any(not isinstance(x, str) or not x or len(x) > 128 or x.startswith('-') or re.search(r'[\s\x00-\x1f\x7f]', x) for x in v):
                 raise Bad(at + '.pre_freeze_hooks must be a list of hook ids (non-empty strings, no whitespace, no leading -, at most 128 characters)')
             c[k] = list(v)
+            continue
+        if k in INTS:
+            if not isinstance(v, int) or isinstance(v, bool) or not 10000 <= v <= 100000000:
+                raise Bad(at + '.' + k + ' must be an integer 10000-100000000')
+            c[k] = v
             continue
         if k in OPTIONAL:
             if not isinstance(v, bool):
@@ -134,7 +142,7 @@ try:
         hit = None
         for i, p in enumerate(doc['profiles']):
             at = 'profiles[%d]' % i
-            keys(p, ('name', 'match', 'repos') + tuple(DEFAULT) + OPTIONAL, at)
+            keys(p, ('name', 'match', 'repos') + tuple(DEFAULT) + OPTIONAL + INTS, at)
             if not isinstance(p.get('name'), str) or not p['name']:
                 raise Bad(at + '.name must be a non-empty string')
             m = p.get('match')
@@ -148,7 +156,7 @@ try:
             over = []
             for g, rc in repos.items():
                 ra = at + '.repos[' + json.dumps(g) + ']'
-                keys(rc, tuple(DEFAULT) + REPO_ONLY + OPTIONAL, ra)
+                keys(rc, tuple(DEFAULT) + REPO_ONLY + OPTIONAL + INTS, ra)
                 over.append((g, caps_of(rc, ra)))
             if hit is None and (hosts is None or host in hosts) and any(fnmatch.fnmatchcase(owner, o) for o in owners):
                 hit = (p['name'], caps, over)

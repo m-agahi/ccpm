@@ -192,15 +192,18 @@ elif mode == 'write':
         f.write(msg)
     shutil.rmtree(real, ignore_errors=True)
     emit({'written': dest, 'sha256': expected, 'args': [scratch, run]})
-elif mode == 'park':
+elif mode in ('park', 'unpark'):
     # fleet 5.0.2 (ledger 2004): park <worktree> <plan path> <scratch> <run>:
     # move the stopped run's draft plan to <scratch>/parked/<run>/<plan path>
     # and leave the worktree as HEAD has it, with fixed git arguments and no
     # shell. Any dirty path other than the plan stops before a change (dirty).
+    # 8.5.6 (#108 step 3): unpark <worktree> <plan path> <scratch> <run> <sha256>:
+    # copy the audited draft <scratch>/parked/<run>/<plan path> back into a clean
+    # worktree; its bytes must hash to <sha256> (exit non-zero, nothing written)
     import subprocess
-    if len(sys.argv) != 6:
-        sys.exit('usage: park <worktree> <plan path> <scratch> <run>')
-    wt, plan, scratch, run = sys.argv[2:]
+    if len(sys.argv) != (6 if mode == 'park' else 7):
+        sys.exit('usage: park <worktree> <plan path> <scratch> <run> | unpark <worktree> <plan path> <scratch> <run> <sha256>')
+    wt, plan, scratch, run = sys.argv[2:6]
     parts = plan.split('/')
     if not plan or plan.startswith('/') or '\0' in plan or any(p in ('', '.', '..') for p in parts):
         sys.exit('bad plan path: ' + plan)
@@ -246,6 +249,32 @@ elif mode == 'park':
             if not os.path.isdir(cur):
                 sys.exit('not a directory: ' + cur)
     wreal = os.path.realpath(wt)
+    if mode == 'unpark':
+        want = sys.argv[6]
+        if not re.fullmatch(r'[0-9a-f]{64}', want):
+            sys.exit('bad sha256: ' + want)
+        sreal = os.path.realpath(scratch)
+        real_dirs(sreal, ['parked', run] + parts[:-1], False)
+        src = os.path.join(sreal, 'parked', run, plan)
+        if os.path.islink(src) or not os.path.isfile(src):
+            sys.exit('no parked draft at ' + src)
+        with open(src, 'rb') as f:
+            data = f.read(CAP + 1)
+        if hashlib.sha256(data).hexdigest() != want:
+            sys.exit('the parked draft hashes ' + hashlib.sha256(data).hexdigest() + ', not ' + want)
+        if dirty():
+            sys.exit('the worktree is not clean')
+        real_dirs(wt, parts[:-1], True)
+        dest = os.path.join(wt, plan)
+        if os.path.islink(dest) or not inside(os.path.dirname(dest), wreal):
+            sys.exit('refusing ' + dest)
+        fo = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+        try:
+            os.write(fo, data)
+        finally:
+            os.close(fo)
+        emit({'sha256': want, 'args': sys.argv[2:]})
+        sys.exit(0)
     real_dirs(wt, parts[:-1], False)
     src = os.path.join(wt, plan)
     if os.path.islink(src):
@@ -459,4 +488,4 @@ elif mode in ('claim', 'release', 'beat'):
             out['claimed'] = True
     emit(out)
 else:
-    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce> | beat <repo> <task id> <nonce>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | unpark <worktree> <plan path> <scratch> <run> <sha256> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce> | beat <repo> <task id> <nonce>')

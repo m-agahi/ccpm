@@ -263,6 +263,11 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
      and the last `gate_log` lines, and say what a human must decide. When the result has
      `options` (8.5.5: a plan-findings stop), show each option verbatim as a numbered choice.
    - `branch`, `rounds`, `cumulative`, `role_sha256`.
+   - `checkpoint`, unchanged, when the result has it (8.5.6: a plan stop after plan-audit approved,
+     a budget stop included). Say that step 6 run again with the same args, a fresh `run_nonce` and
+     `checkpoint: <the value from that result, unchanged>` resumes after the audit (no planner, no
+     audit) when the task, base HEAD and draft are unchanged. Pass it only from a result, never a
+     value you made.
    - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
      after the freeze returns both. This includes a build that ran in the same run as the plan
      (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8

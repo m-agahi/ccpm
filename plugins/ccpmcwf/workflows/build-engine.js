@@ -81,6 +81,7 @@ const INFRA_TIER = [
 ["infra:state-chunks", "sonnet"],
 ["infra:park-chunks", "sonnet"],
 ["infra:park-plan", "sonnet"],
+["infra:unpark-plan", "sonnet"],
 ["infra:format-", "sonnet"],
 ["infra:commit:", "sonnet"],
 ["infra:push", "sonnet"],
@@ -108,7 +109,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.5.5";
+const FLEET_VERSION = "8.5.6";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -179,7 +180,7 @@ const CALLER_LIMITS = [
 "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs", "budget"];
 const LEGACY_REF = "plan_ref from an unsupported fleet version; re-run plan";
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
@@ -1552,14 +1553,14 @@ const PROGRAM_SHA256 = {
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-"parked": "494e97658c92d03f229436aec1179f6d43cd7ea8ac69fabace0e3216cf88cdb3",
+"parked": "f30a4a7cc8b4efe72bb564c5fe8d20aa0d605b9f49e2e424837fa85da610a6e1",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
 "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
 "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
 "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
 "plan_ref": "283e77c031913136cc0ea9eeeea49db9d0897473dcc0e26721e638a8b2cb37a2",
 "plan_ref_write": "2b5b028ead902f1614cbff58e15c0e2bd07604ce3f4b6e606f8106676f4741a8",
-"policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
+"policy": "cc6e2915dfb969338e46d0dc114c870739727db275e513d63b2c0e71c49dae43",
 "pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
 "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
 "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
@@ -1671,6 +1672,7 @@ const PROGRAM_SLOTS = [
 [/^infra:fleet-branch/, [[null, "fleet_branch"]]],
 [/^infra:run-lock/, [[null, "parked"]]],
 [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
+[/^infra:unpark-plan$/, [[null, "parked"]]],
 [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
 [/^infra:format-(tests|code):/, [[null, "format_files"]]],
 [/^infra:format-plan/, [["format", "format_files"], ["dsn_check", "plan_dsn"]]],
@@ -1728,6 +1730,7 @@ const PROGRAM_KEYS = {
 "parked:write": ["written", "sha256", "args"],
 "parked:park": ["target", "clean", "dirty", "args"],
 "parked:retire": ["moved", "args"],
+"parked:unpark": ["sha256", "args"],
 "parked:claim": ["claimed", "again", "stale", "held_by", "lock", "args"],
 "parked:release": ["released", "absent", "held_by", "lock", "args"],
 "exclude_add": ["added", "exclude", "args"],
@@ -1932,7 +1935,7 @@ policy: {
 profile: STR_OR_NULL,
 file: STR,
 policy_sha256: STR_OR_NULL,
-caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL } },
+caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL, run_budget: INT } },
 matched: STR_OR_NULL,
 error: STR_OR_NULL,
 now: INT,
@@ -2583,6 +2586,7 @@ if (!f || typeof f !== "object" || Array.isArray(f) || !Array.isArray(f.rounds))
 out.unreadable = "findings of run " + k.run + " unparseable";
 gate("parked findings ignored (" + out.unreadable + ")");
 }
+if (f && typeof f === "object") Object.assign(out, { round: Number.isInteger(f.round) && f.round > 0 ? Math.min(f.round, MAX_AUDIT_ROUNDS) : 0, fp: /^[0-9a-f]{16}$/.test(f.fp) ? f.fp : null, src: f.src, ckpt: typeof f.ckpt === "string" ? f.ckpt : null });
 const rounds = f && typeof f === "object" && Array.isArray(f.rounds) ? f.rounds.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : [];
 if (rounds.length) {
 const crit = (c) => (Array.isArray(c) ? c.filter((x) => x && typeof x === "object").map((x) => ({ id: String(x.id || ""), text: String(x.text || "") })) : []);
@@ -3415,6 +3419,7 @@ const a = !!(p && p.caps && p.caps.unattended === true);
 const b = input.unattended === true;
 state.unattended = a && b ? "both" : a ? "policy" : b ? "arg" : null;
 state.unattendedSha = p ? p.policy_sha256 : null;
+state.runBudget = p && p.caps && p.caps.run_budget;
 if (state.unattended) gate("unattended mode on (" + state.unattended + ")");
 }
 function halt(status, msg, stopGate) {
@@ -3428,6 +3433,14 @@ return state.agents - state.pathChecks - state.autoReads - state.buildResets - s
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
 function tailWriter(l) {
 return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l));
+}
+const RUN_BUDGET = 600000;
+function budgetStop(at) {
+const n = Object.values(TOK).reduce((a, b) => a + b, 0);
+const cap = state.runBudget || RUN_BUDGET;
+if (n < cap) return;
+state.options = ["run again with the result's checkpoint or freeze_digest (when it has one): it resumes there", "raise run_budget in the policy file", "drop the task"];
+halt("needs_human", "run budget: " + n + " output tokens of " + cap + " spent before " + at, "budget");
 }
 function reserve(n, what) {
 if (capped() + n > MAX_AGENTS)
@@ -3869,6 +3882,7 @@ warnings: state.warnings || [],
 function finishStop(status, reason) {
 const out = finish(status, reason);
 if (state.relaunch) out.relaunch = state.relaunch;
+if (state.checkpoint) out.checkpoint = state.checkpoint;
 if (state.unverifiedPlanRef && status !== "ok" && status !== "awaiting_confirmation") {
 out.plan_ref = state.unverifiedPlanRef;
 out.plan_ref_verified = false;
@@ -4532,8 +4546,10 @@ criteria_by_round: (prior && Array.isArray(prior.criteria_by_round) ? prior.crit
 relaxed: ctx.relaxed || [],
 };
 noteRound(round, what, tagged, snap, symbols);
+budgetStop("re-plan round " + (round + 1));
 return planAndAudit(
 Object.assign({}, ctx, {
+resume: null,
 auditRound: round + 1,
 priorRound: next,
 suffix: roundSuffix(ctx.baseSuffix, round + 1),
@@ -5101,7 +5117,8 @@ return sha256Hex(JSON.stringify(findings.map((f) => JSON.stringify([n(what), n(f
 }
 function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate, fallback) {
 const r = ctx.auditRound || 0;
-const fp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]);
+const fp = (state.planFp = findingsFp(what, findings.length ? findings : [{ finding: fallback || what }]));
+state.audited = null;
 gate("plan findings fingerprint round " + r + ": " + fp);
 const human = findings.filter((f) => f.human_only === true);
 const same = ctx.lastFp === fp;
@@ -5136,7 +5153,17 @@ mode: "commit=false",
 if (ctx.priorDraft) plannerIn.prior_draft = ctx.priorDraft;
 if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
 if (ctx.planRs && ctx.planRs.checks.length) plannerIn.required_checks = ctx.planRs.checks;
-const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
+const rs = ctx.resume;
+state.audited = null;
+state.planRound = ctx.auditRound;
+state.planFp = ctx.lastFp || null;
+if (rs) {
+const a = [ctx.common.worktree, rs.path, ctx.common.scratch_dir, rs.run, rs.sha];
+const u = await infra("infra:unpark-plan", INFRA_STEP + "copy the audited draft plan back into the worktree.\n" + RUN_EXACT + progCmd("parked", ["unpark"].concat(a)) + "\nIt prints one JSON object " + printsKeys("parked:unpark") + '. Return {status: "ok", reason, ' + returnKeys("parked:unpark") + "}" + COPY_DIGEST, "Plan", INFRA_AGENT);
+requireProgram(u, "parked", "infra:unpark-plan");
+if (!relayDigestOk(u, progKeys("parked:unpark"), "parked") || canonical(u.args) !== canonical(a)) halt("failed", "infra:unpark-plan: the relay does not match the program's digest or arguments", "contract");
+}
+const plan = rs ? JSON.parse(rs.plan) : requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
 if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
 halt("failed", "scope-and-plan returned no plan_path/criteria");
 const ppBad = planPathProblem(plan.plan_path);
@@ -5152,6 +5179,7 @@ const hoHit = (x) => hos.some(([w, t]) => (x = nz(x)).includes(w) && x.includes(
 const red = (x) => (x === Object(x) ? (Object.keys(x).forEach((k) => k === HELD_OUT_KEY || (x[k] = red(x[k]))), x) : String(x) === x && hoHit(x) ? "(held-out text redacted)" : x);
 for (const f of state.findings) f.notes = f.notes.filter((n) => !hoHit(n));
 red(plan);
+const raw = JSON.stringify(stripHeldOut(plan));
 const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
 if (factsProblem) dr(factsProblem.msg.replace(/^role scope-and-plan contract drift: /, ""));
 const planPath = normPath(plan.plan_path);
@@ -5297,8 +5325,9 @@ halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify
 if (dc.holds) return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding: dsnFinding(planPath, dc.lines) }], plan.changed_symbols, plan, "db");
 const aEnv = dbInputs("audit");
 await pathRecheck("plan-audit" + sfx, "Plan");
+if (rs && dc.plan_sha256 !== rs.sha) halt("needs_human", fmtLabel + ": the resumed plan doc hashes " + dc.plan_sha256 + ", audited " + rs.sha, "scope");
 state.audits = (state.audits || 0) + 1;
-const audit = requireOk(
+const audit = rs ? { verdict: "approve" } : requireOk(
 "plan-audit",
 await callRole(
 "plan-audit",
@@ -5327,7 +5356,8 @@ audit.verdict ? "needs_human" : "failed",
 "audit",
 );
 }
-gate("plan-audit: approve");
+gate("plan-audit: approve" + (rs ? " (checkpoint of run " + rs.run + ")" : ""));
+state.audited = { plan: raw, sha: dc.plan_sha256, path: planPath, round: ctx.auditRound || 0, prior: ctx.priorRound || null, fp: ctx.lastFp || null, ex: plan[HELD_OUT_KEY] || [], criteria, held: rs ? rs.held : undefined };
 for (const f of audit.routed_findings || [])
 if (f && typeof f.finding === "string") gate("plan-audit advisory finding (approve): " + (f.criterion || "-") + ": " + f.finding);
 const gt = planScopePaths(planFacts, criteria).filter((p) => GATE_PATH_RE.test(p));
@@ -5386,9 +5416,9 @@ if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonica
 halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
 if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
 if (stagedSha !== ctx.auditedSha) halt("needs_human", stLabel + ": plan doc changed after audit: " + stagedSha + ", audited " + ctx.auditedSha, "scope");
-const heldOut = await heldOutWrite(ctx, stagedSha);
+const heldOut = (state.heldMeta = ctx.held !== undefined ? ctx.held : await heldOutWrite(ctx, stagedSha));
 const sealAt = (writers) => {
-const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
+const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) }, ctx.from && { resumed_from: ctx.from });
 return makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase, heldOut }));
 };
 let writers = 1;
@@ -5892,6 +5922,31 @@ halt("needs_human", tag + ": relayed message is a general delegation, but this l
 gate(tag + ": relayed message passes as a general delegation (confirm " + c + ", unattended " + (input.unattended === true) + "): " + t);
 return t;
 }
+function resumeOf(pk, want, head, src) {
+const c0 = pk && pk.ckpt;
+if (!c0 && !want) return null;
+let c = null;
+try {
+c = JSON.parse(c0);
+} catch (e) {}
+const why = !c0
+? "no parked checkpoint"
+: !want || want.run !== pk.run || want.sha256 !== sha256Hex(c0)
+? "args.checkpoint does not name it"
+: !c || typeof c.plan !== "string" || (c.held !== null && heldOutProblem(c.held))
+? "unusable"
+: c.v !== FLEET_VERSION
+? "parked by ccpmcwf " + c.v
+: c.src !== src
+? "the task source changed"
+: c.base !== head
+? "base HEAD " + c.base + " is now " + head
+: !pk.priorDraft || pk.priorDraft.plan_path !== c.path || sha256Hex(pk.priorDraft.text) !== c.sha
+? "the parked draft is not the audited one"
+: null;
+gate("checkpoint" + (pk ? " of run " + pk.run : "") + (why ? " not used (" + why + "): full plan" : ": resumed after plan-audit (no planner, no audit)"));
+return why ? null : Object.assign(c, { run: pk.run });
+}
 async function planMode(input, date) {
 const raw = typeof input.input === "string" ? input.input.trim() : "";
 const repo = cleanRepo(input.repo);
@@ -5980,6 +6035,10 @@ halt("needs_human", "branch " + lay.branch + " carries a plan commit of fleet 5.
 const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
 const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
 const parkedBad = !!(parked && parked.unreadable);
+const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, String(x.body).replace(/\s+/g, " ").trim()])]));
+const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
+const carry = ck || (parked && parked.src === src ? parked : null);
+if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
 await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 phase("Plan");
 let draft = null;
@@ -5987,11 +6046,17 @@ const parkOnStop = async (e) => {
 if (!draft) throw e;
 const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
 const ls = state.lastPlanStop || { rounds: [], symbols: [] };
+const au = state.audited;
+let ckpt = null;
+if (au) {
+const h = au.held !== undefined ? au.held : au.ex.length ? state.heldMeta || (await heldOutWrite({ heldOut: au.ex, worktree: lay.mainWt, fields: { taskId: names.taskId, planPath: au.path, criteria: au.criteria }, phaseName: "Plan" }, au.sha).catch(() => null)) : null;
+if (h || !au.ex.length || au.held !== undefined) ckpt = JSON.stringify({ plan: au.plan, sha: au.sha, path: au.path, round: au.round, prior: au.prior, fp: au.fp, held: h, base: scan.head, src, v: FLEET_VERSION });
+}
 const findings = {
 scratch: lay.scratch,
 run: state.nonce,
 chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
-c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
+c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft, round: state.planRound, fp: state.planFp, src, ckpt }))),
 };
 let pk = null;
 try {
@@ -6009,6 +6074,11 @@ pk = null;
 }
 const pr = pk && pk.status === "ok" ? pk.park : null;
 const parkOk = !!pr && typeof pr === "object" && relayDigestOk(pr, progKeys("parked:park"), "parked") && canonical(pr.args) === canonical([lay.mainWt, draft, lay.scratch, state.nonce]);
+const fw = pk && pk.status === "ok" && pk.findings_write;
+if (ckpt && parkOk && pr.target === dest && fw && relayDigestOk(fw, progKeys("parked:write"), "parked") && fw.sha256 === findings.c.expected) {
+state.checkpoint = { run: state.nonce, sha256: sha256Hex(ckpt) };
+gate("checkpoint parked: run " + state.nonce + ", sha256 " + state.checkpoint.sha256);
+}
 const note =
 parkOk && pr.clean === true
 ? pr.target === dest
@@ -6033,9 +6103,13 @@ let p, pc, blockers, runGates, decided;
 try {
 p = await planAndAudit({
 common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x),
-priorDraft: parked ? parked.priorDraft : null,
-priorRound: parked ? parked.priorRound : null,
+priorDraft: parked && !ck ? parked.priorDraft : null,
+priorRound: ck ? ck.prior : parked ? parked.priorRound : null,
+resume: ck,
+auditRound: carry ? carry.round : 0,
+lastFp: carry ? carry.fp : null,
 });
+budgetStop("the plan commit");
 blockers = confirm === "default" || ua ? defaultBlockers(p, input, raw) : [];
 if (parkedBad && (confirm === "default" || ua)) blockers.push(PARKED_UNREADABLE);
 decided = ua ? blockers.filter((b) => !/^plan touches IaC path/.test(b) && !(/^task id /.test(b) && !one)) : [];
@@ -6049,6 +6123,8 @@ after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
 planBase: scan.head,
 expectHead: scan.head,
 auditedSha: p.auditedSha,
+held: ck ? ck.held : undefined,
+from: ck ? ck.run : undefined,
 retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
 heldOut: p[HELD_OUT_KEY] || [],
 fields: {
@@ -7829,6 +7905,7 @@ null,
 if (tl) return testJudgeReplan(tl);
 phase("Freeze");
 await freeze();
+budgetStop("the coder");
 }
 phase("Code");
 const frozenNote =
@@ -8812,6 +8889,9 @@ stop(
 state.nonce = input.run_nonce;
 if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
 stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
+const ck = input.checkpoint;
+if (ck !== undefined && (mode !== "plan" || !ck || !NONCE_RE.test(ck.run) || !/^[0-9a-f]{64}$/.test(ck.sha256)))
+stop("needs_human", "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify(ck));
 try {
 return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
 } finally {
