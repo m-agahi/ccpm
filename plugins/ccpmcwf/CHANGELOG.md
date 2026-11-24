@@ -2,7 +2,7 @@
 
 ## [8.9.0] - 2026-11-24
 
-ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,547 B (+2,640 B; cap 520,000 B, ADR-1353).
+ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 477,673 B (+2,766 B; cap 520,000 B, ADR-1353).
 
 ### Added
 
@@ -15,18 +15,22 @@ ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` 
   one). A launch that reached the build re-runs the build with `plan_ref`: from the start (no
   builder wrote yet), from the freeze (`freeze_digest`, at the coder) or from the last run-state
   milestone (the step after it). A plan launch that built in the same run adds `confirm: "auto"`,
-  so the intent, command and scope gates run again. Each re-entry is at or before the failed check.
+  so the intent, command and scope gates run again; so does a build that re-planned and built the
+  new plan in the run (unattended `plan_wrong`). Each re-entry is at or before the failed check.
 - No clean resume point gives `action: "none"`: test writers wrote before the freeze, the frozen
-  tests changed after it, a coder or test writer wrote after the last milestone, or the plan park
-  left the draft in the worktree.
+  tests changed after it, a coder or test writer wrote after the last milestone, an update-branch
+  merge moved the worktree before its re-review's run-state, or the plan park left the draft in the
+  worktree. The no-args return carries `recover` too (safety, none).
 - `args.rerun_of` (any mode): a run nonce other than this run's (typeof checked before
   `NONCE_RE`). The engine records it in `auto_decisions` (gate `rerun`) and answers `none` to a
   second transient stop: at most one automatic re-run per user launch.
 - The skill (`build-task`): a new section "Recover". On `rerun` it re-launches the same Workflow
   once, in the same turn, with the stopped launch's args minus `checkpoint` and `freeze_digest`, a
   fresh `run_nonce` and every key of `recover.args`; `ask` shows the options verbatim and stops,
-  never picks one; `none` reports. It keeps `rerun_of` in every later launch of the request and
-  reports each automatic re-run.
+  never picks one; `none` means no automatic re-run (the per-gate rules, such as the `relaunch`
+  stop's next-turn re-launch, still apply). It keeps `rerun_of` in every later launch of the request
+  until the next human message, and reports each automatic re-run. A CI-unresolved re-run posts the
+  CI write-back once more.
 
 ### Changed
 

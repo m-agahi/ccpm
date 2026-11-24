@@ -3801,6 +3801,7 @@ const state = {
   // run-state milestone, a builder that wrote since the last clean point ("tests" or "code"), a park that left
   // the draft, and the run this one re-runs (args.rerun_of)
   launch: null,
+  launchRef: null,
   buildRef: null,
   milestone: null,
   dirty: null,
@@ -4436,7 +4437,8 @@ function recoverOf(status) {
     a.mode = "build";
     a.plan_ref = state.buildRef;
     // a plan launch that built in the same run: build mode runs the intent, command and scope gates again
-    if (state.launch === "plan") a.confirm = "auto";
+    // (a build that re-planned in this run builds a ref no human confirmed: the same)
+    if (state.launch === "plan" || state.buildRef !== state.launchRef) a.confirm = "auto";
     if (state.milestone) {
       if (state.dirty) return no("a coder or test writer ran after the run-state " + state.milestone);
     } else if (state.freezeDigest) {
@@ -7330,7 +7332,7 @@ async function buildMode(input, date) {
   const tp = tinyRefProblem(input.plan_ref);
   if (tp) stop("s", "needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
   const tiny = input.plan_ref;
-  state.buildRef = tiny;
+  state.buildRef = state.launchRef = tiny;
   const repo = cleanRepo(tiny.repo);
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
@@ -8343,6 +8345,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // ADR-1203 (Max, 2026-11-11): a base change in PR files: the forge's merge commit comes into the
   // worktree (parents and tree checked in script), is hashed, checked for hook surface and reviewed
   async function adoptUpdate(f) {
+    // 8.9.0: the worktree leaves the run-state's approved sha until the re-review's run-state (no clean resume point)
+    state.dirty = "code";
     const fr = await prState("infra:pr-fetch:u1", ["fetch", mainWt, branch, approvedSha, f.head, f.base], "bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)", "merge");
     if (fr.error !== null || fr.head !== f.head)
       halt("s", "needs_human", "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " and the base tip " + f.base + " (" + (fr.error || "head " + fr.head) + "): " + pr.pr_url, "merge");
@@ -10147,6 +10151,7 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
     stop_class: "safety",
     reason:
       "build-engine was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
+    recover: { class: "safety", action: "none" },
   };
 }
 

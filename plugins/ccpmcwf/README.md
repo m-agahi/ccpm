@@ -1167,15 +1167,20 @@ re-run enters at or before the failed check:
   step after it. A plan launch that built in the same run adds `confirm: "auto"`, so the intent,
   command and scope gates run again.
 - There is no clean resume point, so `action` is `none`: the test writers wrote before the freeze;
-  the frozen tests changed after it; a coder or test writer wrote after the last milestone; or the
-  plan park failed and left the draft in the worktree. A re-run there would stop on the dirty
-  worktree.
+  the frozen tests changed after it; a coder or test writer wrote after the last milestone; an
+  update-branch merge moved the worktree before its re-review wrote a run-state; or the plan park
+  failed and left the draft in the worktree. A re-run there would stop on the dirty worktree or on a
+  run-state mismatch.
+- A build that re-planned and built the new plan in the same run (unattended `plan_wrong`) also
+  adds `confirm: "auto"`: no human confirmed that plan ref.
 
 The five transient sites and their re-entry: a read-only step's null result (`dispatch`,
 `callRole`, `retryOnDrift`: the step runs again in the re-run, before or after the freeze, from
-the milestone before it); a ruleset read with no HTTP status (`hookReadStop`: plan, Code and the
-update-branch check all run after the resume point); CI unresolved (`buildFromRef`: the last
-milestone is `written_back`, so the re-run resumes at stats, ready, then the CI watch).
+the milestone before it); a ruleset read with no HTTP status (`hookReadStop`: the plan and Code
+reads run after the resume point; the read in the re-review after update-branch comes after the
+update moved the worktree, so it has no clean resume point and answers `none`); CI unresolved (`buildFromRef`: the last
+milestone is `written_back`, so the re-run resumes at stats, ready, then the CI watch; it posts the
+CI write-back once more).
 
 - The class rides on the Stop object, with its gate and options. A cleanup step that halts and
   swallows its own stop (the park, a CI write-back, main's teardown) never relabels the real stop;

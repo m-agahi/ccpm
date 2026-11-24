@@ -16,7 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARGS, PB, NONCE, DIST, HERE, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf } from "./harness.mjs";
+import { ARGS, PB, NONCE, DIST, HERE, HASHES, HASHES_FLAT, H, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K, stateJsonOf, commitStub } from "./harness.mjs";
 
 const SKILL = readFileSync(join(HERE, "..", "skills", "build-task", "SKILL.md"), "utf8");
 const README = readFileSync(join(HERE, "..", "README.md"), "utf8");
@@ -337,8 +337,65 @@ test("8.9.0: a swallowed halt before the real stop does not count (only stops ra
   s.__source = DIST.replace(/async function preflightStep\(([^)]*)\)\{/, (m) => m + 'try{halt("s","failed","early x")}catch(e){}');
   assert.notEqual(s.__source, DIST);
   const out = await run(s, ARGS);
+  assert.ok(out.result.gate_log.includes("early x"), "the injected halt ran");
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.equal(out.result.recover.action, "rerun");
+});
+
+// ---------------------------------------------------------------- review: re-plan and update-branch
+
+const PC2 = "0123456789ab";
+const PLAN_WRONG = { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: split AC2" }] };
+test("8.9.0 review: a build launch that re-planned and built the new plan in the run re-runs with confirm auto and the new plan_ref", async () => {
+  const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  Object.assign(s, {
+    "role:fleet-code-judge:r1": [PLAN_WRONG, null],
+    "infra:replan-worktree": [{ status: "ok", reason: "ok", head: plan.result.plan_ref.plan_commit }, { status: "ok", reason: "ok", head: PC2 }],
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "a".repeat(64) },
+    "infra:commit-plan:replan": commitStub(s.__store, PC2, "a".repeat(64)),
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }),
+    "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "role:fleet-intent-judge:replan": s["role:fleet-intent-judge"],
+  });
+  const bargs = Object.assign({}, ARGS, { mode: "build", plan_ref: plan.result.plan_ref, unattended: true });
+  delete bargs.input;
+  const out = await runOne(s, bargs);
+  assert.ok(out.labels.includes("infra:replan-reset"), out.labels.join(", "));
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.equal(out.result.recover.action, "rerun");
+  assert.equal(out.result.recover.args.confirm, "auto");
+  assert.notDeepEqual(out.result.recover.args.plan_ref, plan.result.plan_ref);
+  assert.equal(out.result.recover.args.plan_ref.plan_commit, PC2);
+});
+
+test("8.9.0 review: a stop after update-branch moved the worktree, before its run-state, has no clean resume point", async () => {
+  const s = happy();
+  s["infra:policy"] = polOut(PERSONAL);
+  s["infra:pr-merge"] = (p) => {
+    const a = inputsOf(p).args;
+    return { status: "ok", reason: "b", mode: "merge", merged: false, auto_enabled: false, method: "squash", merge_sha: null, blocked: "behind", merge_state: "BEHIND", head: a[4], branch_deleted: null, error: null, args: a };
+  };
+  s["infra:pr-update"] = (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: "d".repeat(40), base: "c".repeat(40), overlap: ["src/x.py"], error: null, args: inputsOf(p).args });
+  Object.assign(s, {
+    "hasher:update:u1": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" }, hashes: HASHES },
+    "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
+    "hasher:pre-review:v2": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" } },
+    "role:pr-review:v2": [null],
+  });
+  const out = await run(s, ARGS);
+  assert.ok(out.build.labels.includes("infra:pr-fetch:u1"), out.build.labels.join(", "));
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.equal(out.result.recover.action, "none");
+  assert.match(out.result.recover.why, /after the run-state written_back/);
+});
+
+test("8.9.0 review: the no-args return carries recover safety none", () => {
+  assert.match(DIST.replace(/\s+/g, ""), /stop_class:"safety",reason:"build-enginewasstartedwithoutargs[^"]*",recover:\{class:"safety",action:"none"\}/);
 });
 
 // ---------------------------------------------------------------- 5: rerun_of
@@ -382,6 +439,11 @@ test("8.9.0: the SKILL re-runs a recover rerun once, with a fresh nonce and reco
     "show each option verbatim as a numbered choice and stop",
     "never pick an option yourself",
     'recover.action` is `"none"`',
+    // review: none means no automatic re-run; the per-gate rules (relaunch next turn, iac-push, rulings) still apply
+    "`recover` decides only the automatic re-run; the per-gate rules elsewhere in this skill still apply",
+    "re-launched on the next turn as step 5 says",
+    "no automatic re-run. Report it as in step 9, then follow that stop's own rule in this skill",
+    "until the next human message",
     "never `resumeFromRunId`",
     "a newer human message",
   ])

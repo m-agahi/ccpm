@@ -298,8 +298,10 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
 ## Recover (8.9.0)
 
 Every stop result carries `recover: {class, action}` (null on `ok` and `awaiting_confirmation`). The
-workflow builds it in script code from the stop class and its own resume facts. Do what `action` says,
-and nothing else:
+workflow builds it in script code from the stop class and its own resume facts. `recover` decides only
+the automatic re-run; the per-gate rules elsewhere in this skill still apply (the `relaunch` stop is
+re-launched on the next turn as step 5 says, `iac-push` after Max pushed, step 8 with `confirm: "auto"`
+after a ruling):
 
 - `recover.action` is `"rerun"` (class `transient`): re-launch the same Workflow once, in the same turn,
   without asking. Use the args of the stopped launch minus `checkpoint` and `freeze_digest`, a fresh
@@ -309,8 +311,9 @@ and nothing else:
   launch-turn rule (step 5) holds. If a newer human message arrived during the run, do not re-run:
   report the stop as in step 9 and handle that message first.
 - Never more than one automatic re-run per user launch. After a re-run, keep `rerun_of` in every later
-  launch for this request (the `resume_with` hop too); the workflow then answers `"none"` to a second
-  transient stop. A second transient stop: report it as in step 9. `--auto` and unattended mode change
+  launch for this request until the next human message (the `resume_with` hop too); the workflow then
+  answers `"none"` to a second transient stop. A launch after a new human message (for example the
+  "Build" answer) is a new user launch. A second transient stop: report it as in step 9. `--auto` and unattended mode change
   nothing here.
 - `recover.action` is `"ask"` (class `judgment`): show each option verbatim as a numbered choice and stop.
   The options are for a human only: never pick an option yourself, also not in unattended mode (option 1
@@ -318,7 +321,8 @@ and nothing else:
 - `recover.action` is `"resume_build"` (class `mechanical`, `resume_with: "build"`): run step 8 once with
   `recover.args.plan_ref`, as step 6 says. It is a hop, not a re-run.
 - `recover.action` is `"none"` (class `safety`, or `transient` with `why`: no clean resume point, or the
-  run is already the re-run): report it as in step 9. Do not retry.
+  run is already the re-run): no automatic re-run. Report it as in step 9, then follow that stop's own
+  rule in this skill, if it has one.
 
 Report each automatic re-run in step 9: the first stop's `status`, `reason` and `stop_gate`, then the
 re-run's result. The re-run's `auto_decisions` records it (gate `rerun`).

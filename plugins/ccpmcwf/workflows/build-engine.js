@@ -3394,6 +3394,7 @@ stopGate:null,
 stopClass:null,
 stopLog:[],
 launch:null,
+launchRef:null,
 buildRef:null,
 milestone:null,
 dirty:null,
@@ -3940,7 +3941,7 @@ if(state.checkpoint)a.checkpoint=state.checkpoint;
 }else if(state.launch!=="probe"){
 a.mode="build";
 a.plan_ref=state.buildRef;
-if(state.launch==="plan")a.confirm="auto";
+if(state.launch==="plan"||state.buildRef!==state.launchRef)a.confirm="auto";
 if(state.milestone){
 if(state.dirty)return no("a coder or test writer ran after the run-state "+state.milestone);
 }else if(state.freezeDigest){
@@ -6510,7 +6511,7 @@ if(input.plan_ref&&typeof input.plan_ref==="object"&&"ref_path"in input.plan_ref
 const tp=tinyRefProblem(input.plan_ref);
 if(tp)stop("s","needs_human","args.plan_ref "+tp+": run /build-task again to re-plan");
 const tiny=input.plan_ref;
-state.buildRef=tiny;
+state.buildRef=state.launchRef=tiny;
 const repo=cleanRepo(tiny.repo);
 const lay=layoutKey(tiny.branch.slice("fleet/".length),repo);
 state.branch=lay.branch;
@@ -7409,6 +7410,7 @@ return done("CI red, reported with no code change: "+rep);
 }
 }
 async function adoptUpdate(f){
+state.dirty="code";
 const fr=await prState("infra:pr-fetch:u1",["fetch",mainWt,branch,approvedSha,f.head,f.base],"bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)","merge");
 if(fr.error!==null||fr.head!==f.head)
 halt("s","needs_human","green, merge blocked: the update-branch head "+f.head+" is not a plain forge merge of "+approvedSha+" and the base tip "+f.base+" ("+(fr.error||"head "+fr.head)+"): "+pr.pr_url,"merge");
@@ -9032,6 +9034,7 @@ status:"needs_human",
 stop_class:"safety",
 reason:
 "build-engine was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
+recover:{class:"safety",action:"none"},
 };
 }
 try{
