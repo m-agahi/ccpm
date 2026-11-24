@@ -173,7 +173,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
 
    Pass `args` as an object, not a JSON string. Wait for the result. Do not narrate progress.
 
-   Check `resume_with` first, before the per-mode rules below. A result with
+   Check `recover` first, as in the section "Recover" below: a `"rerun"` re-launches before
+   any rule here. Then check `resume_with`, before the per-mode rules below. A result with
    `resume_with: "build"` (6.3.0; status `needs_human`, stop gate `resume`): the branch already
    has build commits and its sealed plan ref. Do not ask: run step 8 once with that result's
    `plan_ref`, unchanged (it resumes at the last completed gate).
@@ -237,6 +238,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
                       run_nonce: "<fresh date +%s%N output>" } })
    ```
 
+   Check `recover` first on every build result, as in the section "Recover" below.
+
    Build mode needs no confirm mode after the user's "Build": `default` and `ask` build at once.
    For a repeat after a ruling on an auto-mode stop (also one under `default`), add
    `confirm: "auto"`: the workflow re-reads the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
@@ -262,6 +265,8 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
    - `status` and `reason`. `needs_human` means a gate stopped the run on purpose: quote the reason
      and the last `gate_log` lines, and say what a human must decide. When the result has
      `options` (8.5.5: a plan-findings stop), show each option verbatim as a numbered choice.
+     Show `stop_class` and `recover` (8.9.0). After an automatic re-run, report the first stop too
+     (see "Recover").
    - `branch`, `rounds`, `cumulative`, `role_sha256`.
    - `checkpoint`, unchanged, when the result has it (8.5.6: a plan stop after plan-audit approved,
      a budget stop included). Say that step 6 run again with the same args, a fresh `run_nonce` and
@@ -289,6 +294,38 @@ stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload
      store only the notes that end with an "(observed at <short sha>, <file:line>)" tag, and keep
      that tag in the stored memory text; show the other notes but do not offer to store them.
      Without a memory tool, show them all.
+
+## Recover (8.9.0)
+
+Every stop result carries `recover: {class, action}` (null on `ok` and `awaiting_confirmation`). The
+workflow builds it in script code from the stop class and its own resume facts. `recover` decides only
+the automatic re-run; the per-gate rules elsewhere in this skill still apply (the `relaunch` stop is
+re-launched on the next turn as step 5 says, `iac-push` after Max pushed, step 8 with `confirm: "auto"`
+after a ruling):
+
+- `recover.action` is `"rerun"` (class `transient`): re-launch the same Workflow once, in the same turn,
+  without asking. Use the args of the stopped launch minus `checkpoint` and `freeze_digest`, a fresh
+  `run_nonce` (`date +%s%N`), then set every key of `recover.args` to its value (it replaces a key of
+  the same name). When `recover.args.mode` is `"build"`, also drop `input`. Never build these values
+  yourself, and never `resumeFromRunId`. The latest human message is still the build request, so the
+  launch-turn rule (step 5) holds. If a newer human message arrived during the run, do not re-run:
+  report the stop as in step 9 and handle that message first.
+- Never more than one automatic re-run per user launch. After a re-run, keep `rerun_of` in every later
+  launch for this request until the next human message (the `resume_with` hop too); the workflow then
+  answers `"none"` to a second transient stop. A launch after a new human message (for example the
+  "Build" answer) is a new user launch. A second transient stop: report it as in step 9. `--auto` and unattended mode change
+  nothing here.
+- `recover.action` is `"ask"` (class `judgment`): show each option verbatim as a numbered choice and stop.
+  The options are for a human only: never pick an option yourself, also not in unattended mode (option 1
+  of a gate stop skips that gate).
+- `recover.action` is `"resume_build"` (class `mechanical`, `resume_with: "build"`): run step 8 once with
+  `recover.args.plan_ref`, as step 6 says. It is a hop, not a re-run.
+- `recover.action` is `"none"` (class `safety`, or `transient` with `why`: no clean resume point, or the
+  run is already the re-run): no automatic re-run. Report it as in step 9, then follow that stop's own
+  rule in this skill, if it has one.
+
+Report each automatic re-run in step 9: the first stop's `status`, `reason` and `stop_gate`, then the
+re-run's result. The re-run's `auto_decisions` records it (gate `rerun`).
 
 ## Policy file on first use
 

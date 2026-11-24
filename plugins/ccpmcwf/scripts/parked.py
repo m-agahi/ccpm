@@ -350,7 +350,7 @@ elif mode == 'retire' and len(sys.argv) == 4:
             os.rename(src, dest)
             moved = True
     emit({'moved': moved, 'args': [src, used]})
-elif mode in ('claim', 'release', 'beat'):
+elif mode in ('claim', 'release', 'beat', 'rerun'):
     # fleet 8.0.1 (#76): the per-task run lock <git-common-dir>/fleet/locks/<task id>.json.
     # claim <repo> <task id> <nonce> <plan|build>: O_CREAT|O_EXCL|O_NOFOLLOW, 0600; the same nonce
     # holds it again and refreshes its heartbeat; a lock whose heartbeat (else start) is over 12 h old
@@ -360,10 +360,14 @@ elif mode in ('claim', 'release', 'beat'):
     # beat <repo> <task id> <nonce> (8.3.2, #103): the hasher's per-gate heartbeat; rewrites the
     # heartbeat only of a lock that holds this nonce; never creates, moves or claims one.
     # The pid and host are for a human only; no symlink is followed on the way.
+    # rerun <repo> <task id> <nonce> (8.9.0, #108 step 6): the engine's once-only re-run marker
+    # <git-common-dir>/fleet/reruns/<task id>.json {nonce, time}, checked and set in one call. A marker
+    # of another nonce under RERUN_WINDOW old blocks; a malformed, unreadable or future one (over
+    # RERUN_SKEW ahead) blocks; none, this nonce's or an expired one is (re)written and marked true.
     import calendar, socket, subprocess, time
     n_args = 6 if mode == 'claim' else 5
     if len(sys.argv) != n_args:
-        sys.exit('usage: claim <repo> <task id> <nonce> <plan|build> | release|beat <repo> <task id> <nonce>')
+        sys.exit('usage: claim <repo> <task id> <nonce> <plan|build> | release|beat|rerun <repo> <task id> <nonce>')
     repo, task, nonce = sys.argv[2:5]
     run_mode = sys.argv[5] if mode == 'claim' else None
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', task):
@@ -380,12 +384,12 @@ elif mode in ('claim', 'release', 'beat'):
     if os.path.islink(common) or not os.path.isdir(common):
         sys.exit('refusing the git common dir ' + common)
     d = common
-    for part in ('fleet', 'locks'):
+    for part in ('fleet', 'reruns' if mode == 'rerun' else 'locks'):
         d = os.path.join(d, part)
         if os.path.islink(d):
             sys.exit('refusing a symlink at ' + d)
         if not os.path.lexists(d):
-            if mode != 'claim':
+            if mode not in ('claim', 'rerun'):
                 break
             try:
                 os.mkdir(d, 0o700)
@@ -395,6 +399,58 @@ elif mode in ('claim', 'release', 'beat'):
             sys.exit('refusing a symlink or file at ' + d)
     lock = os.path.join(common, 'fleet', 'locks', task + '.json')
     args = sys.argv[2:]
+    if mode == 'rerun':
+        # 24 h: a real re-run follows its stop within minutes, a run is dead after 12 h (the lock's
+        # stale horizon), and the next day's human launch re-runs again
+        RERUN_WINDOW, RERUN_SKEW = 24 * 3600, 300
+        mk = os.path.join(common, 'fleet', 'reruns', task + '.json')
+        out = {'marked': False, 'blocked': None, 'held_by': None, 'marker': mk, 'args': args}
+        prior = None
+        try:
+            fd = os.open(mk, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            fd = None
+        except OSError:
+            out['blocked'] = 'unreadable'
+            fd = None
+        if fd is not None:
+            try:
+                st = os.fstat(fd)
+                data = os.read(fd, 4097) if st.st_size <= 4096 else None
+            except OSError:
+                data = None
+            finally:
+                os.close(fd)
+            try:
+                j = json.loads(data.decode('utf-8')) if data is not None and len(data) <= 4096 else None
+            except (ValueError, UnicodeDecodeError):
+                j = None
+            ok = isinstance(j, dict) and isinstance(j.get('nonce'), str) and re.fullmatch(r'[A-Za-z0-9_.:-]{6,64}', j['nonce']) and isinstance(j.get('time'), str)
+            t0 = None
+            if ok:
+                try:
+                    t0 = calendar.timegm(time.strptime(j['time'], '%Y-%m-%dT%H:%M:%SZ'))
+                except ValueError:
+                    ok = False
+            if not ok:
+                out['blocked'] = 'malformed'
+            else:
+                prior = {'nonce': j['nonce'], 'time': j['time']}
+                age = time.time() - t0
+                if age < -RERUN_SKEW:
+                    out['blocked'] = 'future'
+                elif j['nonce'] != nonce and age < RERUN_WINDOW:
+                    out['blocked'] = 'recent'
+        out['held_by'] = prior
+        if out['blocked'] is None:
+            tmp = mk + '.tmp-' + str(os.getpid())
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                json.dump({'nonce': nonce, 'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}, f)
+            os.replace(tmp, mk)
+            out['marked'] = True
+        emit(out)
+        sys.exit(0)
     def holder():
         # (fields or None, inode, age in seconds); a young unreadable lock is held (a claim mid-write)
         try:
@@ -488,4 +544,4 @@ elif mode in ('claim', 'release', 'beat'):
             out['claimed'] = True
     emit(out)
 else:
-    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | unpark <worktree> <plan path> <scratch> <run> <sha256> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce> | beat <repo> <task id> <nonce>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | unpark <worktree> <plan path> <scratch> <run> <sha256> | retire <dir> <used> | claim <repo> <task id> <nonce> <mode> | release <repo> <task id> <nonce> | beat <repo> <task id> <nonce> | rerun <repo> <task id> <nonce>')

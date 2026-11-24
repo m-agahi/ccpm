@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.8.0";
+const FLEET_VERSION="8.9.0";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -1552,7 +1552,7 @@ const PROGRAM_SHA256 = {
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-"parked": "f30a4a7cc8b4efe72bb564c5fe8d20aa0d605b9f49e2e424837fa85da610a6e1",
+"parked": "60f378be58e54214b9d8688a0ba905feac5ab053f7e52981faeb7cbd2970d6ff",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
 "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
 "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
@@ -1732,6 +1732,7 @@ const PROGRAM_KEYS={
 "parked:unpark":["sha256","args"],
 "parked:claim":["claimed","again","stale","held_by","lock","args"],
 "parked:release":["released","absent","held_by","lock","args"],
+"parked:rerun":["marked","blocked","held_by","marker","args"],
 "exclude_add":["added","exclude","args"],
 "purge":["purged","args"],
 "plan_hash":["plan_sha256","blob","args"],
@@ -1845,6 +1846,9 @@ held_by:{type:["object","null"],additionalProperties:STR_OR_NULL},
 lock:STR,
 released:BOOL,
 absent:BOOL,
+marked:BOOL,
+blocked:STR_OR_NULL,
+marker:STR,
 args:STRS,
 digest:STR,
 },
@@ -3353,18 +3357,26 @@ inputsLine(inputs)+
 );
 }
 class Stop extends Error{
-constructor(status,reason){
+constructor(status,reason,from){
 super(reason);
 this.status=status;
 this.reason=reason;
+const f=from||{cls:state.stopClass,gate:state.stopGate,options:state.options||null,seq:state.stopLog.length-1};
+this.cls=f.cls;
+this.gate=f.gate;
+this.options=f.options;
+this.seq=f.seq;
 }
 }
 const STOP_CLASS={s:"safety",m:"mechanical",t:"transient",j:"judgment"};
 function stop(cls,status,reason){
 state.stopClass=cls&&cls.j?"judgment":(typeof cls==="string"&&Object.prototype.hasOwnProperty.call(STOP_CLASS,cls)&&STOP_CLASS[cls])||"safety";
 if(cls&&cls.j)state.options=cls.j;
+state.stopLog.push(state.stopClass);
 throw new Stop(status,reason);
 }
+const SEVERITY=["mechanical","transient","judgment","safety"];
+const worse=(a,b)=>(SEVERITY.indexOf(b)>SEVERITY.indexOf(a)?b:a);
 const state={
 mode:null,
 nonce:null,
@@ -3384,6 +3396,16 @@ roleSha:null,
 refreezeLog:[],
 stopGate:null,
 stopClass:null,
+stopLog:[],
+launch:null,
+launchRef:null,
+buildRef:null,
+milestone:null,
+dirty:null,
+parkDirty:false,
+rerunOf:null,
+rerunKey:null,
+relaxed:null,
 review:null,
 repo:null,
 pathChecks:0,
@@ -3588,6 +3610,7 @@ opts=Object.assign({},opts,{agentType:at});
 const tier=state.models[role];
 if(!tier)halt("s","needs_human","role "+role+" has no DISPATCH tier from preflight","contract");
 gate("model used: "+label+" -> "+tier.model);
+if(at===BUILDER_AGENT&&role!=="scope-and-plan")state.dirty=role==="fleet-test-writer"||state.dirty==="tests"?"tests":"code";
 const r=await agentT(prompt,Object.assign({},opts,{label,model:tier.model}));
 if(r!=null||!tier.fallback)return r;
 if(capped()+1>MAX_AGENTS){
@@ -3906,9 +3929,44 @@ warnings:state.warnings||[],
 ...(state.ciWriteBack?{ci_write_back:state.ciWriteBack}:{}),
 ...(state.unattended?{unattended:true,unattended_source:state.unattended,auto_decisions:state.autoDecisions}:state.autoDecisions.length?{auto_decisions:state.autoDecisions}:{}),
 ...(state.options&&status==="needs_human"?{options:state.options}:{}),
+recover:recoverOf(status),
 };
 }
-function finishStop(status,reason){
+function recoverOf(status){
+if(status==="ok"||status==="awaiting_confirmation")return null;
+const c=state.stopClass||"safety";
+if(c==="judgment")return{class:c,action:"ask",options:state.options||[]};
+if(c==="mechanical"&&state.buildRef)return{class:c,action:"resume_build",args:{mode:"build",plan_ref:state.buildRef}};
+if(c!=="transient")return{class:c==="mechanical"?c:"safety",action:"none"};
+const no=(why)=>({class:c,action:"none",why});
+if(state.rerunOf)return no("this run is already the automatic re-run of run "+state.rerunOf);
+const a={mode:state.launch};
+if(state.launch==="plan"&&!state.buildRef){
+if(state.parkDirty)return no("the draft plan is still in the worktree (the park failed)");
+if(state.checkpoint)a.checkpoint=state.checkpoint;
+}else if(state.launch!=="probe"){
+a.mode="build";
+a.plan_ref=state.buildRef;
+if(state.launch==="plan"||state.buildRef!==state.launchRef){
+a.confirm="auto";
+if(state.relaxed&&state.relaxed.length)return no("a relaxed re-plan: build mode cannot re-check its deviations");
+}
+if(state.milestone){
+if(state.dirty)return no("a coder or test writer ran after the run-state "+state.milestone);
+}else if(state.freezeDigest){
+if(state.dirty==="tests"||state.refreezeLog.length)return no("the frozen tests changed after the freeze");
+a.freeze_digest=state.freezeDigest;
+}else if(state.dirty)return no("the test writers wrote before the freeze");
+}
+a.rerun_of=state.nonce;
+return{class:c,action:"rerun",args:a};
+}
+function finishStop(e){
+state.stopClass=state.stopLog.slice(e.seq+1).reduce(worse,e.cls||"safety");
+state.stopGate=e.gate;
+state.options=e.options;
+const status=e.status;
+const reason=e.reason;
 const out=finish(status,reason);
 if(state.relaunch)out.relaunch=state.relaunch;
 if(state.checkpoint)out.checkpoint=state.checkpoint;
@@ -4181,7 +4239,7 @@ if(state.lock)return;
 const a=[repo,task,state.nonce,state.mode];
 const r=await infra("infra:run-lock",lockStep("claim",a),ph,INFRA_AGENT);
 requireProgram(r,"parked","infra:run-lock");
-if(r.claimed===true)state.lock={a:a.slice(0,3),path:r.lock};
+if(r.claimed===true)(state.lock={a:a.slice(0,3),path:r.lock}),(state.rerunKey=[repo,task]);
 if(!lockOk(r,"claim",a)||typeof r.claimed!=="boolean")halt("s","failed","infra:run-lock: relay off its digest or args");
 const h=r.held_by||{};
 if(!r.claimed)halt("s","needs_human","task "+task+" is held by run "+h.nonce+" ("+h.mode+", started "+h.started+"); a closed session does not end a run: check /workflows (or the run's task output) for run "+h.nonce+" before you delete "+r.lock);
@@ -4199,6 +4257,30 @@ const ic=infraCall(label,lockStep("release",l.a),{schema:INFRA_SCHEMA,agentType:
 r=await agentT(ic.prompt,Object.assign({},ic.opts,{label,model:infraModel(label)}));
 }catch(e){}
 gate((r&&r.status==="ok"&&lockOk(r,"release",l.a)&&(r.released||r.absent)?"":"warning: not confirmed: ")+"run lock "+l.path+" released");
+}
+async function rerunGuard(out){
+const rc=out&&out.recover;
+if(!rc||rc.action!=="rerun")return out;
+const no=(why)=>{
+out.recover={class:rc.class,action:"none",why};
+return out;
+};
+const k=state.rerunKey;
+if(!k)return no("no task run lock was claimed, so the engine marker has no key");
+const a=[k[0],k[1],state.nonce];
+const label="infra:run-lock:rerun";
+let r=null;
+try{
+state.agents++;
+const ic=infraCall(label,lockStep("rerun",a),{schema:INFRA_SCHEMA,agentType:INFRA_AGENT,phase:"Cleanup"});
+r=await agentT(ic.prompt,Object.assign({},ic.opts,{label,model:infraModel(label)}));
+}catch(e){
+r=null;
+}
+if(!r||r.status!=="ok"||programProblem(r,"parked")||!lockOk(r,"rerun",a)||typeof r.marked!=="boolean")return no("the engine marker step failed (no digest-checked relay)");
+if(r.marked===true&&r.blocked===null)return out;
+if(r.blocked==="recent")return no("already re-run once (engine marker)");
+return no("the engine marker is "+(r.blocked==="future"?"from the future":"unreadable or malformed")+" (engine marker)");
 }
 async function branchSlug(repo,names){
 const args=[repo,names.taskId,names.source];
@@ -6059,6 +6141,7 @@ const rtiny=sref?{branch:lay.branch,plan_commit:sref.target,plan_ref:sref.name,r
 if(rtiny&&!tinyRefProblem(rtiny)){
 state.stopGate="resume";
 state.stopClass="mechanical";
+state.buildRef=rtiny;
 gate("branch has build commits (first: "+built[0].sha+"); resume_with build: plan_ref "+sref.name+" at "+sref.target);
 return Object.assign(finish("needs_human","branch has build commits; resume_with build: run build with plan_ref "+sref.name+" (it resumes at the last completed gate)"),{resume_with:"build",plan_ref:rtiny});
 }
@@ -6129,7 +6212,8 @@ log("park-plan"+note);
 throw e;
 }
 gate("park-plan"+note);
-throw new Stop(e.status,e.reason+note);
+state.parkDirty=!(parkOk&&pr.clean===true);
+throw new Stop(e.status,e.reason+note,e);
 };
 const confirm0=input.confirm===undefined||markerAsk?"ask":input.confirm;
 const confirm=un&&input.user_confirm!=="ask"&&!(input.confirm==="ask"&&!input.brief_marker)?"auto":confirm0;
@@ -6203,6 +6287,7 @@ return awaiting("plan ready: confirm, then run mode build with plan_ref"+ledgerS
 }
 if(confirm==="default")gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
 phase("Auto-confirm");
+if(ua&&p.relaxed.length)state.relaxed=p.relaxed;
 const g=await autoGates({
 sfx:"",
 common,
@@ -6460,6 +6545,7 @@ if(input.plan_ref&&typeof input.plan_ref==="object"&&"ref_path"in input.plan_ref
 const tp=tinyRefProblem(input.plan_ref);
 if(tp)stop("s","needs_human","args.plan_ref "+tp+": run /build-task again to re-plan");
 const tiny=input.plan_ref;
+state.buildRef=state.launchRef=tiny;
 const repo=cleanRepo(tiny.repo);
 const lay=layoutKey(tiny.branch.slice("fleet/".length),repo);
 state.branch=lay.branch;
@@ -6545,6 +6631,7 @@ return{joined,partOk,countOf,readParts};
 }
 async function buildFromRef(input,date,tiny,lay,ws,opt){
 state.mode="build";
+state.buildRef=tiny;
 const repo=cleanRepo(tiny.repo);
 phase("Verify");
 const refTask=PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
@@ -7037,12 +7124,14 @@ if(r.head!==approvedSha)halt("s","failed",label+": the run-state landed on "+r.h
 if(typeof r.state_sha!=="string"||!/^[0-9a-f]{40}$/.test(r.state_sha))halt("s","failed",label+" returned no usable state_sha");
 if(frozen)frozen.git[FLEETREF+stateRef]=r.state_sha;
 gate("run-state "+lastGate+" at "+approvedSha);
+state.milestone=lastGate;
+state.dirty=null;
 }
 async function ship(from){
 try{
 return await shipSteps(from);
 }catch(e){
-if(e instanceof Stop&&skipWb)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop&&skipWb)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 }
@@ -7355,6 +7444,7 @@ return done("CI red, reported with no code change: "+rep);
 }
 }
 async function adoptUpdate(f){
+state.dirty="code";
 const fr=await prState("infra:pr-fetch:u1",["fetch",mainWt,branch,approvedSha,f.head,f.base],"bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)","merge");
 if(fr.error!==null||fr.head!==f.head)
 halt("s","needs_human","green, merge blocked: the update-branch head "+f.head+" is not a plain forge merge of "+approvedSha+" and the base tip "+f.base+" ("+(fr.error||"head "+fr.head)+"): "+pr.pr_url,"merge");
@@ -7433,7 +7523,7 @@ async function ciGuard(fn){
 try{
 return await fn();
 }catch(e){
-if(e instanceof Stop)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 }
@@ -7571,6 +7661,7 @@ comment_status:resume.comment_status,
 comment_text:resume.comment_text,
 };
 const next=RESUME_NEXT[resume.last_gate];
+state.milestone=resume.last_gate;
 if(next==="done"){
 gate("resuming at done: run-state shipped at "+approvedSha+"; returning the recorded result");
 return finishOk("done");
@@ -7924,6 +8015,7 @@ frozen.git[FLEETREF+freezeRefName]=freezeTree;
 setFreezeDigest();
 }
 function setFreezeDigest(){
+state.dirty=null;
 state.freezeDigest=freezeDigestOf(tiny.ref_sha256,freezeTree,frozen,state.refreezeLog.length>0);
 state.freezePlanRef=tiny;
 }
@@ -8308,7 +8400,7 @@ lastRoundGate=fix.gate;
 phase("Code");
 }
 }catch(e){
-if(e instanceof Stop&&state.prUpdated)await ciWriteBack(ciStopCode(state.stopGate,e.reason));
+if(e instanceof Stop&&state.prUpdated)await ciWriteBack(ciStopCode(e.gate,e.reason));
 throw e;
 }
 return finishOk(frozenResume?"frozen":resumedAt);
@@ -8519,6 +8611,7 @@ else if(state.unattended){
 state.autoReplanned=true;
 autoDecide("plan_wrong","build",who+" re-plan "+n+": the auto gates, then the build in this run"+(prHead?"; the PR is open: the new commits go on its head "+prHead+", never force-pushed":""));
 reserve(autoGateAgents(p.planFacts.commands),"the re-plan's auto gates");
+if(p.relaxed.length)state.relaxed=p.relaxed;
 const g=await autoGates({sfx:":replan",common,mainWt:lay.mainWt,planCommit:newHead,brief,callerRepo:brief.repo,branch:lay.branch,defaultBranch:common.default_branch,criteria:p.criteria,planPath:p.planPath,planDiff:p.planDiff,planFacts:p.planFacts,files:p.testable.reduce((a,c)=>a.concat(c.test_files),[]),relaxed:p.relaxed});
 if(!g.ok)return autoFailResult(g,p.planPath,pc.tiny);
 Object.assign(state,{rounds:{tests:0,code:0},freezeDigest:null,gatesNotRun:null,gates:{},review:null});
@@ -8922,6 +9015,7 @@ const mode=input.mode;
 if(MODES.indexOf(mode)<0)
 stop("s","needs_human","args.mode must be \"plan\", \"build\" or \"probe\", got "+JSON.stringify(mode===undefined?null:mode)+": run /build-task <task>");
 state.mode=mode;
+state.launch=mode;
 log(mode+" "+String(input.input||(input.plan_ref||{}).plan_ref||input.repo).slice(0,60));
 if(input.confirm!==undefined&&CONFIRMS.indexOf(input.confirm)<0)
 stop("s","needs_human","args.confirm must be \"ask\", \"auto\" or \"default\", got "+JSON.stringify(input.confirm));
@@ -8944,6 +9038,13 @@ stop("s","needs_human","args.freeze_digest must be the 64-hex freeze_digest a bu
 const ck=input.checkpoint;
 if(ck!==undefined&&(mode!=="plan"||!ck||typeof ck.run!=="string"||!NONCE_RE.test(ck.run)||typeof ck.sha256!=="string"||!/^[0-9a-f]{64}$/.test(ck.sha256)))
 stop("s","needs_human","args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got "+JSON.stringify(ck));
+const ro=input.rerun_of;
+if(ro!==undefined&&(typeof ro!=="string"||!NONCE_RE.test(ro)||ro===input.run_nonce))
+stop("s","needs_human","args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got "+JSON.stringify(ro));
+if(ro!==undefined){
+state.rerunOf=ro;
+autoDecide("rerun","rerun","the automatic re-run of run "+ro+" after a transient stop");
+}
 try{
 return await(mode==="plan"?planMode(input,input.date):mode==="probe"?probeMode(input):buildMode(input,input.date));
 }finally{
@@ -8968,11 +9069,14 @@ status:"needs_human",
 stop_class:"safety",
 reason:
 "build-engine was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
+recover:{class:"safety",action:"none"},
 };
 }
+let out;
 try{
-return await main(input);
+out=await main(input);
 }catch(e){
-if(e instanceof Stop)return finishStop(e.status,e.reason);
-throw e;
+if(!(e instanceof Stop))throw e;
+out=finishStop(e);
 }
+return await rerunGuard(out);

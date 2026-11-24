@@ -1,5 +1,59 @@
 # Changelog
 
+## [8.9.0] - 2026-11-24
+
+ccpmcwf 8.9.0 (yaadgaar `#108` step 6, ADR-1387, ADR-1397, ADR-1406): `recover` on every stop result, and the skill re-runs a transient stop once. The engine derives `recover` in script code from the stop class and its own resume facts; no reason text and no agent decides it. The dist grows from 474,907 B to 479,110 B (+4,203 B; cap 520,000 B, ADR-1353).
+
+### Added
+
+- Every result carries `recover` (null on `ok` and `awaiting_confirmation`): safety
+  `{action: "none"}`; judgment `{action: "ask", options}` (the script options, for a human only);
+  mechanical (`resume_with: "build"`) `{action: "resume_build", args: {mode: "build", plan_ref}}`;
+  transient `{action: "rerun", args}` or `{action: "none", why}`.
+- A transient re-run's `args` hold `mode`, the resume handle and `rerun_of` (this run's nonce). A
+  plan launch stopped before its build re-runs the plan (with the parked `checkpoint` when there is
+  one). A launch that reached the build re-runs the build with `plan_ref`: from the start (no
+  builder wrote yet), from the freeze (`freeze_digest`, at the coder) or from the last run-state
+  milestone (the step after it). A plan launch that built in the same run adds `confirm: "auto"`,
+  so the intent, command and scope gates run again; so does a build that re-planned and built the
+  new plan in the run (unattended `plan_wrong`). Each re-entry is at or before the failed check.
+- No clean resume point gives `action: "none"`: test writers wrote before the freeze, the frozen
+  tests changed after it, a coder or test writer wrote after the last milestone, an update-branch
+  merge moved the worktree before its re-review's run-state, or the plan park left the draft in the
+  worktree. The no-args return carries `recover` too (safety, none).
+- A relaxed plan built in the run (unattended plan launch or in-run re-plan) answers `none` (review
+  B1 of #116): the relaxed list is not sealed in the plan ref, and the build-mode `:rerun` gates get
+  no list, so a re-run would skip the per-item deviation check. The list never goes into
+  `recover.args`.
+- `args.rerun_of` (any mode): a run nonce other than this run's (typeof checked before
+  `NONCE_RE`). The engine records it in `auto_decisions` (gate `rerun`) and answers `none` to a
+  second transient stop: at most one automatic re-run per user launch.
+- The engine-side once-only guard (Max's ruling on #116): a result with `action: "rerun"` checks
+  and sets `<git-common-dir>/fleet/reruns/<task id>.json` with the new `parked.py rerun` mode
+  (`infra:run-lock:rerun`, after the lock release). Another run's marker under 24 h old gives
+  `none` ("already re-run once (engine marker)"), so a skill that drops `rerun_of` cannot loop.
+  A malformed, unreadable or future marker, a bad relay, or a stop before the run lock (no task
+  id) also gives `none`. The marker only removes a re-run. A transient stop before the run lock,
+  such as a null intake result, therefore no longer re-runs. A human launch within 24 h of an
+  automatic re-run of the same task gets `none` on a transient stop.
+- The skill (`build-task`): a new section "Recover". On `rerun` it re-launches the same Workflow
+  once, in the same turn, with the stopped launch's args minus `checkpoint` and `freeze_digest`, a
+  fresh `run_nonce` and every key of `recover.args`; `ask` shows the options verbatim and stops,
+  never picks one; `none` means no automatic re-run (the per-gate rules, such as the `relaunch`
+  stop's next-turn re-launch, still apply). It keeps `rerun_of` in every later launch of the request
+  until the next human message, and reports each automatic re-run. A CI-unresolved re-run posts the
+  CI write-back once more.
+
+### Changed
+
+- The class, gate and options ride on the `Stop` object, with its place in the run's stop order
+  (review S3 of #115). A cleanup step that halts and swallows its own stop (the park, a CI
+  write-back, main's teardown) no longer relabels the real stop's gate or options; when it is more
+  severe (safety > judgment > transient), the result takes that class, so a swallowed relay
+  mismatch blocks the re-run (ADR-1406). A stop raised before the real one does not count.
+- The CI write-back after a stop takes its stop code from the real Stop's gate.
+- `docs/stop-classes.md` regenerated (the `rerun_of` argument stop, safety).
+
 ## [8.8.0] - 2026-11-24
 
 ccpmcwf 8.8.0 (yaadgaar `#108` step 5, ADR-1397): a stop class on every stop site. The class is fixed in script code at each site; no agent grades it. No stop becomes a repair (step 6 adds `recover` and the skill re-run, keyed on the class). The dist grows from 471,307 B to 474,907 B (+3,600 B; cap 520,000 B, ADR-1353).

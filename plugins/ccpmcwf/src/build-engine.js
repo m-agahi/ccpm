@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.8.0";
+const FLEET_VERSION = "8.9.0";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1740,7 +1740,7 @@ const PROGRAM_SHA256 = {
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
   "mutants": "0cc10629a5376f55f10309b5de3fa5c0a80140dc64b3f9c82e6c37ac76879b21",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "f30a4a7cc8b4efe72bb564c5fe8d20aa0d605b9f49e2e424837fa85da610a6e1",
+  "parked": "60f378be58e54214b9d8688a0ba905feac5ab053f7e52981faeb7cbd2970d6ff",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "33394c10417545129c5c056cd2a4dd075198f3c786b123c8b3ad8226cf37d11b",
   "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
@@ -1948,6 +1948,7 @@ const PROGRAM_KEYS = {
   // 8.0.1 (#76)
   "parked:claim": ["claimed", "again", "stale", "held_by", "lock", "args"],
   "parked:release": ["released", "absent", "held_by", "lock", "args"],
+  "parked:rerun": ["marked", "blocked", "held_by", "marker", "args"],
   "exclude_add": ["added", "exclude", "args"],
   "purge": ["purged", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
@@ -2074,6 +2075,10 @@ const PROGRAM_OUT = {
     lock: STR,
     released: BOOL,
     absent: BOOL,
+    // 8.9.0 (#108 step 6): rerun mode (held_by above: the prior marker {nonce, time})
+    marked: BOOL,
+    blocked: STR_OR_NULL,
+    marker: STR,
     args: STRS,
     digest: STR,
   },
@@ -3745,11 +3750,18 @@ function commentsPostPrompt(inputs) {
 
 // ---------------------------------------------------------------- run state
 
+// 8.9.0 (#108 step 6, S3): a Stop carries the class, gate and options of the site that threw it, and its place
+// in the run's stop order; a cleanup halt that a catch swallows never relabels it (from: the Stop it re-throws)
 class Stop extends Error {
-  constructor(status, reason) {
+  constructor(status, reason, from) {
     super(reason);
     this.status = status;
     this.reason = reason;
+    const f = from || { cls: state.stopClass, gate: state.stopGate, options: state.options || null, seq: state.stopLog.length - 1 };
+    this.cls = f.cls;
+    this.gate = f.gate;
+    this.options = f.options;
+    this.seq = f.seq;
   }
 }
 // 8.8.0 (#108 step 5, ADR-1397): every stop site names its class in script code, first argument: "s" safety
@@ -3759,8 +3771,12 @@ const STOP_CLASS = { s: "safety", m: "mechanical", t: "transient", j: "judgment"
 function stop(cls, status, reason) {
   state.stopClass = cls && cls.j ? "judgment" : (typeof cls === "string" && Object.prototype.hasOwnProperty.call(STOP_CLASS, cls) && STOP_CLASS[cls]) || "safety";
   if (cls && cls.j) state.options = cls.j;
+  state.stopLog.push(state.stopClass);
   throw new Stop(status, reason);
 }
+// 8.9.0: two stops compete (a cleanup halt after the real one): the most severe class wins
+const SEVERITY = ["mechanical", "transient", "judgment", "safety"];
+const worse = (a, b) => (SEVERITY.indexOf(b) > SEVERITY.indexOf(a) ? b : a);
 
 const state = {
   mode: null,
@@ -3784,6 +3800,22 @@ const state = {
   refreezeLog: [],
   stopGate: null,
   stopClass: null,
+  // 8.9.0: the class of every stop raised, in order (Stop.seq indexes it)
+  stopLog: [],
+  // 8.9.0 (#108 step 6): the resume facts recover reads: the launch mode, the tiny ref being built, the last
+  // run-state milestone, a builder that wrote since the last clean point ("tests" or "code"), a park that left
+  // the draft, and the run this one re-runs (args.rerun_of)
+  launch: null,
+  launchRef: null,
+  buildRef: null,
+  milestone: null,
+  dirty: null,
+  parkDirty: false,
+  rerunOf: null,
+  // 8.9.0 (#108 step 6): [repo, task id] of the run lock this run claimed (the engine re-run marker's key)
+  rerunKey: null,
+  // 8.9.0 (review B1 of #116): the relaxed list of a plan this run sent to autoGates (never relayed)
+  relaxed: null,
   review: null,
   // the repo the PATH re-checks name, and their count
   repo: null,
@@ -4033,6 +4065,8 @@ async function roleAgent(role, label, prompt, opts) {
   const tier = state.models[role];
   if (!tier) halt("s", "needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
   gate("model used: " + label + " -> " + tier.model);
+  // 8.9.0: a test writer or coder may leave the worktree dirty (the planner's draft is parked on a plan stop)
+  if (at === BUILDER_AGENT && role !== "scope-and-plan") state.dirty = role === "fleet-test-writer" || state.dirty === "tests" ? "tests" : "code";
   const r = await agentT(prompt, Object.assign({}, opts, { label, model: tier.model }));
   if (r != null || !tier.fallback) return r;
   if (capped() + 1 > MAX_AGENTS) {
@@ -4389,9 +4423,52 @@ function finish(status, reason) {
     ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
     ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : state.autoDecisions.length ? { auto_decisions: state.autoDecisions } : {}),
     ...(state.options && status === "needs_human" ? { options: state.options } : {}),
+    recover: recoverOf(status),
   };
 }
-function finishStop(status, reason) {
+// 8.9.0 (#108 step 6, ADR-1387, ADR-1406): what the skill does with a stop, from the script-fixed class and the
+// run's own resume facts only (never from reason text). A transient re-run re-enters at or before its failed check:
+// a plan re-run (or the parked checkpoint: after the audit); a build re-run from the start (no builder wrote yet),
+// from the freeze (freeze_digest: the coder) or from the last run-state milestone (the step after it).
+function recoverOf(status) {
+  if (status === "ok" || status === "awaiting_confirmation") return null;
+  const c = state.stopClass || "safety";
+  if (c === "judgment") return { class: c, action: "ask", options: state.options || [] };
+  if (c === "mechanical" && state.buildRef) return { class: c, action: "resume_build", args: { mode: "build", plan_ref: state.buildRef } };
+  if (c !== "transient") return { class: c === "mechanical" ? c : "safety", action: "none" };
+  const no = (why) => ({ class: c, action: "none", why });
+  if (state.rerunOf) return no("this run is already the automatic re-run of run " + state.rerunOf);
+  const a = { mode: state.launch };
+  if (state.launch === "plan" && !state.buildRef) {
+    if (state.parkDirty) return no("the draft plan is still in the worktree (the park failed)");
+    if (state.checkpoint) a.checkpoint = state.checkpoint;
+  } else if (state.launch !== "probe") {
+    a.mode = "build";
+    a.plan_ref = state.buildRef;
+    // a plan launch that built in the same run: build mode runs the intent, command and scope gates again
+    // (a build that re-planned in this run builds a ref no human confirmed: the same)
+    if (state.launch === "plan" || state.buildRef !== state.launchRef) {
+      a.confirm = "auto";
+      // review B1 of #116: the relaxed list is not sealed in the plan ref, and the build-mode gates get none
+      if (state.relaxed && state.relaxed.length) return no("a relaxed re-plan: build mode cannot re-check its deviations");
+    }
+    if (state.milestone) {
+      if (state.dirty) return no("a coder or test writer ran after the run-state " + state.milestone);
+    } else if (state.freezeDigest) {
+      if (state.dirty === "tests" || state.refreezeLog.length) return no("the frozen tests changed after the freeze");
+      a.freeze_digest = state.freezeDigest;
+    } else if (state.dirty) return no("the test writers wrote before the freeze");
+  }
+  a.rerun_of = state.nonce;
+  return { class: c, action: "rerun", args: a };
+}
+function finishStop(e) {
+  // the class, gate and options of the real stop; a later (swallowed) stop only makes the class more severe
+  state.stopClass = state.stopLog.slice(e.seq + 1).reduce(worse, e.cls || "safety");
+  state.stopGate = e.gate;
+  state.options = e.options;
+  const status = e.status;
+  const reason = e.reason;
   const out = finish(status, reason);
   if (state.relaunch) out.relaunch = state.relaunch;
   if (state.checkpoint) out.checkpoint = state.checkpoint;
@@ -4724,7 +4801,8 @@ async function lockClaim(repo, task, ph) {
   const r = await infra("infra:run-lock", lockStep("claim", a), ph, INFRA_AGENT);
   requireProgram(r, "parked", "infra:run-lock");
   // a relay that claimed is released (nonce-matched), even when it fails its check
-  if (r.claimed === true) state.lock = { a: a.slice(0, 3), path: r.lock };
+  // 8.9.0 (#108 step 6): the held lock's task id also keys the engine re-run marker
+  if (r.claimed === true) (state.lock = { a: a.slice(0, 3), path: r.lock }), (state.rerunKey = [repo, task]);
   if (!lockOk(r, "claim", a) || typeof r.claimed !== "boolean") halt("s", "failed", "infra:run-lock: relay off its digest or args");
   const h = r.held_by || {};
   if (!r.claimed) halt("s", "needs_human", "task " + task + " is held by run " + h.nonce + " (" + h.mode + ", started " + h.started + "); a closed session does not end a run: check /workflows (or the run's task output) for run " + h.nonce + " before you delete " + r.lock);
@@ -4743,6 +4821,35 @@ async function lockRelease() {
     r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   } catch (e) {}
   gate((r && r.status === "ok" && lockOk(r, "release", l.a) && (r.released || r.absent) ? "" : "warning: not confirmed: ") + "run lock " + l.path + " released");
+}
+// 8.9.0 (#108 step 6, Max's ruling on #116): the engine-side once-only guard. A result whose recover is a
+// re-run checks and sets <git-common-dir>/fleet/reruns/<task id>.json (parked.py rerun) after main's
+// finally; only a digest-checked marked true keeps the re-run, anything else is none. The marker can only
+// remove a re-run: it is never read for any other stop or for any check. Never halts (it runs after the
+// result is made).
+async function rerunGuard(out) {
+  const rc = out && out.recover;
+  if (!rc || rc.action !== "rerun") return out;
+  const no = (why) => {
+    out.recover = { class: rc.class, action: "none", why };
+    return out;
+  };
+  const k = state.rerunKey;
+  if (!k) return no("no task run lock was claimed, so the engine marker has no key");
+  const a = [k[0], k[1], state.nonce];
+  const label = "infra:run-lock:rerun";
+  let r = null;
+  try {
+    state.agents++;
+    const ic = infraCall(label, lockStep("rerun", a), { schema: INFRA_SCHEMA, agentType: INFRA_AGENT, phase: "Cleanup" });
+    r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  } catch (e) {
+    r = null;
+  }
+  if (!r || r.status !== "ok" || programProblem(r, "parked") || !lockOk(r, "rerun", a) || typeof r.marked !== "boolean") return no("the engine marker step failed (no digest-checked relay)");
+  if (r.marked === true && r.blocked === null) return out;
+  if (r.blocked === "recent") return no("already re-run once (engine marker)");
+  return no("the engine marker is " + (r.blocked === "future" ? "from the future" : "unreadable or malformed") + " (engine marker)");
 }
 // 7.3.0 (#43): the slug of the one existing local branch fleet/<task id>-<slug> (an intake title varies per run)
 // review fix: only a slug the program proves this task's (the sealed plan ref names its branch and this source)
@@ -6808,6 +6915,7 @@ async function planMode(input, date) {
     state.stopGate = "resume";
     // mechanical: the skill runs build with this plan_ref (a deterministic hop)
     state.stopClass = "mechanical";
+    state.buildRef = rtiny;
     gate("branch has build commits (first: " + built[0].sha + "); resume_with build: plan_ref " + sref.name + " at " + sref.target);
     return Object.assign(finish("needs_human", "branch has build commits; resume_with build: run build with plan_ref " + sref.name + " (it resumes at the last completed gate)"), { resume_with: "build", plan_ref: rtiny });
   }
@@ -6885,7 +6993,8 @@ async function planMode(input, date) {
       throw e;
     }
     gate("park-plan" + note);
-    throw new Stop(e.status, e.reason + note);
+    state.parkDirty = !(parkOk && pr.clean === true);
+    throw new Stop(e.status, e.reason + note, e);
   };
   const confirm0 = input.confirm === undefined || markerAsk ? "ask" : input.confirm;
   // 6.3.0: unattended decides the Build confirmation (auto), unless the user asked to confirm ("ask" with no brief marker)
@@ -6965,6 +7074,8 @@ async function planMode(input, date) {
   }
   if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
   phase("Auto-confirm");
+  // 8.9.0 (review B1 of #116): a relaxed plan built in this run never re-runs (recoverOf)
+  if (ua && p.relaxed.length) state.relaxed = p.relaxed;
   const g = await autoGates({
     sfx: "",
     common,
@@ -7266,6 +7377,7 @@ async function buildMode(input, date) {
   const tp = tinyRefProblem(input.plan_ref);
   if (tp) stop("s", "needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
   const tiny = input.plan_ref;
+  state.buildRef = state.launchRef = tiny;
   const repo = cleanRepo(tiny.repo);
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
@@ -7360,6 +7472,7 @@ function partReader(o) {
 }
 async function buildFromRef(input, date, tiny, lay, ws, opt) {
   state.mode = "build";
+  state.buildRef = tiny;
   const repo = cleanRepo(tiny.repo);
   // load the sealed ref from its local tag object
   phase("Verify");
@@ -7913,6 +8026,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("s", "failed", label + " returned no usable state_sha");
     if (frozen) frozen.git[FLEETREF + stateRef] = r.state_sha;
     gate("run-state " + lastGate + " at " + approvedSha);
+    state.milestone = lastGate;
+    state.dirty = null;
   }
   // delta review SHOULD 1: after update-branch the review, stats, ready and CI steps are the CI tail:
   // a stop in any of them writes the CI outcome back (enum stop code), then stops
@@ -7920,7 +8035,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     try {
       return await shipSteps(from);
     } catch (e) {
-      if (e instanceof Stop && skipWb) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
+      if (e instanceof Stop && skipWb) await ciWriteBack(ciStopCode(e.gate, e.reason));
       throw e;
     }
   }
@@ -8275,6 +8390,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // ADR-1203 (Max, 2026-11-11): a base change in PR files: the forge's merge commit comes into the
   // worktree (parents and tree checked in script), is hashed, checked for hook surface and reviewed
   async function adoptUpdate(f) {
+    // 8.9.0: the worktree leaves the run-state's approved sha until the re-review's run-state (no clean resume point)
+    state.dirty = "code";
     const fr = await prState("infra:pr-fetch:u1", ["fetch", mainWt, branch, approvedSha, f.head, f.base], "bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)", "merge");
     if (fr.error !== null || fr.head !== f.head)
       halt("s", "needs_human", "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " and the base tip " + f.base + " (" + (fr.error || "head " + fr.head) + "): " + pr.pr_url, "merge");
@@ -8367,7 +8484,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     try {
       return await fn();
     } catch (e) {
-      if (e instanceof Stop) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
+      if (e instanceof Stop) await ciWriteBack(ciStopCode(e.gate, e.reason));
       throw e;
     }
   }
@@ -8521,6 +8638,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         comment_text: resume.comment_text,
       };
     const next = RESUME_NEXT[resume.last_gate];
+    state.milestone = resume.last_gate;
     if (next === "done") {
       gate("resuming at done: run-state shipped at " + approvedSha + "; returning the recorded result");
       return finishOk("done");
@@ -8912,6 +9030,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   function setFreezeDigest() {
+    state.dirty = null;
     state.freezeDigest = freezeDigestOf(tiny.ref_sha256, freezeTree, frozen, state.refreezeLog.length > 0);
     state.freezePlanRef = tiny;
   }
@@ -9343,7 +9462,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       phase("Code");
     }
   } catch (e) {
-    if (e instanceof Stop && state.prUpdated) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
+    if (e instanceof Stop && state.prUpdated) await ciWriteBack(ciStopCode(e.gate, e.reason));
     throw e;
   }
 
@@ -9568,6 +9687,7 @@ async function replan(ctx) {
     state.autoReplanned = true;
     autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run" + (prHead ? "; the PR is open: the new commits go on its head " + prHead + ", never force-pushed" : ""));
     reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
+    if (p.relaxed.length) state.relaxed = p.relaxed;
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
     Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, gates: {}, review: null });
@@ -10012,6 +10132,7 @@ async function main(input) {
   if (MODES.indexOf(mode) < 0)
     stop("s", "needs_human", "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
+  state.launch = mode;
   // 8.0.1: meta.name is a literal; the first narrator line tells two live runs apart
   log(mode + " " + String(input.input || (input.plan_ref || {}).plan_ref || input.repo).slice(0, 60));
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
@@ -10039,6 +10160,14 @@ async function main(input) {
   const ck = input.checkpoint;
   if (ck !== undefined && (mode !== "plan" || !ck || typeof ck.run !== "string" || !NONCE_RE.test(ck.run) || typeof ck.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(ck.sha256)))
     stop("s", "needs_human", "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify(ck));
+  // 8.9.0 (#108 step 6): the run this launch re-runs automatically (the skill copies it from recover.args)
+  const ro = input.rerun_of;
+  if (ro !== undefined && (typeof ro !== "string" || !NONCE_RE.test(ro) || ro === input.run_nonce))
+    stop("s", "needs_human", "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON.stringify(ro));
+  if (ro !== undefined) {
+    state.rerunOf = ro;
+    autoDecide("rerun", "rerun", "the automatic re-run of run " + ro + " after a transient stop");
+  }
   // the run's test database goes, whatever the result
   try {
     return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
@@ -10068,12 +10197,15 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
     stop_class: "safety",
     reason:
       "build-engine was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
+    recover: { class: "safety", action: "none" },
   };
 }
 
+let out;
 try {
-  return await main(input);
+  out = await main(input);
 } catch (e) {
-  if (e instanceof Stop) return finishStop(e.status, e.reason);
-  throw e;
+  if (!(e instanceof Stop)) throw e;
+  out = finishStop(e);
 }
+return await rerunGuard(out);
