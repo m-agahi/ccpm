@@ -3361,7 +3361,7 @@ this.reason=reason;
 }
 const STOP_CLASS={s:"safety",m:"mechanical",t:"transient",j:"judgment"};
 function stop(cls,status,reason){
-state.stopClass=cls&&cls.j?"judgment":STOP_CLASS[cls]||"safety";
+state.stopClass=cls&&cls.j?"judgment":(typeof cls==="string"&&Object.prototype.hasOwnProperty.call(STOP_CLASS,cls)&&STOP_CLASS[cls])||"safety";
 if(cls&&cls.j)state.options=cls.j;
 throw new Stop(status,reason);
 }
@@ -4985,8 +4985,10 @@ PRINTS_ONE+printsKeys("hook_surface")+". "+COPY_ALL+", error null included"+RECO
 "Return {status, reason, "+returnKeys("hook_surface")+"}."
 );
 }
-function hookReadStop(err){
-halt(/HTTP None/.test(err)?"t":"s","needs_human","hook surface cannot be computed ("+err+"); "+(/HTTP None/.test(err)?"transient GitHub read failure; re-run":"hook change needs Max's confirmation"),"hooks");
+const HTTP_NONE_RE=/^(repo \S+|rules of \S+ branch \S+|org rulesets of \S+) not readable \((page \d+: )?HTTP None(: |\))/;
+function hookReadStop(err,gh){
+const t=gh===true&&HTTP_NONE_RE.test(err);
+halt(t?"t":"s","needs_human","hook surface cannot be computed ("+err+"); "+(t?"transient GitHub read failure; re-run":"hook change needs Max's confirmation"),"hooks");
 }
 async function hookSurface(label,worktree,rev,targets,phaseName,got){
 const r=got?got("hook_surface"):await infra(label,hookSurfacePrompt({worktree,rev,targets}),phaseName,JUDGE_AGENT,"hook_surface",[worktree,rev,JSON.stringify(targets)]);
@@ -5083,7 +5085,7 @@ requireProgram(r,"ruleset_surface",label,"needs_human","hooks");
 if(!Array.isArray(r.surface)||!Array.isArray(r.sources)||!Array.isArray(r.read)||!Array.isArray(r.unreadable)||!relayDigestOk(r,progKeys("ruleset_surface"),"ruleset_surface"))
 halt("s","failed",label+": the relayed surface"+NOT_DIGEST);
 if(canonical(r.args)!==canonical(args))halt("s","failed",label+": "+OTHER_ARGS);
-if(r.error!==null)hookReadStop(r.error);
+if(r.error!==null)hookReadStop(r.error,true);
 for(const u of r.unreadable)gate("warning: "+u);
 const np=(x)=>(String(x)==="./"?"./":/\/$/.test(String(x))?normPath(String(x))+"/":normPath(String(x)));
 const str=(x)=>(typeof x==="string"?logPath(x).slice(0,200):null);

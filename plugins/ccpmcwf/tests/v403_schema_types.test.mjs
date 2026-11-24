@@ -539,6 +539,13 @@ const READS = {
   // 8.5.5: only a script producer sets human_only (the plan-audit findings lose the key before this read)
   // 8.8.0 (#108 step 5): only an identifier-shaped name reaches the judgment options
   J_SYMS: { "x string-re": "parsed: a symbol the script holds (changed_symbols or a caller part), named in the options text only" },
+  // 8.8.0 (review of #115): S2, a class code is a script literal; a non-string or a prototype key is safety
+  stop: { "cls string": "parsed: a class code literal of the call site (typeof-checked, own key of STOP_CLASS)" },
+  // B1: gh is the literal true of the rulesetSurface caller; err is a program's error string, anchored
+  hookReadStop: {
+    "gh boolean": "parsed: the literal true of the rulesetSurface caller (=== true)",
+    "err string-re": "prog:ruleset_surface:error",
+  },
   planFindingsStop: {
     "f.human_only boolean": PARSED_LOCAL,
     "x string": "parsed: a finding's symbol or criterion, named in the options text only",

@@ -1,5 +1,5 @@
 // fleet 7.4.0 (#36, L2143, 6.3.2 review lows; Max ruled "All five"):
-// - B1: a hook-surface read that failed with no HTTP status tells Max to re-run, not to confirm
+// - B1: a ruleset-surface read that failed with no HTTP status tells Max to re-run, not to confirm
 //   a hook change.
 // - B2, B3: the failed-relay routing of hook_surface and ruleset_surface is pinned.
 // - B5: the cap-lift tests skip where the hard RLIMIT_AS leaves nothing to lift.
@@ -21,14 +21,18 @@ function hsOk(error) {
   return () => ({ status: "ok", reason: "read", surface: [], make_paths: {}, error });
 }
 
-test("7.4.0 #36 H1: a hook_surface error with HTTP None stops with the re-run text, not the confirmation text", async () => {
+// 8.8.0 (review of #115, B1), changed on purpose: hook_surface.py makes no GitHub call, so it never
+// writes this error; its errors name repo files, and a path holding "HTTP None" must not turn the stop
+// into a re-run. Only the ruleset_surface stop below gets the re-run text.
+test("7.4.0 #36 H1: a hook_surface error holding HTTP None keeps the confirmation text (8.8.0: never a re-run)", async () => {
   const s = happy();
   s["infra:hook-surface:plan"] = hsOk("repo o/r not readable (HTTP None: runtime: out of memory)");
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "hooks");
-  assert.ok(out.result.reason.includes(TRANSIENT), out.result.reason);
-  assert.ok(!out.result.reason.includes(CONFIRM), out.result.reason);
+  assert.equal(out.result.stop_class, "safety");
+  assert.ok(!out.result.reason.includes(TRANSIENT), out.result.reason);
+  assert.ok(out.result.reason.includes(CONFIRM), out.result.reason);
   assert.ok(out.result.reason.includes("HTTP None: runtime: out of memory"), out.result.reason);
 });
 

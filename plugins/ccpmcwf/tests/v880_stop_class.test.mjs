@@ -6,91 +6,27 @@
 // 3. The safety categories of ADR-1397 stay safety (pinned by site text).
 // 4. docs/stop-classes.md lists every site, in source order, with its function and class.
 // 5. The result carries stop_class next to stop_gate (null on ok and awaiting_confirmation).
+// 6. Review of #115: B1, a hook_surface error is never transient (it names repo files; only
+//    ruleset_surface.py's own error shape is); S1, no alias of halt/stop/planFindingsStop hides a site;
+//    S2, a prototype key ("constructor") is no class. The table is generated (stop_classes_doc.mjs).
 //
 // Run: node --test plugins/ccpmcwf/tests/v880_stop_class.test.mjs
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { HERE, SOURCE, ARGS, PB, happy, run, runOne } from "./harness.mjs";
+import { SOURCE, ARGS, PB, happy, run, runOne, inputsOf, programOf, programSha, relayDigestOf, K } from "./harness.mjs";
+
+import { ATOM, stopSites, classProblem, classNames, valueUses, render, DOC as DOC_PATH } from "./stop_classes_doc.mjs";
 
 const DOC = (() => {
   try {
-    return readFileSync(join(HERE, "..", "docs", "stop-classes.md"), "utf8");
+    return readFileSync(DOC_PATH, "utf8");
   } catch {
     return "";
   }
 })();
 const CLASSES = ["safety", "mechanical", "judgment", "transient"];
-const ATOM = /^("[smt]"|J_[A-Z0-9_]+(\([^?:]*\))?)$/;
-const NAME = { '"s"': "safety", '"m"': "mechanical", '"t"': "transient", '"j"': "judgment" };
-const nameOf = (a) => NAME[a] || (/^J_/.test(a) ? "judgment" : "?");
-
-// the call sites of halt(, the global stop( and planFindingsStop( in a source text, with their class
-// argument (the text up to the first comma at depth 0) and the column-0 function they sit in
-export function stopSites(text) {
-  const lines = text.split("\n");
-  const blank = lines.map((l) => (/^\s*\/\//.test(l) ? "" : l)).join("\n");
-  const re = /(^|[^A-Za-z0-9_$.])(halt|stop|planFindingsStop)\(/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(blank))) {
-    const at = m.index + m[1].length;
-    const lineStart = blank.lastIndexOf("\n", at) + 1;
-    if (/function\s+$/.test(blank.slice(lineStart, at))) continue;
-    // the end of the class argument (comma) or of the call (closing parenthesis), strings skipped
-    const scan = (i, comma) => {
-      let depth = 0;
-      let q = null;
-      for (; i < blank.length; i++) {
-        const c = blank[i];
-        if (q) {
-          if (c === "\\") i++;
-          else if (c === q) q = null;
-          continue;
-        }
-        if (c === '"' || c === "'" || c === "`") q = c;
-        else if ("([{".includes(c)) depth++;
-        else if (")]}".includes(c)) {
-          if (depth-- === 0) break;
-        } else if (comma && c === "," && depth === 0) break;
-      }
-      return i;
-    };
-    const open = at + m[2].length + 1;
-    const cls = blank.slice(open, scan(open, true)).trim();
-    const line = blank.slice(0, at).split("\n").length;
-    let fn = "(top)";
-    for (let k = line - 1; k >= 0; k--) {
-      const f = /^(?:async )?function (\w+)/.exec(lines[k]);
-      if (f) {
-        fn = f[1];
-        break;
-      }
-    }
-    out.push({ callee: m[2], cls, line, fn, text: blank.slice(at, Math.min(scan(open, false) + 1, at + 800)) });
-  }
-  return out;
-}
-export function classProblem(s) {
-  // planFindingsStop's own halt and halt's stop pass their caller's class on
-  if (s.cls === "cls" && ((s.callee === "halt" && s.fn === "planFindingsStop") || (s.callee === "stop" && s.fn === "halt"))) return null;
-  if (s.callee === "planFindingsStop" && s.cls === '"j"') return null;
-  if (ATOM.test(s.cls)) return null;
-  const t = /^([^?]+)\?\s*([^:]+?)\s*:\s*(.+)$/s.exec(s.cls);
-  if (t && ATOM.test(t[2]) && ATOM.test(t[3])) return null;
-  return "line " + s.line + " (" + s.fn + "): " + s.callee + "(" + s.cls + ", ...) names no stop class";
-}
-// the class names a site's argument can produce, e.g. "transient / safety"
-export function classNames(s) {
-  if (s.cls === "cls") return "per caller";
-  const t = /^([^?]+)\?\s*([^:]+?)\s*:\s*(.+)$/s.exec(s.cls);
-  if (!t || ATOM.test(s.cls)) return nameOf(s.cls);
-  const a = nameOf(t[2]);
-  const b = nameOf(t[3]);
-  return a === b ? a : a + " / " + b;
-}
 const SITES = stopSites(SOURCE);
 
 // ---------------------------------------------------------------- 1: coverage
@@ -106,6 +42,34 @@ test("8.8.0: the coverage scan refuses an unclassified site (a new halt without 
   const s = stopSites(src);
   assert.equal(s.length, 8);
   assert.deepEqual(s.map((x) => !!classProblem(x)), [true, true, false, false, false, true, false, true]);
+});
+
+test("8.8.0 review S1: halt, stop and planFindingsStop are never used as a value (an alias hides a site)", () => {
+  assert.deepEqual(valueUses(SOURCE), []);
+  // mutation: an alias, an array element and an argument are refused; a call, a declaration, a property,
+  // an object key, a string and a comment are not
+  const m = valueUses('const hh = halt;\nhh("needs_human", "x");\n[stop][0]("s", "x");\nf(planFindingsStop);\nx.stop = 1;\nconst o = { stop: 1 };\nhalt("s", "x");\nfunction stop(a) {}\nconst t = "halt";\n// halt\n');
+  assert.deepEqual(m, ["line 1: halt used as a value", "line 3: stop used as a value", "line 4: planFindingsStop used as a value"]);
+  // and the mutated engine fails the check
+  const mutated = SOURCE.replace("function reserve(n, what) {", "const hh = halt;\nfunction reserve(n, what) {");
+  assert.notEqual(mutated, SOURCE);
+  assert.equal(valueUses(mutated).length, 1);
+});
+
+test("8.8.0 review S2: a prototype key is no stop class (constructor, toString, __proto__ fall back to safety)", () => {
+  const at = SOURCE.indexOf("function stop(cls, status, reason) {");
+  const body = /^const STOP_CLASS = .*$/m.exec(SOURCE)[0] + "\n" + SOURCE.slice(at, SOURCE.indexOf("\n}\n", at) + 3);
+  const state = {};
+  const stop = new Function("state", "Stop", body + "\nreturn stop;")(state, class extends Error {});
+  const cls = (c) => {
+    try {
+      stop(c, "needs_human", "x");
+    } catch {}
+    return state.stopClass;
+  };
+  assert.deepEqual(["constructor", "toString", "__proto__", "hasOwnProperty", "q", undefined, null, 3].map(cls), Array(8).fill("safety"));
+  assert.deepEqual(["s", "m", "t", "j"].map(cls), ["safety", "mechanical", "transient", "judgment"]);
+  assert.equal(cls({ j: ["a", "b"] }), "judgment");
 });
 
 test("8.8.0: only stop() and the park re-throw build a Stop; the direct finish stops set the class", () => {
@@ -195,6 +159,15 @@ test("8.8.0: the safety categories of ADR-1397 are classed safety", () => {
 
 // ---------------------------------------------------------------- 4: the classification table
 
+test("8.8.0 review: docs/stop-classes.md is the generator's output for the source (run tests/stop_classes_doc.mjs)", () => {
+  assert.ok(DOC === render(SOURCE), "docs/stop-classes.md is stale: run node plugins/ccpmcwf/tests/stop_classes_doc.mjs");
+  // the tables are prettier-ignored, so the hook keeps them byte for byte
+  assert.equal((DOC.match(/^<!-- prettier-ignore -->\n\|/gm) || []).length, 3);
+  // mutation: a new site changes the table
+  const mutated = SOURCE.replace("function reserve(n, what) {", 'function reserve(n, what) {\n  if (n < 0) halt("s", "failed", "negative");');
+  assert.notEqual(render(mutated), render(SOURCE));
+});
+
 test("8.8.0: docs/stop-classes.md lists every site in source order with its function and class", () => {
   const rows = DOC.split("\n").filter((l) => /^\|\s*\d+\s*\|/.test(l)).map((l) => l.split(/(?<!\\)\|/).map((x) => x.trim()));
   assert.equal(rows.length, SITES.length, "the table has " + rows.length + " rows, the source " + SITES.length + " sites");
@@ -274,4 +247,45 @@ test("8.8.0: an argument stop (no halt) is safety", async () => {
   const out = await runOne(happy(), Object.assign({}, ARGS, { confirm: "maybe" }));
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_class, "safety");
+});
+
+// ---------------------------------------------------------------- 6: review B1, the hook-surface read stop
+
+const TRANSIENT = "transient GitHub read failure; re-run";
+const CONFIRM = "hook change needs Max's confirmation";
+const hsErr = (error) => () => ({ status: "ok", reason: "read", surface: [], make_paths: {}, error });
+function rsErr(p, error) {
+  const r = { status: "failed", reason: "the program reported an error", surface: [], sources: [], read: [], unreadable: [], error, args: inputsOf(p).args };
+  r.program = programOf("ruleset_surface");
+  r.file_sha256 = programSha("ruleset_surface");
+  r.digest = relayDigestOf(r, K("ruleset_surface"));
+  return r;
+}
+async function hookStop(slot, relay) {
+  const s = happy();
+  s[slot] = relay;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "hooks", out.result.reason);
+  return out.result;
+}
+
+test("8.8.0 review B1: a hook_surface error naming a path that holds HTTP None stays safety, with the confirmation text", async () => {
+  for (const e of ["hook or CI file .github/workflows/HTTP None.yml is over 1 MiB or unreadable", "hook file x (HTTP None) is over 1 MiB or unreadable", "repo o/r not readable (HTTP None: runtime: out of memory)"]) {
+    const r = await hookStop("infra:hook-surface:plan", hsErr(e));
+    assert.equal(r.stop_class, "safety", e);
+    assert.ok(r.reason.includes(CONFIRM) && !r.reason.includes(TRANSIENT), r.reason);
+  }
+});
+
+test("8.8.0 review B1: a ruleset_surface error is transient only in the program's own shape", async () => {
+  for (const e of ["repo o/r not readable (HTTP None: runtime: out of memory)", "rules of o/r branch master not readable (HTTP None)", "rules of o/r branch master not readable (page 2: HTTP None: gh crashed)", "org rulesets of o not readable (HTTP None) with the admin:org scope"]) {
+    const r = await hookStop("infra:ruleset-surface:plan", (p) => rsErr(p, e));
+    assert.equal(r.stop_class, "transient", e);
+    assert.ok(r.reason.includes(TRANSIENT), r.reason);
+  }
+  for (const e of ["hook file HTTP None.yml not readable (HTTP None)", "x repo o/r not readable (HTTP None)", "rules of o/r branch a b not readable (HTTP None)", "repo o/r not readable (HTTP 404)", "repo o/r not readable (HTTP Nonesuch)"]) {
+    const r = await hookStop("infra:ruleset-surface:plan", (p) => rsErr(p, e));
+    assert.equal(r.stop_class, "safety", e);
+    assert.ok(r.reason.includes(CONFIRM) && !r.reason.includes(TRANSIENT), r.reason);
+  }
 });

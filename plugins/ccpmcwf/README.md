@@ -1119,8 +1119,12 @@ carries the class as `stop_class`, next to `stop_gate`; `ok` and `awaiting_confi
 - The run budget is `safety`: safety is the only class that is never repaired or re-run, which a
   spent budget needs. Its stop still returns its options.
 - A null agent result is `transient` for a read-only (judge) step and `safety` for a write step,
-  whose first attempt may have written. A hook-surface read with no HTTP status (`HTTP None`) is
-  `transient`; any other hook-surface read error is `safety`. A CI watch that ends unresolved is
+  whose first attempt may have written. A ruleset-surface read with no HTTP status is `transient`
+  only in `ruleset_surface.py`'s own error shape (`repo <slug>`, `rules of <slug> branch <branch>`
+  or `org rulesets of <owner>`, then `not readable (HTTP None`); any other hook-surface read error is
+  `safety`. A `hook_surface.py` error is always `safety` with the confirmation text (8.8.0, review
+  of #115: that program makes no GitHub call, and its errors name repo files, so a file named
+  `HTTP None.yml` must not turn the stop into a re-run). A CI watch that ends unresolved is
   `transient`. `resume_with: "build"` is `mechanical`.
 - Judgment stops: the plan findings the planner did not fix in its rounds (`planFindingsStop`,
   except the DSN, npm/npx test_cmd and intent findings, which are `safety`), a refused plan audit,
@@ -1128,9 +1132,13 @@ carries the class as `stop_class`, next to `stop_gate`; `ok` and `awaiting_confi
   unsupported, the test, code, review and CI-fix rounds spent, and a PR title or body the
   pr-opener did not fix after its scripted retry. An option names only identifier-shaped symbols
   (`SYMBOL_RE`); no relayed text goes into an option.
-- 8.8.0 changes no behaviour: no stop becomes a repair. `docs/stop-classes.md` lists every site
-  (function, gate, class, reason); `tests/v880_stop_class.test.mjs` fails on a site with no
-  class and on a table that does not match the source.
+- 8.8.0 changes no behaviour except that `hook_surface.py` text: no stop becomes a repair. An
+  unknown class code, or a prototype key such as `constructor`, is `safety`.
+- `docs/stop-classes.md` lists every site (function, gate, class, reason). It is generated: run
+  `node plugins/ccpmcwf/tests/stop_classes_doc.mjs` after a change to a stop site.
+  `tests/v880_stop_class.test.mjs` fails on a site with no class, on `halt`, `stop` or
+  `planFindingsStop` used as a value (an alias would hide a site), and on a table that is not the
+  generator's output.
 
 ### Push-access probe (4.0.0, ledger 1985)
 

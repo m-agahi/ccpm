@@ -3757,7 +3757,7 @@ class Stop extends Error {
 // no LLM sets or changes it. An unknown code is safety. docs/stop-classes.md lists every site.
 const STOP_CLASS = { s: "safety", m: "mechanical", t: "transient", j: "judgment" };
 function stop(cls, status, reason) {
-  state.stopClass = cls && cls.j ? "judgment" : STOP_CLASS[cls] || "safety";
+  state.stopClass = cls && cls.j ? "judgment" : (typeof cls === "string" && Object.prototype.hasOwnProperty.call(STOP_CLASS, cls) && STOP_CLASS[cls]) || "safety";
   if (cls && cls.j) state.options = cls.j;
   throw new Stop(status, reason);
 }
@@ -5591,9 +5591,13 @@ function hookSurfacePrompt(inputs) {
   );
 }
 
-// 7.4.0 (#36 B1): a read that failed with no HTTP status (gh crashed or timed out) asks for a re-run, not a confirmation
-function hookReadStop(err) {
-  halt(/HTTP None/.test(err) ? "t" : "s", "needs_human", "hook surface cannot be computed (" + err + "); " + (/HTTP None/.test(err) ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
+// 7.4.0 (#36 B1): a read that failed with no HTTP status (gh crashed or timed out) asks for a re-run, not a confirmation.
+// 8.8.0 (review B1): only ruleset_surface.py reads GitHub (gh = true), and only its own error shape counts (no slug or
+// branch holds a space); hook_surface.py errors name repo files, so a path holding "HTTP None" stays safety
+const HTTP_NONE_RE = /^(repo \S+|rules of \S+ branch \S+|org rulesets of \S+) not readable \((page \d+: )?HTTP None(: |\))/;
+function hookReadStop(err, gh) {
+  const t = gh === true && HTTP_NONE_RE.test(err);
+  halt(t ? "t" : "s", "needs_human", "hook surface cannot be computed (" + err + "); " + (t ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
 }
 // 8.0.0 (#62 B2): got, the hook_surface slot of a surfaces step (else its own step)
 async function hookSurface(label, worktree, rev, targets, phaseName, got) {
@@ -5712,7 +5716,7 @@ async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName, g
   if (!Array.isArray(r.surface) || !Array.isArray(r.sources) || !Array.isArray(r.read) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("ruleset_surface"), "ruleset_surface"))
     halt("s", "failed", label + ": the relayed surface" + NOT_DIGEST);
   if (canonical(r.args) !== canonical(args)) halt("s", "failed", label + ": " + OTHER_ARGS);
-  if (r.error !== null) hookReadStop(r.error);
+  if (r.error !== null) hookReadStop(r.error, true);
   for (const u of r.unreadable) gate("warning: " + u);
   const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
   // #95: the rules' required checks (the digest covers them; a pre-#95 relay has none)
