@@ -15,8 +15,6 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync, r
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createServer } from "node:net";
-import { spawn } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 import { HERE, HAVE_PY, spawnSync } from "./harness.mjs";
 
 const SBX = join(HERE, "..", "scripts", "sandbox.py");
@@ -391,11 +389,11 @@ test("8.2.0 #80 final: a hidden root is never walked: 60,000 files under the fix
   }
 });
 
-test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts CPU, not wall clock", { skip: !HAVE_PY }, async () => {
+test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts CPU, not wall clock", { skip: !HAVE_PY }, () => {
   const x = plainFixture();
   const R = join(x.d, "R");
-  // 20,000 entries: well under the entry cap, a fraction of a second of CPU
-  for (let i = 0; i < 200; i++) {
+  // 3,000 entries: well under the entry cap; with the fake clock below, over 3 s of "wall clock" on any host
+  for (let i = 0; i < 30; i++) {
     const dd = join(R, "d" + i);
     mkdirSync(dd, { recursive: true });
     for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
@@ -403,27 +401,22 @@ test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts
   const f = join(x.d, "spec.json");
   writeFileSync(f, JSON.stringify({ result: join(x.d, "res.json"), worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }));
   try {
-    // the CI runner: the plan process gets about 2% of a CPU (5 ms run, 245 ms stopped), so the walk takes
-    // far more than 3 s of wall clock and the same CPU time as on an idle host
-    const t0 = Date.now();
-    const c = spawn(PY, ["-I", SBX, "plan", f], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
-    let out = "";
-    c.stdout.on("data", (b) => (out += b));
-    let live = true;
-    const done = new Promise((ok) => c.on("exit", (code) => ((live = false), ok(code))));
-    (async () => {
-      while (live) {
-        await delay(5);
-        if (live) c.kill("SIGSTOP");
-        await delay(245);
-        if (live) c.kill("SIGCONT");
-      }
-    })();
-    const code = await done;
-    const ms = Date.now() - t0;
-    assert.equal(code, 0);
-    assert.ok(ms > 3500, "the throttle held the plan back: " + ms + " ms");
-    assert.equal(JSON.parse(out).reason, null, "plan took " + ms + " ms wall");
+    // the loaded CI runner, made exact: time.monotonic advances 2 ms per call (one call per walked entry), so the
+    // walk spans more than 3 s of wall clock and costs the same CPU time as on an idle host. 50,000 entries
+    // (the entry cap) come to 100 s, under the 120 s backstop. The final clock goes to stderr.
+    const pre =
+      "import atexit, sys, time\n" +
+      "_t = [0.0]\n" +
+      "def _mono():\n    _t[0] += 0.002\n    return _t[0]\n" +
+      "time.monotonic = _mono\n" +
+      "atexit.register(lambda: sys.stderr.write('fake clock %.3f\\n' % _t[0]))\n" +
+      "sys.argv = [sys.argv[1], 'plan', sys.argv[2]]\n" +
+      "exec(compile(open(sys.argv[0]).read(), sys.argv[0], 'exec'), {'__name__': '__main__', '__file__': sys.argv[0]})\n";
+    const r = spawnSync(PY, ["-I", "-c", pre, SBX, f], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    assert.equal(r.status, 0, r.stderr);
+    const clock = Number((/fake clock ([0-9.]+)/.exec(r.stderr) || [])[1]);
+    assert.equal(JSON.parse(r.stdout).reason, null, "fake clock " + clock + " s");
+    assert.ok(clock > 3.5, "the walk spanned more than 3 s of the fake clock: " + r.stderr);
   } finally {
     x.done();
   }

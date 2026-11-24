@@ -21,9 +21,11 @@ backstop`.
 
 ### Tests
 
-- `v820_hardening`: a plan process held to about 2% of a CPU (SIGSTOP/SIGCONT, 5 ms in
-  250 ms) walks 20,000 entries and is not refused (red on 8.9.0 with the CI reason); a cap hit
-  names the entry cap.
+- `v820_hardening`: a plan run whose `time.monotonic` advances 2 ms per call (a loaded host,
+  made exact) walks 3,000 entries over more than 3 s of that clock and is not refused (red on
+  8.9.0 with the CI reason, with or without `/nix/var`); about 0.1-0.3 s idle. A cap hit names
+  the entry cap. The first SIGSTOP/SIGCONT throttle version (20,000 entries, 15-84 s) was red
+  on 8.9.0 only where a `/nix/var` walk added CPU.
 
 ## [8.9.0] - 2026-11-24
 
