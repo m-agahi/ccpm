@@ -25,6 +25,20 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
 - A `uv run` test_cmd keeps its own flags (as 8.4.1); any other runner, and any other tier value,
   keeps the old behaviour. `mutants.py` keeps its 6 args.
 
+### Security
+
+- Review of #123: uv resolves coverage from the judged tree's uv.lock and config, which the coder
+  writes; the census read the repo at preflight, not the judged tree. On the new uv path the gate
+  now fails closed before any run (not_run "uv tier refused: ...") unless, read from git objects:
+  the judged uv.lock pins coverage from PyPI with entries equal to the plan base's (version, source,
+  hashes); pyproject.toml `[tool.uv]` equals the base's and `[tool.uv.sources]` does not name
+  coverage; `uv.toml` and `.python-version` equal the base's; no judged path is named `coverage` (or
+  `coverage.py` and the like), which could shadow the locked coverage; every non-PyPI lock entry other than the root project's
+  equals the base's; the judged pyproject declares no `coverage` script or entry point, and its
+  `[build-system]` and every `[tool.*]` table but `[tool.uv]` equal the base's (no package-dir or
+  wheel remap). Every uv-tier run gets
+  `UV_NO_CONFIG=1`. A `uv run` test_cmd (approved by the plan audit) is not checked, as before.
+
 ## [8.9.6] - 2026-11-25
 
 ccpmcwf 8.9.6 (yaadgaar `#109`): plan-mode intake relaunches on a relayed request at any status,
