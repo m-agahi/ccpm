@@ -266,19 +266,16 @@ checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (
 On-disk caller handoff (7.2.0, L2178): a grep output over 8192 bytes is not copied through the
 relay. `callers.py` exits with `FLEET_CALLERS_ON_DISK`, and the script runs its file mode: the full
 output goes to `<scratch>/callers/callers-<sha256>.json`, and the relay carries only a summary per
-symbol (hit count, sha256 of the sorted hits, auto doc or lock hit count, path count and path
-hash; at most 4096 bytes, else the batch splits in halves; one symbol alone may reach 16384 bytes
-since 7.4.0). A symbol whose mapped occurrences hash
-to the summary needs no read. Other symbols are read in batch-wide pages of 50 entries (read mode,
-part `auto`, `all` or `paths`), each page digest- and args-checked and joined against the summary
-count and hash. A caller check reads at most 4 pages of the `all` and `paths` parts; a list over
-that read budget is one finding (plan) or an R5 refusal (update merge). Since 8.5.3 the `auto` part
-(doc and lock hits only) never uses that budget, so doc and lock hits never cause the changed_symbols
-stop. Its pages (one per 50 doc or lock hits) sit outside the 100-agent cap, like path checks, and
-have their own bound: at most 20 auto pages per caller check; over it the run stops at the `callers`
-gate (map those hits in changed_symbols, which needs no read, or split the change). At the update merge
-(`infra:callers:u1`) the comparison is by path set, so a line shift with the same files needs no
-read. The disk path adds up to 18 plan-mode agents (36 with digest and args retries), so a heavy
+symbol (hit count, sha256 of the sorted hits, auto doc or lock hit count, and since 8.9.5 the count
+and sha256 of the code hits (every hit that is not auto) and of their paths; at most 4096 bytes,
+else the batch splits in halves; one symbol alone may reach 16384 bytes since 7.4.0). A symbol whose
+mapped occurrences hash to the summary, or (8.9.5) to its code hits, needs no read: a doc or lock
+hit is `dont_care` by definition and is never read. Other symbols are read in batch-wide pages of
+50 entries (read mode, part `all` or `paths`), each page digest- and args-checked and joined
+against the summary count and hash. A caller check reads at most 4 pages of the `all` and `paths`
+parts; a list over that read budget is one finding (plan) or an R5 refusal (update merge). At the
+update merge (`infra:callers:u1`) the comparison is by code path set, so a line shift with the same
+files, or any doc or lock path, needs no read. The disk path adds up to 18 plan-mode agents (36 with digest and args retries), so a heavy
 plan run can reach "agent cap 100 reached" and stop (fail closed).
 
 Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the

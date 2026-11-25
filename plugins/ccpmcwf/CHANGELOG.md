@@ -22,6 +22,8 @@ the auto (doc and lock) pages of 8.5.3 are gone: no auto-page agent runs any mor
   lock list agrees with. A doc the planner mapped itself stays in the moved-file check. Doc paths
   never take a `paths` read, so many doc-path changes at the merge no longer refuse R5 (`#112`
   item 3).
+- The plugin README describes the code hashes; the read-label table of `v402_file_sha` names part
+  `all`.
 
 ### Removed
 
