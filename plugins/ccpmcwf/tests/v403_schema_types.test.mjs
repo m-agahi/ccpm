@@ -700,6 +700,10 @@ const READS = {
     "r.claimed boolean": ["prog:parked:claimed", 2],
   },
   // 8.9.0 (#108 step 6): the engine re-run marker relay
+  // 8.9.3 (#117 i)
+  lateDecided: {
+    "b integer": "parsed: state.bodyDecided, a script count (or the run-state's checked body_decided)",
+  },
   rerunGuard: {
     "r.marked boolean": ["prog:parked:marked", 2],
   },
@@ -920,7 +924,8 @@ const READS = {
     "state.testsResumed boolean": PARSED_LOCAL,
     "state.review.nits array": "parsed: state.review, the review step's result or JSON.parse of the run-state message (digest-checked read_state)",
     // 6.3.0 (ADR-1239)
-    "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 8.9.3 (#117 i): + the body_decided default of a run-state before 8.9.3
+    "resume.auto_decisions array": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 6.0.0 (ledger 2044)
     "ref.history.audits number": PARSED_REF,
@@ -939,10 +944,21 @@ const READS = {
     // 8.9.2 (#118 review): the resumed PR record (from the run-state) a review resume needs
     "pr.pr_url string": "parsed: JSON.parse of the run-state message (digest-checked read_state), pr_url",
     // 8.9.2 (#116 b): the run-state's auto_decisions
-    "ad array": "parsed: JSON.parse of the run-state message (digest-checked read_state), auto_decisions",
+    // 8.9.3 (#117 i): + the bound of body_decided
+    "ad array": ["parsed: JSON.parse of the run-state message (digest-checked read_state), auto_decisions", 2],
     "d object": "parsed: an entry of the run-state's auto_decisions (checked as an array first)",
     "d array": "parsed: an entry of the run-state's auto_decisions (checked as an array first)",
     "d[k] string": "parsed: a field of an auto_decisions entry of the run-state",
+    // 8.9.3 (#117 d): the ready milestone's pr_ready and the recorded CI write-back
+    "st.pr_ready boolean": ["parsed: JSON.parse of the run-state message (digest-checked read_state), pr_ready", 2],
+    "state.prReady boolean": PARSED_LOCAL,
+    "cw object": "parsed: JSON.parse of the run-state message (digest-checked read_state), ci_write_back",
+    "cw array": "parsed: the run-state's ci_write_back; an array is refused here",
+    "cw.ledger_status string": "parsed: a field of the run-state's ci_write_back (checked as an object first)",
+    "cw.comment_status string": "parsed: a field of the run-state's ci_write_back (checked as an object first)",
+    // 8.9.3 (#117 i): the count of decisions the PR body holds
+    "bd integer": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_decided",
+    "state.bodyDecided integer": PARSED_LOCAL,
     // 6.0.1 (ledger 2050)
     "c.parents array": "prog:verify_since:commits_since[].parents",
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",
@@ -1324,7 +1340,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.2\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.3\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.3\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

@@ -1,5 +1,67 @@
 # Changelog
 
+## [8.9.3] - 2026-11-25
+
+ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406, ADR-1387): a CI-timeout re-run resumes at the CI watch and posts neither the stats block nor a recorded CI write-back again; a plan stop after the plan ref commit re-runs as a build of that ref; late automatic decisions reach the CI write-back. The dist grows from 481,790 B to 483,852 B (+2,062 B; cap 520,000 B, ADR-1353).
+
+### Added
+
+- (d) A run-state milestone `ready` (`infra:state:ready`), written after the stats block and the
+  ready step and before the CI watch; a re-run resumes at the CI watch (`RESUME_NEXT.ready`). It
+  records `pr_ready`, so a resume at the CI watch knows the PR was marked ready. It is not written
+  after update-branch (no resume point there, as Max ruled for #116 e). A resume at the CI watch
+  checks the PR test block once and finds a PR merged before the run-state, as a resume at stats
+  does.
+- (d) A transient CI stop writes the `ready` run-state once more after its CI write-back
+  (`infra:state:ready:ci-wb`), with `ci_write_back`. A resume that reads `ci_write_back` posts no
+  CI write-back again. A write-back with a failed ledger or comment status is not recorded. The
+  record never halts: its swallowed stop, or safety for any other error, makes the class more
+  severe, so a failed record gets no re-run (fail closed, ADR-1406). Every run-state holds
+  `pr_ready`; the shipped one holds the run's `ci_write_back`.
+- (i) An unattended run lists its automatic decisions made after the PR body was written in the CI
+  write-back: `; automatic decisions after the PR body: <gate> <decision>, ...` (lower-case script
+  tokens, no reason text, at most 10). The run-state counts the decisions the body holds
+  (`body_decided`).
+
+### Changed
+
+- (f) `recover`: a plan launch whose stop comes after its plan ref was committed and before the
+  build (the auto gates, for example a null intent judge) re-runs with `mode: "build"`, that
+  `plan_ref` and `confirm: "auto"` (it re-ran the whole planner). The build-mode `:rerun` gates run
+  the intent (G1), command and hook id (G2) and scope (G3) checks again, after a fresh read of the
+  task. A relaxed plan re-runs with the list this run sealed in the ref (8.9.2 rule); the once-only
+  rule and the engine marker apply. A stop before the plan ref commit still re-runs the plan.
+- Run-state checks: a `ready` run-state without a boolean `pr_ready`, a `pr_ready` that is not a
+  boolean, a malformed `ci_write_back` and a `body_decided` that is not a count of the run-state's
+  `auto_decisions` are run-state mismatches. A run-state from before 8.9.3 (no `ready`, no new
+  key) resumes as before; it counts every resumed decision as in the PR body.
+
+### Not in this release (need Max's ruling)
+
+- (h) the paged hasher relay: stopped with a proposal (see the PR body).
+- (g) the P3 round carry after a refused checkpoint: described only, as `#117` asks (see the PR
+  body).
+- The build-mode `:rerun` gates do not check the plan-mode blockers (change kind, new behaviour,
+  IaC path, task id) again. For (f) they passed on the same sealed facts before the auto gates ran,
+  and the IaC pre-push check still runs at the push. Adding them to every `:rerun` build would
+  change what that gate refuses for existing launches.
+- An in-run re-plan that stops after its plan ref commit and before its build still re-runs a build
+  of the launch's ref, as before.
+
+### Tests
+
+- `v893_batch_b`: (d) the `ready` milestone and its order, the CI-timeout re-run (no stats block,
+  ready or CI write-back again), a `ready` run-state with no record, `pr_ready` false, an older
+  `written_back` run-state, malformed keys, a failed record (fail closed), a failed write-back (not
+  recorded), a merged PR at the CI resume, no `ready` after update-branch; (f) confirm auto and
+  unattended re-runs as a build (no planner, the `:rerun` gates), a stop before the commit, the
+  relaxed list; (i) the late decision in the CI write-back, none when attended or when there is no
+  late one, a resume, a malformed `body_decided`; the README text.
+- `v890_recover`: an auto-gate stop after the plan ref commit re-runs a build; the update-branch
+  case names the run-state `ready`. `v508_gh_identity`: `pr_ready` in every run-state.
+- Pins: the agent counts (+1, `infra:state:ready`), the v403 READS rows, the v5010 prompt pins and
+  the version.
+
 ## [8.9.2] - 2026-11-24
 
 ccpmcwf 8.9.2 (yaadgaar `#116`, follow-ups of `#108` and `#115`; ADR-1409, ADR-1406, ADR-1411): the relaxed re-plan list is sealed in the plan ref, attended `auto_decisions` survive a resume, a resume at the review re-reads the PR head, and the engine re-run marker runs while the run lock is held. The dist grows from 479,110 B to 481,790 B (+2,680 B; cap 520,000 B, ADR-1353).

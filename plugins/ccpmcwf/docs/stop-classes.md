@@ -1,4 +1,4 @@
-# Stop classes of build-engine.js (ccpmcwf 8.9.2)
+# Stop classes of build-engine.js (ccpmcwf 8.9.3)
 
 yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in
 script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or

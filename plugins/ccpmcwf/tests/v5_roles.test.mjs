@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.9.2");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.9.3");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -128,7 +128,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1)
   // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
-  assert.equal(out.build.calls.length, 66, out.build.labels.join(", "));
+  // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -257,7 +258,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.9.2");
+  assert.equal(p.fleet_version, "8.9.3");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

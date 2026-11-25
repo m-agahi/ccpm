@@ -924,7 +924,19 @@ order:
 | `pr_open`      | the PR opens        | the review                           |
 | `reviewed`     | the review passes   | write-back                           |
 | `written_back` | write-back          | the stats block, ready and CI watch  |
+| `ready`        | ready (8.9.3)       | the CI watch                         |
 | `shipped`      | the PR tail (6.0.0) | nothing: returns the recorded result |
+
+8.9.3 (yaadgaar `#117` d): the `ready` run-state is written after the stats block and the ready
+step, so it records that the stats block was posted. It holds `pr_ready` (a boolean; the CI watch
+reads it, since a resume at the CI watch skips ready). It is not written after update-branch (no
+resume point there). A transient CI stop writes it once more after its CI write-back
+(`infra:state:ready:ci-wb`), with `ci_write_back` (`{ledger_status, comment_status, ...}`); a
+resume that reads `ci_write_back` posts no CI write-back again. A write-back that failed is not
+recorded. A failed record never halts: its own stop, or safety, makes the class more severe, so
+the stop gets no re-run. A `ready` run-state without a boolean `pr_ready`, a `pr_ready` that is
+not a boolean, or a malformed `ci_write_back` is a run-state mismatch. A run-state from before
+8.9.3 (no `ready`, no new key) resumes as before.
 
 Every ref under `refs/fleet/` (name and target) is in the hasher's git map, at freeze and around
 every writer, coder and judge step. The workflow keeps only the run's own refs:
@@ -1100,6 +1112,14 @@ safety check runs on the repaired attempt again.
   of the test block); also a missing `### Unattended run` section (stats block) and a truncated
   claims list (test block). An entry recorded after the pr-opener wrote the body is in the result
   and the run-state (8.9.2: attended runs too), not in the body's `### Unattended run` section.
+  In an unattended run, automatic decisions made after the PR body was written (8.9.3) are listed
+  in the CI write-back (yaadgaar `#117` i). Its line ends with
+  `; automatic decisions after the PR body: <gate> <decision>, ...` (lower-case script tokens
+  only, no reason text; at most 10, then `and <n> more`). The run-state counts the decisions the body holds (`body_decided`); a
+  `body_decided` that is not a count of its `auto_decisions` is a run-state mismatch. A run-state
+  from before 8.9.3 counts every resumed decision as in the body. A decision after the CI
+  write-back, or in a run that writes none (no CI step, or the CI write-back already recorded),
+  stays in the result and the run-state only.
 - Relay size (`relay-size`, `page`): one changed symbol whose caller-check output is over the
   65536-byte relay cap goes on the on-disk caller path (summary plus paged reads) instead of
   stopping. Still stops: one symbol whose on-disk summary is over its cap, and a hasher output
@@ -1167,11 +1187,21 @@ no agent decides it.
 `recover.args` of a re-run holds `mode`, the resume handle and `rerun_of` (this run's nonce). The
 re-run enters at or before the failed check:
 
-- A plan launch that stopped before its build: `mode: "plan"`, plus `checkpoint` when the run
-  parked one (it resumes after the plan audit; a stop before the audit approved parks none).
+- A plan launch that stopped before its plan ref was committed: `mode: "plan"`, plus `checkpoint`
+  when the run parked one (it resumes after the plan audit; a stop before the audit approved parks
+  none).
+- A plan launch that stopped after its plan ref was committed and before its build (8.9.3, the auto
+  gates): `mode: "build"`, its `plan_ref` and `confirm: "auto"` (yaadgaar `#117` f). The ref is the
+  one this run sealed, so the planner and the plan audit do not run again. The build-mode `:rerun`
+  gates run the intent (G1), command and hook id (G2) and scope (G3) checks again, after a fresh
+  read of the task for its current rulings. The plan-mode blockers (change kind, new behaviour,
+  IaC path, task id) are not checked again: they passed on the same sealed plan facts before the
+  auto gates ran, and the IaC pre-push check still runs at the push. A relaxed plan re-runs with
+  the list this run sealed in the ref, and the `:rerun` intent judge checks each item again
+  (8.9.2). The once-only rule and the engine marker apply as for every re-run.
 - A launch that reached the build: `mode: "build"` and `plan_ref`. With no run-state milestone and
   no freeze, the build starts again; after the freeze, `freeze_digest` resumes at the coder; after a
-  run-state milestone (committed, pushed, pr_open, reviewed, written_back), the build resumes at the
+  run-state milestone (committed, pushed, pr_open, reviewed, written_back, ready), the build resumes at the
   step after it. A plan launch that built in the same run adds `confirm: "auto"`, so the intent,
   command and scope gates run again.
 - There is no clean resume point, so `action` is `none`: the test writers wrote before the freeze;
@@ -1199,8 +1229,8 @@ The five transient sites and their re-entry: a read-only step's null result (`di
 the milestone before it); a ruleset read with no HTTP status (`hookReadStop`: the plan and Code
 reads run after the resume point; the read in the re-review after update-branch comes after the
 update moved the worktree, so it has no clean resume point and answers `none`); CI unresolved (`buildFromRef`: the last
-milestone is `written_back`, so the re-run resumes at stats, ready, then the CI watch; it posts the
-CI write-back once more).
+milestone is `ready`, so the re-run resumes at the CI watch; it posts neither the stats block before
+the watch nor, when the stop recorded it, the CI write-back again).
 
 - The class rides on the Stop object, with its gate and options. A cleanup step that halts and
   swallows its own stop (the park, a CI write-back, main's teardown) never relabels the real stop;

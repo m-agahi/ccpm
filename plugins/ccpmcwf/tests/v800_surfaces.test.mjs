@@ -97,8 +97,10 @@ test("8.0.0 B2-2: an approving code round is one agent (hook surface and changed
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
   // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
-  assert.equal(out.build.calls.length, 66, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 64);
+  // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  // 8.9.3 (#117 d): + infra:state:ready
+  assert.equal(out.result.agents, 65);
   const c = call(out, "infra:surfaces:r1");
   // the plan ref seals the ruleset surface: the build reads none
   assert.deepEqual(ran(c.prompt), ["hook_surface", "changed_defs"]);
@@ -114,7 +116,8 @@ test("8.0.0 B2-2: a ref that seals no ruleset surface reads it in round 1's merg
   assert.deepEqual(ran(call(out, "infra:surfaces:r1").prompt), ["hook_surface", "ruleset_surface", "changed_defs"]);
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
-  assert.equal(out.calls.length, 66, out.labels.join(", "));
+  // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
+  assert.equal(out.calls.length, 67, out.labels.join(", "));
 });
 
 test("8.0.0 B2-3 order: an obligations failure routes to fix_code before a broken changed_defs, ruleset_surface or callers result of the same round is read", async () => {

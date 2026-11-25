@@ -404,6 +404,9 @@ test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at push
   // 8.9.2 (#116 b): an attended run-state holds auto_decisions too; a 5.0.7 one has none
   assert.deepEqual(st.auto_decisions, []);
   delete st.auto_decisions;
+  // 8.9.3 (#117 d): every run-state holds pr_ready (false before ready); a 5.0.7 one has none
+  assert.equal(st.pr_ready, false);
+  delete st.pr_ready;
   assert.deepEqual(Object.keys(st).sort(), STATE_507_KEYS.filter((k) => k in st).sort());
   assert.ok(!JSON.stringify(st).includes("gh"), "no gh value in the run-state");
   // the re-run (as docs-74 does: same plan_ref)

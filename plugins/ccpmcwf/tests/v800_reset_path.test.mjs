@@ -116,8 +116,10 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
   // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
-  assert.equal(out.build.calls.length, 66, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 64);
+  // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  // 8.9.3 (#117 d): + infra:state:ready
+  assert.equal(out.result.agents, 65);
   for (const [site] of MERGED) {
     assert.ok(!out.build.labels.includes("infra:path-check:" + site), site + ": no standalone check");
     const c = call(out.build, "infra:build-reset:" + site);
