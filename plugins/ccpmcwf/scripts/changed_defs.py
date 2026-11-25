@@ -147,6 +147,7 @@ generated = set()
 # 8.6.0 (ADR-1403): port of collapse (scripts/build-workflow.mjs), char for char (8.9.4, yaadgaar #114: trailing-dot numbers, ++ and --, property names, statement heads)
 GEN_RX_AFTER = {'return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'}
 GEN_HEADS = {'if', 'while', 'with', 'for'}
+GEN_DECLS = {'const', 'let', 'var'}
 GEN_JOINS = {'++', '--', '//', '/*', '->', '<!'}
 GEN_WORD = re.compile('[A-Za-z0-9_$\\\\#\x80-\U0010ffff]+')
 GEN_SPACE = re.compile('[ \t]+')
@@ -217,7 +218,7 @@ def gen_collapse(t):
                 raise ValueError('comment')
             out.append(t[i:j + 2])
             i = j + 2
-        elif c == '/' and ((word in GEN_RX_AFTER or (word == 'of' and parens[-1:] == ['f'])) if last == 'w' else last not in ('v', 'r')):
+        elif c == '/' and ((word in GEN_RX_AFTER or word == 'of') if last == 'w' else last not in ('v', 'r')):
             j, cls = i + 1, False
             while j < n and t[j] != '\n' and (cls or t[j] != '/'):
                 if t[j] == '\\':
@@ -238,9 +239,14 @@ def gen_collapse(t):
             if '0' <= c <= '9' and t[j:j + 1] == '.':
                 m = GEN_WORD.match(t, j + 1)
                 j = m.end() if m else j + 1
+            w = t[i:j]
+            kw = w == 'of' and parens[-1:] == ['f'] and (last == 'v' or (last == 'w' and word not in GEN_RX_AFTER and word not in GEN_DECLS))
+            if kw:
+                parens[-1] = 'F'
+            plain = last == 'd' or (w == 'of' and not kw)
             prev = word if last == 'w' else ''
-            word = '' if last == 'd' else t[i:j]
-            out.append(t[i:j])
+            word = '' if plain else w
+            out.append(w)
             i, last = j, 'w'
         elif c in '+-' and t[i + 1:i + 2] == c:
             out.append(c + c)

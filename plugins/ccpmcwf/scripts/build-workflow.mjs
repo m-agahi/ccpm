@@ -83,6 +83,7 @@ export function stripLines(source) {
 const REGEX_AFTER = new Set(["return", "typeof", "instanceof", "in", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
 // 8.9.4 (yaadgaar #114): the words before a `(` whose `)` ends a statement head, so a `/` after that `)` starts a regex
 const HEADS = new Set(["if", "while", "with", "for"]);
+const DECLS = new Set(["const", "let", "var"]);
 // an identifier, keyword or number character (any non-ASCII character counts)
 const isWord = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$" || c === "\\" || c === "#" || c >= "\x80";
 const JOINS = new Set(["++", "--", "//", "/*", "->", "<!"]);
@@ -98,7 +99,7 @@ export function collapse(text) {
   let last = ""; // the last token: "w" word, "r" regex, "v" other value, "p" punctuator, "d" a single `.`
   let word = ""; // the last word ("" for a property name after a single `.`)
   let prev = ""; // the word before `word` when the two are adjacent tokens
-  const parens = []; // per open `(`: "f" a for head, "c" an if, while or with head, "" any other
+  const parens = []; // per open `(`: "f" a for head, "F" one past its `of`, "c" an if, while or with head, "" any other
   const tplText = () => {
     const s = i;
     for (;;) {
@@ -152,7 +153,7 @@ export function collapse(text) {
       if (j < 0) throw new Error("a block comment does not close");
       out.push(text.slice(i, j + 2));
       i = j + 2;
-    } else if (c === "/" && (last === "w" ? REGEX_AFTER.has(word) || (word === "of" && parens[parens.length - 1] === "f") : last !== "v" && last !== "r")) {
+    } else if (c === "/" && (last === "w" ? REGEX_AFTER.has(word) || word === "of" : last !== "v" && last !== "r")) {
       let j = i + 1;
       let cls = false;
       while (j < n && text[j] !== "\n" && (cls || text[j] !== "/")) {
@@ -172,9 +173,15 @@ export function collapse(text) {
       while (j < n && isWord(text[j])) j++;
       // 8.9.4: a number takes one trailing `.` and the word chars after it (`1.`, `1.5e3`)
       if (c >= "0" && c <= "9" && text[j] === ".") for (j++; j < n && isWord(text[j]); ) j++;
+      const w = text.slice(i, j);
+      // a property name is a plain identifier, and so is every `of` but the first one after the binding of a for head
+      // (`for (const of of /re/...)`, not `for (q of !of / 2)`)
+      const kw = w === "of" && parens[parens.length - 1] === "f" && (last === "v" || (last === "w" && !REGEX_AFTER.has(word) && !DECLS.has(word)));
+      if (kw) parens[parens.length - 1] = "F";
+      const plain = last === "d" || (w === "of" && !kw);
       prev = last === "w" ? word : "";
-      word = last === "d" ? "" : text.slice(i, j);
-      out.push(text.slice(i, j));
+      word = plain ? "" : w;
+      out.push(w);
       i = j;
       last = "w";
     } else if ((c === "+" || c === "-") && text[i + 1] === c) {

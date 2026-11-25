@@ -15,8 +15,10 @@ occurs in the source, so the dist bytes of the source do not change.
 - `++` and `--` are one token, so a `/` after them is a division: `a++ / 2`, `x-- / y`. A single
   `+` or `-` before a `/` still starts a regex (`a+++/x/`, `a + +/x/`).
 - A word after a single `.` (also `?.`, not `...`) is a property name, never a keyword: `a.of / 2`,
-  `a.in / 2`, `a?.yield / 2`, `x.return / 2`. `of` starts a regex after it only inside a `for` head,
-  so a bare `of` identifier before `/` divides.
+  `a.in / 2`, `a?.yield / 2`, `x.return / 2`. Only the first `of` after the binding of a `for` head
+  starts a regex after it: `for (const q of /re/...)` and `for (const of of /re/...)` keep the
+  regex, while an `of` identifier before `/` divides: `of / 2`, `for (const q of !of / 2)` and
+  `for (const q of of / 2)`.
 - A `)` that closes an `if`, `while`, `with`, `for` or `for await` head is followed by a regex, not
   a division: `if (x) /a  b/.test(s)` keeps the regex text. A stack of open parens records the kind.
 - A regex after `}` is still lexed as a division and fails the esbuild check: block or object

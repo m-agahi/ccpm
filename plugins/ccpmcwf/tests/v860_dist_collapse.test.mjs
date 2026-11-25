@@ -98,6 +98,11 @@ test("8.9.4 yaadgaar #114: a keyword after a dot is a property name; of is a key
   assert.equal(body("const of = 4; y = of / 2 / b;\n"), "const of=4;y=of/2/b;\n");
   assert.equal(body("for ( const q of /a  b/.exec(s) ) f(q);\n"), "for(const q of/a  b/.exec(s))f(q);\n");
   assert.equal(body("y = [...of] / 2 / b;\n"), "y=[...of]/2/b;\n");
+  // inside a for head, of is the keyword only after the binding
+  assert.equal(body("for (const q of !of / 2 / b) f(q);\n"), "for(const q of!of/2/b)f(q);\n");
+  assert.equal(body("for (const q of of / 2 / b) f(q);\n"), "for(const q of of/2/b)f(q);\n");
+  assert.equal(body("for (const of of /a  b/.exec(s)) f(of);\n"), "for(const of of/a  b/.exec(s))f(of);\n");
+  assert.equal(body("for (const [a] of /a  b/.exec(s)) f(a);\n"), "for(const[a]of/a  b/.exec(s))f(a);\n");
 });
 
 test("8.9.4 yaadgaar #114: a regex after the ) of an if, while, with or for head keeps its text", () => {
