@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.6";
+const FLEET_VERSION = "8.9.7";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1721,7 +1721,7 @@ const PROGRAM_SHA256 = {
   "callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
   "changed_defs": "b104493bc23e3f342cd6a32db469ca14b00424b690a26138b8a2c67955970723",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-  "cover_diff": "1863425a52a6802613800a5bb04a77c32c79f5a5fd591ecacc83c9c8ce49e2db",
+  "cover_diff": "d8c9c53c993717e0fd1ec1adfb0973a110f3df26e2a3705508c9e5595d7cf863",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
   "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
@@ -4573,6 +4573,12 @@ function gateCensus(g, repo) {
   if (!ok) return gate("gate census unusable (no digest-checked gate_tools): no gate tool available");
   for (const l of g.languages) gate(censusLine(g, l));
   gate("gate census security: " + (g.container.present === true ? g.container.runtime + " " + AUDIT_IMAGE : "not available: " + g.container.reason));
+}
+// 8.9.7 (#110): the python coverage tier of the digest-checked census, "" with no usable census
+function censusCoverTier() {
+  const g = state.gateTools;
+  const row = g && g.matrix.python;
+  return row && typeof row === "object" && typeof row.coverage === "string" ? row.coverage : "";
 }
 function censusLine(g, l) {
   return "gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) => k + " " + g.matrix[l][k]).join(", ");
@@ -9304,7 +9310,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const ga = [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("gates", "gates-r" + m))), JSON.stringify(frozenFiles)];
       // 8.0.0 (G7, ADR-1315): the security gate, a 3rd Bash call
       // car F (A-M5): sec_scan first, before code under test runs (it can rewrite a later scan dir)
-      await runGate("infra:gates:r" + m, [["security_scan", "sec_scan", [mainWt, ga[1], ga[2], ga[5], String(planFacts.est_diff_lines), AUDIT_IMAGE]], ["coverage", "cover_diff", ga], ["mutation", "mutants", ga]], "Code");
+      // 8.9.7 (#110): cover_diff's 7th arg, the census python coverage tier (the uv tier runs a bare pytest through uv)
+      await runGate("infra:gates:r" + m, [["security_scan", "sec_scan", [mainWt, ga[1], ga[2], ga[5], String(planFacts.est_diff_lines), AUDIT_IMAGE]], ["coverage", "cover_diff", ga.concat([censusCoverTier()])], ["mutation", "mutants", ga]], "Code");
       const cov = state.gates.coverage;
       const mut = state.gates.mutation;
       const sec = state.gates.security_scan;

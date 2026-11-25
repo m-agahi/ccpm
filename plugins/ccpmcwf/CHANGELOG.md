@@ -1,5 +1,30 @@
 # Changelog
 
+## [8.9.7] - 2026-11-25
+
+ccpmcwf 8.9.7 (yaadgaar `#110`, Max's ruling: option a): the coverage gate runs coverage through
+uv when the gate census credits the uv tier, whatever the pytest shape of the test_cmd.
+
+### Fixed
+
+- The census (`gate_tools.py`) credits python coverage as `uv run --frozen coverage` when uv.lock
+  pins coverage from PyPI, but `cover_diff.py` used the `uv run` prefix only for a `uv run` pytest
+  test_cmd. A bare `pytest` or `python -m pytest` test_cmd with no host coverage gave not_run
+  ("coverage is not on PATH"), so a task that needs coverage passed intake and the gate never ran.
+  Now the workflow passes the digest-checked census python coverage row to `cover_diff.py` as a
+  7th arg (`""` with no usable census), and on exactly `uv run --frozen coverage` the gate builds
+  its coverage argv as `uv run --frozen coverage ...` for those shapes too.
+
+### Changed
+
+- With the uv tier, a bare `pytest` or `python -m pytest` test_cmd now runs coverage through uv
+  even when the host has coverage on PATH (the python -m pytest in-process launcher is not used
+  on the uv tier). The plain baseline still runs the test_cmd as given.
+- No uv on PATH on the uv tier: not_run "no coverage tool: uv is not on PATH". A lock that does not
+  install coverage still fails the `--version` probe (not_run).
+- A `uv run` test_cmd keeps its own flags (as 8.4.1); any other runner, and any other tier value,
+  keeps the old behaviour. `mutants.py` keeps its 6 args.
+
 ## [8.9.6] - 2026-11-25
 
 ccpmcwf 8.9.6 (yaadgaar `#109`): plan-mode intake relaunches on a relayed request at any status,

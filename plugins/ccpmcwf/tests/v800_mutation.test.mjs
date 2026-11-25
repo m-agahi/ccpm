@@ -430,7 +430,9 @@ test("8.0.0 G5: mutants runs as the 2nd slot of infra:gates:r<m> (no new agent, 
   const p = call(out, "infra:gates:r1").prompt;
   assert.ok(p.indexOf("cover_diff.py") < p.indexOf("mutants.py"), "coverage first, then mutation");
   assert.match(p, /one after the other, never in the background or in parallel/);
-  assert.deepEqual(argsOf(p, "mutants"), argsOf(p, "cover_diff"));
+  // 8.9.7 (#110): cover_diff's 7th arg is the census python coverage tier; mutants gets the first 6
+  assert.deepEqual(argsOf(p, "mutants"), argsOf(p, "cover_diff").slice(0, 6));
+  assert.equal(argsOf(p, "cover_diff")[6], "unsupported");
   // 8.0.0 (G7): the security gate is a slot too (v800_security); car F (A-M5): it runs first
   assert.deepEqual(inputsOf(p).gates, ["security_scan", "coverage", "mutation"]);
   // the default stub: no mutation run (not_run); the judge sees it; mutation stays listed with its reason

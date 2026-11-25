@@ -52,9 +52,14 @@ except Exception:
 # fresh sandbox (the copy a fresh overlay each time); the coverage data dir is writable in the run step only,
 # the report dir in the json step only; the base re-run follows a reset of the test database. No sandbox (no
 # bwrap, a failed self-check, sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
+# 8.9.7 (#110, option a): an optional 7th arg <tier>, the python coverage row of the digest-checked gate census
+# (gate_tools.py) the workflow passes. When it is exactly UV_TIER, a bare pytest or a python -m pytest test_cmd runs
+# coverage as `uv run --frozen coverage` (no uv on PATH: not_run); a uv run test_cmd keeps its own flags, and any
+# other tier value, or none, keeps the shapes below.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
 SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
+UV_TIER = 'uv run --frozen coverage'
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 # the python -m pytest shape's coverage launcher: coverage from the interpreter (-I: no cwd) or a PYTHONPATH dir
 # outside the copy, then the PYTHONPATH dirs in the copy for the tests
@@ -159,9 +164,10 @@ def run(argv, cwd, env, log, rw=(), ro=()):
     with open(log, 'rb') as fh:
         return r['exit'], fh.read()[-2000:].decode('utf-8', 'replace')
 a = sys.argv[1:]
-if len(a) != 6:
-    sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json>')
+if len(a) not in (6, 7):
+    sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json> [<tier>]')
 wt, base, tree, cmd = a[0], a[1], a[2], a[3]
+uv_tier = len(a) == 7 and a[6] == UV_TIER
 try:
     env_in, exclude = json.loads(a[4]), json.loads(a[5])
 except ValueError:
@@ -181,7 +187,10 @@ if argv[:2] == ['uv', 'run']:
     while i < len(argv) and (argv[i] in ('--frozen', '--no-sync') or (argv[i] == '--extra' and i + 1 < len(argv))):
         i += 2 if argv[i] == '--extra' else 1
 if argv[i:i + 1] == ['pytest']:
-    head = argv[:i] + ['coverage']
+    head = argv[:i] + ['coverage'] if i or not uv_tier else ['uv', 'run', '--frozen', 'coverage']
+    shown = ' '.join(head)
+elif uv_tier and argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
+    head, i = ['uv', 'run', '--frozen', 'coverage'], 2
     shown = ' '.join(head)
 elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
     # car F (A-M3): never python -m coverage (the copy is first on sys.path, so a tree-local coverage
@@ -205,6 +214,8 @@ if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in RE
     sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
 if head[0] == 'coverage' and not shutil.which('coverage', path=path):
     emit('not_run', 'no coverage tool: coverage is not on PATH')
+if uv_tier and head[0] == 'uv' and argv[:2] != ['uv', 'run'] and not shutil.which('uv', path=path):
+    emit('not_run', 'no coverage tool: uv is not on PATH')
 # the added lines of the changed production .py files (added, modified, type-changed); other
 # changed source files are listed as not measured
 want, other = {}, []

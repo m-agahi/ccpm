@@ -1289,7 +1289,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.6/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.7/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1670,7 +1670,8 @@ export function coverArgsOf(prompt) {
 }
 // 8.0.0 (G5): the mutants.py slot (same args as cover_diff); default: tool absent, not_run
 export function mutOut(prompt, over) {
-  return Object.assign({ status: "not_run", reason: "tool absent: no mutation run", killed: 0, survived: [], not_run: 0, budget_hit: false, args: coverArgsOf(prompt) }, over);
+  // 8.9.7 (#110): mutants gets cover_diff's first 6 args (cover_diff's 7th is the census tier)
+  return Object.assign({ status: "not_run", reason: "tool absent: no mutation run", killed: 0, survived: [], not_run: 0, budget_hit: false, args: coverArgsOf(prompt).slice(0, 6) }, over);
 }
 // 8.0.0 (G7): the sec_scan.py slot; default: no container runtime, always-on checks only, nothing found
 export function secOut(prompt, over) {

@@ -332,7 +332,9 @@ test("8.0.0 G2: each code round runs infra:gates:r<m> (cover_diff, read-only, so
   assert.match(c.prompt, /timeout 600000 ms/);
   const a = argsOf(c.prompt);
   const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
-  assert.equal(a.length, 6);
+  // 8.9.7 (#110): + the census python coverage tier (the harness census: unsupported)
+  assert.equal(a.length, 7);
+  assert.equal(a[6], "unsupported");
   assert.equal(a[0], cj.main_worktree || a[0]);
   assert.equal(a[2], FP_K1.tree, "the judged tree");
   assert.equal(a[3], "pytest <paths>", "the sealed test_cmd");
