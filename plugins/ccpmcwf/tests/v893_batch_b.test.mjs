@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARGS, PB, NONCE, HERE, DIST, HASHES, happy, runOne, inputsOf, stateJsonOf } from "./harness.mjs";
+import { ARGS, PB, NONCE, HERE, DIST, HASHES, happy, runOne, inputsOf, stateJsonOf, commitStub } from "./harness.mjs";
 
 const README = readFileSync(join(HERE, "..", "README.md"), "utf8");
 const flat = (s) => s.replace(/\s+/g, " ");
@@ -151,6 +151,9 @@ test("8.9.3 (d): a malformed pr_ready or ci_write_back is a run-state mismatch (
     ["infra:state:ready", (x) => (x.ci_write_back = "ok"), /^run-state mismatch: ci_write_back /],
     ["infra:state:ready", (x) => (x.ci_write_back = { ledger_status: "ok" }), /^run-state mismatch: ci_write_back /],
     ["infra:state:ready", (x) => (x.ci_write_back = null), /^run-state mismatch: ci_write_back /],
+    // 8.9.3 review of #119: the two statuses are the write-back's enums
+    ["infra:state:ready", (x) => (x.ci_write_back = { ledger_status: "done", comment_status: "posted" }), /^run-state mismatch: ci_write_back /],
+    ["infra:state:ready", (x) => (x.ci_write_back = { ledger_status: "ok", comment_status: "sent" }), /^run-state mismatch: ci_write_back /],
   ];
   for (const [label, edit, re] of cases) {
     const s = happy();
@@ -232,6 +235,43 @@ test("8.9.3 (d): after update-branch no ready run-state is written (no resume po
   assert.ok(L.indexOf("infra:ci-watch:w2") > u, L.join(", "));
   assert.ok(!L.slice(u).some((l) => /^infra:state:ready/.test(l)), L.join(", "));
   assert.equal(first.result.stop_gate, "ci", first.result.reason);
+  // 8.9.3 review of #119: the re-review wrote the run-state reviewed:v2 after the update (the coder flag is clear),
+  // but a re-run cannot resume after update-branch: no automatic re-run
+  assert.ok(L.indexOf("infra:state:reviewed:v2") > u, L.join(", "));
+  assert.equal(first.result.stop_class, "transient", first.result.reason);
+  assert.equal(first.result.recover.action, "none", JSON.stringify(first.result.recover));
+  assert.equal(first.result.recover.why, "the PR branch was updated in this run; a re-run cannot resume after update-branch");
+  assert.equal(first.result.recover.args, undefined);
+});
+
+// 8.9.3 review of #119: a stop in the auto gates of an in-run re-plan, after its new plan ref commit and before
+// the build adopts it: the run's build ref is still the old one, so a re-run of it is doomed: no automatic re-run
+test("8.9.3: a transient stop in the :replan auto gates of an in-run re-plan gives no automatic re-run", async () => {
+  const PC2 = "0123456789ab";
+  const PLAN_WRONG = { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: split AC2" }] };
+  const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
+  const plan = await runOne(s, ARGS);
+  Object.assign(s, {
+    "role:fleet-code-judge:r1": [PLAN_WRONG],
+    "infra:replan-worktree": [{ status: "ok", reason: "ok", head: plan.result.plan_ref.plan_commit }, { status: "ok", reason: "ok", head: PC2 }],
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "a".repeat(64) },
+    "infra:commit-plan:replan": commitStub(s.__store, PC2, "a".repeat(64)),
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }),
+    "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "role:fleet-intent-judge:replan": [null],
+  });
+  const bargs = Object.assign({}, ARGS, { mode: "build", plan_ref: plan.result.plan_ref, unattended: true });
+  delete bargs.input;
+  const out = await runOne(s, bargs);
+  const L = out.labels;
+  assert.ok(L.indexOf("infra:commit-plan:replan") < L.indexOf("role:fleet-intent-judge:replan"), L.join(", "));
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.equal(out.result.recover.action, "none", JSON.stringify(out.result.recover));
+  assert.equal(out.result.recover.why, "an in-run re-plan committed a new plan ref that this run did not adopt");
+  assert.equal(out.result.recover.args, undefined);
 });
 
 // ---------------------------------------------------------------- (f) a plan stop after the plan ref commit re-runs as a build of that ref

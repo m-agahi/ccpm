@@ -1069,7 +1069,8 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
 - Round carry (P3). The park also holds the round count and the last findings fingerprint. A
   re-run of the same task source continues the count (it does not reset to 0), and a first round
   whose findings repeat the parked ones stops at once with options. A changed task source starts
-  at round 0.
+  at round 0. A park that holds a checkpoint carries them only through that checkpoint (8.9.3):
+  when the checkpoint is refused, the plan audit starts at round 0 with no fingerprint.
 - Run budget. Each run counts the output tokens its agents spend: the growth of the runtime's
   `budget.spent()` around each agent call (the same count as the PR stats). This is the turn's
   shared pool, so it includes the main loop's output while the run is busy; input tokens are not
@@ -1211,6 +1212,11 @@ re-run enters at or before the failed check:
   update-branch merge moved the worktree before its re-review wrote a run-state; or the plan park
   failed and left the draft in the worktree. A re-run there would stop on the dirty worktree or on a
   run-state mismatch.
+- Two more states answer `none` from script state only (8.9.3). The PR branch was updated in the
+  run ("the PR branch was updated in this run; a re-run cannot resume after update-branch"), also
+  after the re-review wrote its run-state. An in-run re-plan committed a new plan ref and the stop
+  came before the build adopted it, for example in its `:replan` auto gates ("an in-run re-plan
+  committed a new plan ref that this run did not adopt"): the run's plan ref is still the old one.
 - A build that re-planned and built the new plan in the same run (unattended `plan_wrong`) also
   adds `confirm: "auto"`: no human confirmed that plan ref.
 - A relaxed plan built in the run (an unattended plan launch, or that in-run re-plan, whose gates

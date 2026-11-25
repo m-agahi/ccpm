@@ -3400,6 +3400,7 @@ stopLog:[],
 launch:null,
 launchRef:null,
 buildRef:null,
+pendingReplanRef:null,
 milestone:null,
 dirty:null,
 parkDirty:false,
@@ -3941,6 +3942,8 @@ if(c==="mechanical"&&state.buildRef)return{class:c,action:"resume_build",args:{m
 if(c!=="transient")return{class:c==="mechanical"?c:"safety",action:"none"};
 const no=(why)=>({class:c,action:"none",why});
 if(state.rerunOf)return no("this run is already the automatic re-run of run "+state.rerunOf);
+if(state.prUpdated)return no("the PR branch was updated in this run; a re-run cannot resume after update-branch");
+if(state.pendingReplanRef)return no("an in-run re-plan committed a new plan ref that this run did not adopt");
 const a={mode:state.launch};
 if(state.launch==="plan"&&!state.buildRef&&!state.planRef){
 if(state.parkDirty)return no("the draft plan is still in the worktree (the park failed)");
@@ -6164,7 +6167,7 @@ const parked=await loadParked(lay.scratch,Number.isInteger(tip)&&tip>=0?tip:null
 const parkedBad=!!(parked&&parked.unreadable);
 const src=sha256Hex(canonical([raw,brief.sources.map((x)=>[x.kind,x.ref,String(x.body).replace(/\s+/g," ").trim()])]));
 const ck=parkedBad?null:resumeOf(parked,input.checkpoint,scan.head,src);
-const carry=ck||(parked&&parked.src===src?parked:null);
+const carry=ck||(parked&&parked.src===src&&!parked.ckpt?parked:null);
 if(carry&&(carry.round||carry.fp))gate("parked round "+carry.round+" and findings fingerprint "+carry.fp+" carried");
 await testDbStep(scan.test_db,"infra:branch-scan",lay.mainWt,ws.defaultBranch,"Workspace",["plan","audit"],names.taskId);
 phase("Plan");
@@ -6643,6 +6646,7 @@ return{joined,partOk,countOf,readParts};
 async function buildFromRef(input,date,tiny,lay,ws,opt){
 state.mode="build";
 state.buildRef=tiny;
+state.pendingReplanRef=null;
 state.sealedRelaxed=null;
 const repo=cleanRepo(tiny.repo);
 phase("Verify");
@@ -6859,7 +6863,7 @@ const ad=st.auto_decisions;
 if(ad!==undefined&&(!Array.isArray(ad)||ad.some((d)=>!d||typeof d!=="object"||Array.isArray(d)||["gate","decision","reason"].some((k)=>typeof d[k]!=="string"))))mis("auto_decisions");
 if(st.last_gate==="ready"?typeof st.pr_ready!=="boolean":st.pr_ready!==undefined&&typeof st.pr_ready!=="boolean")mis("pr_ready "+JSON.stringify(st.pr_ready===undefined?null:st.pr_ready));
 const cw=st.ci_write_back;
-if(cw!==undefined&&(!cw||typeof cw!=="object"||Array.isArray(cw)||typeof cw.ledger_status!=="string"||typeof cw.comment_status!=="string"))mis("ci_write_back");
+if(cw!==undefined&&(!cw||typeof cw!=="object"||Array.isArray(cw)||!["ok","failed","unavailable","none"].includes(cw.ledger_status)||!["posted","skipped","failed","none"].includes(cw.comment_status)))mis("ci_write_back");
 const bd=st.body_decided;
 if(bd!==undefined&&(!Number.isInteger(bd)||bd<0||bd>(Array.isArray(ad)?ad.length:0)))mis("body_decided");
 const hr=await hasher("hasher:resume",mainWt,hashedFiles,"Verify");
@@ -8642,6 +8646,7 @@ project:ctx.project,
 policy:state.policy,
 },
 });
+state.pendingReplanRef=pc.tiny;
 const newHead=pc.tiny.plan_commit;
 const rs=await infra(
 "infra:replan-reset",

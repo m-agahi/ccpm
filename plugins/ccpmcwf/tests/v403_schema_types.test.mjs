@@ -954,8 +954,6 @@ const READS = {
     "state.prReady boolean": PARSED_LOCAL,
     "cw object": "parsed: JSON.parse of the run-state message (digest-checked read_state), ci_write_back",
     "cw array": "parsed: the run-state's ci_write_back; an array is refused here",
-    "cw.ledger_status string": "parsed: a field of the run-state's ci_write_back (checked as an object first)",
-    "cw.comment_status string": "parsed: a field of the run-state's ci_write_back (checked as an object first)",
     // 8.9.3 (#117 i): the count of decisions the PR body holds
     "bd integer": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_decided",
     "state.bodyDecided integer": PARSED_LOCAL,

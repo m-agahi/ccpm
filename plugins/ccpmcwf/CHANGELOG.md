@@ -2,7 +2,7 @@
 
 ## [8.9.3] - 2026-11-25
 
-ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406, ADR-1387): a CI-timeout re-run resumes at the CI watch and posts neither the stats block nor a recorded CI write-back again; a plan stop after the plan ref commit re-runs as a build of that ref; late automatic decisions reach the CI write-back. The dist grows from 481,790 B to 483,852 B (+2,062 B; cap 520,000 B, ADR-1353).
+ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406, ADR-1387): a CI-timeout re-run resumes at the CI watch and posts neither the stats block nor a recorded CI write-back again; a plan stop after the plan ref commit re-runs as a build of that ref; late automatic decisions reach the CI write-back. The dist grows from 481,790 B to 484,236 B (+2,446 B; cap 520,000 B, ADR-1353).
 
 ### Added
 
@@ -34,24 +34,36 @@ ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406
 - Run-state checks: a `ready` run-state without a boolean `pr_ready`, a `pr_ready` that is not a
   boolean, a malformed `ci_write_back` and a `body_decided` that is not a count of the run-state's
   `auto_decisions` are run-state mismatches. A run-state from before 8.9.3 (no `ready`, no new
-  key) resumes as before; it counts every resumed decision as in the PR body.
+  key) resumes as before; it counts every resumed decision as in the PR body. The two statuses of
+  `ci_write_back` must be the write-back's enums (`ledger_status` ok, failed, unavailable or none;
+  `comment_status` posted, skipped, failed or none).
+- (g) The P3 round carry (Max's ruling, option A): a park that holds a checkpoint carries its round
+  count and findings fingerprint only through an accepted checkpoint. A refused checkpoint starts the
+  plan audit at round 0 with no fingerprint (no `parked round ... carried` line). A park without a
+  checkpoint carries them for the same task source, as before.
+
+### Fixed
+
+- `recover` is `none` for a transient stop after update-branch in the run. The why is:
+  `the PR branch was updated in this run; a re-run cannot resume after update-branch`. Before, a
+  run-state written by the re-review after the update (`reviewed:v2`) cleared the coder flag, and a
+  CI timeout answered a doomed `rerun`. The check reads `state.prUpdated` only.
+- `recover` is `none` for a transient stop in the auto gates of an in-run re-plan (unattended
+  `plan_wrong`), after its new plan ref commit and before the build adopts it. The why is:
+  `an in-run re-plan committed a new plan ref that this run did not adopt`. Before, it answered
+  `rerun` with the old `plan_ref` and `freeze_digest`, which stops on a changed plan ref and spends
+  the one automatic re-run. The engine sets the pending ref after the plan ref commit and clears it
+  when `buildFromRef` adopts it.
 
 ### Not in this release (need Max's ruling)
 
 - (h) the paged hasher relay: stopped with a proposal (see the PR body).
-- (g) the P3 round carry after a refused checkpoint: described only, as `#117` asks (see the PR
-  body).
 - The build-mode `:rerun` gates do not check the plan-mode blockers (change kind, new behaviour,
   IaC path, task id) again. For (f), a default or unattended launch checked them before its auto
   gates (any of them asks Max), so the re-run builds sealed facts that passed them; an attended
   `confirm: "auto"` launch never checks them, in plan mode or in the build. The IaC pre-push check
   still runs at the push. Adding them to every `:rerun` build would change what that gate refuses
   for existing launches.
-- An in-run re-plan (unattended `plan_wrong`) whose auto gates stop transiently after its plan ref
-  commit is unchanged and still answers `rerun` with the launch's (old) `plan_ref` and
-  `freeze_digest`. By then `infra:replan-reset` has moved the branch to the plan base and the plan
-  ref tag holds the new ref, so that re-run would stop on a changed plan ref (safety): it spends the
-  one automatic re-run. Fixing it (a build of the new ref, or `none`) needs Max's ruling.
 - After a CI-timeout re-run, the final CI outcome (green or merged) does not reach the ledger: the
   recorded CI write-back is not posted again (before 8.9.3 the second write-back was skipped by its
   marker, with the same result).
@@ -64,9 +76,12 @@ ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406
   recorded), a merged PR at the CI resume, no `ready` after update-branch; (f) confirm auto and
   unattended re-runs as a build (no planner, the `:rerun` gates), a stop before the commit, the
   relaxed list; (i) the late decision in the CI write-back, none when attended or when there is no
-  late one, a resume, a malformed `body_decided`; the README text.
+  late one, a resume, a malformed `body_decided`; the README text; `recover` `none` after an
+  update-branch with the `reviewed:v2` run-state and in the `:replan` auto gates; a
+  `ci_write_back` status outside its enum.
+- `v856_plan_checkpoint`: (g) a refused checkpoint carries no parked round and no fingerprint.
 - `v890_recover`: an auto-gate stop after the plan ref commit re-runs a build; the update-branch
-  case names the run-state `ready`. `v508_gh_identity`: `pr_ready` in every run-state.
+  case names the update-branch why. `v508_gh_identity`: `pr_ready` in every run-state.
 - Pins: the agent counts (+1, `infra:state:ready`), the v403 READS rows, the v5010 prompt pins and
   the version.
 

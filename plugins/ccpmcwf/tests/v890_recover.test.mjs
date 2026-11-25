@@ -422,8 +422,8 @@ test("8.9.0 review: a stop after update-branch moved the worktree, before its ru
   assert.ok(out.build.labels.includes("infra:pr-fetch:u1"), out.build.labels.join(", "));
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.equal(out.result.recover.action, "none");
-  // 8.9.3 (#117 d): the last milestone before the CI watch is ready
-  assert.match(out.result.recover.why, /after the run-state ready/);
+  // 8.9.3 (review of #119): an update-branch in this run is checked before the coder flag
+  assert.equal(out.result.recover.why, "the PR branch was updated in this run; a re-run cannot resume after update-branch");
 });
 
 // review B1 of #116: in 8.9.0 the relaxed list was not sealed in the plan ref, so a relaxed plan built in the run never

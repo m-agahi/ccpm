@@ -3808,6 +3808,8 @@ const state = {
   launch: null,
   launchRef: null,
   buildRef: null,
+  // 8.9.3 (review of #119): the plan ref an in-run re-plan committed, until buildFromRef adopts it
+  pendingReplanRef: null,
   milestone: null,
   dirty: null,
   parkDirty: false,
@@ -4440,6 +4442,9 @@ function recoverOf(status) {
   if (c !== "transient") return { class: c === "mechanical" ? c : "safety", action: "none" };
   const no = (why) => ({ class: c, action: "none", why });
   if (state.rerunOf) return no("this run is already the automatic re-run of run " + state.rerunOf);
+  // 8.9.3 (review of #119): two states no run-state resumes from; script state only, fail closed
+  if (state.prUpdated) return no("the PR branch was updated in this run; a re-run cannot resume after update-branch");
+  if (state.pendingReplanRef) return no("an in-run re-plan committed a new plan ref that this run did not adopt");
   const a = { mode: state.launch };
   if (state.launch === "plan" && !state.buildRef && !state.planRef) {
     if (state.parkDirty) return no("the draft plan is still in the worktree (the park failed)");
@@ -6945,7 +6950,8 @@ async function planMode(input, date) {
   const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, String(x.body).replace(/\s+/g, " ").trim()])]));
   const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
   // P3: the parked round count and fingerprint go on only for the same task source
-  const carry = ck || (parked && parked.src === src ? parked : null);
+  // 8.9.3 (#117 g, option A): a park with a checkpoint carries its round and fingerprint only through that checkpoint
+  const carry = ck || (parked && parked.src === src && !parked.ckpt ? parked : null);
   if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
   // the throwaway test database, up through plan-audit
   await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
@@ -7491,6 +7497,7 @@ function partReader(o) {
 async function buildFromRef(input, date, tiny, lay, ws, opt) {
   state.mode = "build";
   state.buildRef = tiny;
+  state.pendingReplanRef = null;
   // 8.9.2 (#116 a): the relaxed list sealed in this ref (null until it loads, and for a ref sealed before 8.9.2)
   state.sealedRelaxed = null;
   const repo = cleanRepo(tiny.repo);
@@ -7743,7 +7750,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 8.9.3 (#117 d): a boolean (required at ready; absent before 8.9.3); the CI write-back record, {ledger_status, comment_status}
       if (st.last_gate === "ready" ? typeof st.pr_ready !== "boolean" : st.pr_ready !== undefined && typeof st.pr_ready !== "boolean") mis("pr_ready " + JSON.stringify(st.pr_ready === undefined ? null : st.pr_ready));
       const cw = st.ci_write_back;
-      if (cw !== undefined && (!cw || typeof cw !== "object" || Array.isArray(cw) || typeof cw.ledger_status !== "string" || typeof cw.comment_status !== "string")) mis("ci_write_back");
+      // review of #119: the two statuses are the write-back's enums (writeBack, and the failed record of ciWriteBack)
+      if (cw !== undefined && (!cw || typeof cw !== "object" || Array.isArray(cw) || !["ok", "failed", "unavailable", "none"].includes(cw.ledger_status) || !["posted", "skipped", "failed", "none"].includes(cw.comment_status))) mis("ci_write_back");
       // 8.9.3 (#117 i): a count of the run-state's auto_decisions (absent before 8.9.3)
       const bd = st.body_decided;
       if (bd !== undefined && (!Number.isInteger(bd) || bd < 0 || bd > (Array.isArray(ad) ? ad.length : 0))) mis("body_decided");
@@ -9737,6 +9745,8 @@ async function replan(ctx) {
       policy: state.policy,
     },
   });
+  // 8.9.3 (review of #119): from here to buildFromRef the run's build ref is the old one; a re-run of it is doomed
+  state.pendingReplanRef = pc.tiny;
   const newHead = pc.tiny.plan_commit;
   const rs = await infra(
     "infra:replan-reset",
