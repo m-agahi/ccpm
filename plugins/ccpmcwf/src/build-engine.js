@@ -1784,7 +1784,7 @@ const ROLE_SHA256 = {
   "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
-  "plan-audit": "e487cc5dd1e6805f5b2259eecc7052c6802ac0066b5fac93a2c22aadc76e1ac7",
+  "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
   "pr-review": "e21205c77290c082cada562ac8a3c63b47a4d2866614d18f9f20d617c2c5e9f1",
   "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
@@ -5328,6 +5328,8 @@ function changedSymbolFindings(raw, criteria) {
       if (!crit && !dc) return badSym(sym + ": " + k + " is mapped to neither a criterion nor dont_care with a reason");
       if (crit && dc) return badSym(sym + ": " + k + " is mapped to both a criterion and dont_care; pick one");
       if (crit && ids.indexOf(crit) < 0) return badSym(sym + ": " + k + " criterion " + crit + " does not exist");
+      // 8.9.5 (review of #121): the auto reason is the script's; R5 trusts it to mark a hit the script mapped
+      if (dc === AUTO_DONT_CARE) return badSym(sym + ": " + k + " dont_care " + JSON.stringify(AUTO_DONT_CARE) + " is reserved for the script; leave the hit unmapped or give your own reason");
       occ.push({ at: o.at, criterion: crit, dont_care: dc });
     });
     clean.push({ symbol: sym, occurrences: occ });
@@ -5577,7 +5579,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
       findings.push({
         criterion: null,
         symbol: s.symbol,
-        finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
+        finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit",
       });
       continue;
     }
@@ -6083,12 +6085,14 @@ async function planAndAudit(ctx0) {
   planGot.end();
   let callerOcc = null;
   let autoDontCare = null;
+  let autoUnlisted = null;
   let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
     if (cc.findings.length) return planFindingsStop("j", ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
     callerOcc = cc.occurrences;
     autoDontCare = cc.auto;
+    autoUnlisted = Object.assign({}, cc.unlisted);
     symbolMap = cs.clean.map((s) => {
       const have = s.occurrences.map((o) => occurrenceKey(o.at));
       const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
@@ -6148,7 +6152,8 @@ async function planAndAudit(ctx0) {
         plan_diff: plan.plan_diff.slice(),
         base_ref: ctx.baseRef,
         mode: "writeback=false",
-        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
+        // 8.9.5 (review of #121): auto_unlisted, the doc and lock hits per symbol checked by count and hash only (disk path)
+        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare, auto_unlisted: autoUnlisted },
         // every refused round before this one, or null
         prior_round: priorRoundView(prior),
       }, planRs.checks.length ? { required_checks: planRs.checks } : {}, aEnv),
@@ -8485,17 +8490,21 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 7.2.0 (L2178): the sealed paths per symbol; on the disk path only a symbol whose path set differs is read.
       // 8.9.5 (yaadgaar #112): R5 compares code paths only. A sealed auto entry (a doc or lock hit the script mapped,
       // in a plan ref of any version) is dont_care by definition and left out; a doc the planner mapped itself stays.
+      // Review of #121: an auto entry is left out only when it is a doc or lock file and not a doctest at the merge (the
+      // grep's doctest list; with no list it stays), so the filter runs after the grep; the disk compare filters the same way
       const sealedPaths = {};
-      for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).filter((o) => !(o && o.dont_care === AUTO_DONT_CARE && docOrLockFile(at(o.at)))).map((o) => at(occurrenceKey(o.at) || o.at));
+      for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).map((o) => at(occurrenceKey(o.at) || o.at));
       const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", sealedPaths, "path");
+      const dt = Array.isArray(g.doctest_md) ? g.doctest_md.map(normPath) : null;
+      const docHit = (p) => !!dt && docOrLockFile(p) && dt.indexOf(p) < 0;
+      for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).filter((o) => !(o && o.dont_care === AUTO_DONT_CARE && docHit(at(o.at)))).map((o) => at(occurrenceKey(o.at) || o.at));
       if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " call-shaped occurrences)";
       const unread = Object.keys(g.unread).sort(codePointCompare);
       if (unread.length) return "the occurrences of " + unread.join(", ") + " at the update merge differ from the sealed map and are over the caller read budget";
       const occ = [];
       for (const x of syms) for (const p of sealedPaths[x.symbol]) occ.push(p);
       // an inline grep's auto hit is left out only when the script's own doc and lock list agrees (no doctest list: kept)
-      const dt = Array.isArray(g.doctest_md) ? g.doctest_md.map(normPath) : null;
-      const autoHit = (n, k) => !!dt && Array.isArray(g.auto_dont_care[n]) && g.auto_dont_care[n].indexOf(k) >= 0 && docOrLockFile(at(k)) && dt.indexOf(at(k)) < 0;
+      const autoHit = (n, k) => Array.isArray(g.auto_dont_care[n]) && g.auto_dont_care[n].indexOf(k) >= 0 && docHit(at(k));
       for (const n of Object.keys(g.occurrences)) for (const k of g.occurrences[n]) if (!autoHit(n, k)) occ.push(at(k));
       for (const n of Object.keys(g.paths)) for (const p of g.paths[n]) occ.push(normPath(p));
       const oc = mv.filter((p) => occ.indexOf(p) >= 0);

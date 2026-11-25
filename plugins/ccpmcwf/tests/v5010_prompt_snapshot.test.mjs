@@ -139,10 +139,11 @@ const SCENARIOS = {
 // 8.5.6 (yaadgaar #108 step 3 + item 8): the policy program's caps schema types run_budget (the policy prompt's schema); same call counts: the three plan/build pins move, probe unchanged. Checked: with run_budget dropped from the caps schema every pin is 8.5.5's
 // 8.9.0 (#108 step 6, the engine once-only guard): the parked program's typed keys gain marked, blocked and marker (the run-lock schemas); same call counts: the three plan/build pins move, probe unchanged. Checked: with those three PROGRAM_OUT keys dropped every pin is 8.9.0's earlier one
 // 8.9.3 (#117 d): + infra:state:ready (the run-state after ready, before the CI watch) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with the ready save dropped every pin is 8.9.2's
+// 8.9.5 (yaadgaar #112, review of #121): plan-audit's caller_check gains auto_unlisted (the doc and lock hit count per symbol checked by code hash; {} in these scenarios) and the plan-audit role sha moves (masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with auto_unlisted dropped from caller_check every pin is 8.9.4's
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "af690288530460aed55e37944c2b6fbe1e3b6ae548b65bd5997a2e5ceb36e364" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "6d7f794dd8b1d0d61c5214e6cee6078e6c3141abf3d9624c9970c4a1223c2032" },
-  "short path (one test writer)": { calls: 89, sha256: "9b559b832bce8169031d2aa298f5b44b5360c12cd0bdb179efced0b2c5441bcf" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "b01f190f03e8ed4cd5e361b73e1e323cf60830fa748e802eea67e685c6dbcfa4" },
+  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "9398aca9fd80429fe486e0ab02203326b3c6617682638a7bb9820ba529b5b1b1" },
+  "short path (one test writer)": { calls: 89, sha256: "e12bd9568f5d7a921dc3d02b3d10d630ecf498650e9866f625767b6e73818560" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

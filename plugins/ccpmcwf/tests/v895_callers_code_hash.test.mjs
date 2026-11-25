@@ -122,7 +122,7 @@ test("8.9.5 (#112) gate: only a code caller changes: caught exactly as before", 
   const d2 = { hits: code("pin", 3).concat(docs("pin", 300)), auto: docs("pin", 300) };
   const o2 = await runOne(planOf("pin", code("pin", 2), d2), ARGS);
   assert.deepEqual(reads(o2), []);
-  assert.deepEqual(findingsOf(o2), ["pin: the mapped occurrences differ from git grep -w (303 hits, 2 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"]);
+  assert.deepEqual(findingsOf(o2), ["pin: the mapped occurrences differ from git grep -w (303 hits, 2 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit"]);
 });
 
 test("8.9.5 (#112) gate: a stale code line in the map is caught", async () => {
@@ -237,6 +237,50 @@ test("8.9.5 (#112) fail closed at R5: a doc the planner mapped itself stays in t
   t["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { pin: CODE.concat(["README.md:3"]) }, capped: [], auto_dont_care: { pin: ["README.md:3"] }, doctest_md: [] };
   callersDisk(t, "infra:callers:u1", { pin: { hits: CODE.concat(["README.md:3"]), auto: ["README.md:3"] } });
   const out = await run(t, ARGS);
+  assert.deepEqual(u1Reads(out), []);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.ok(out.result.reason.includes("(README.md)"), out.result.reason);
+});
+
+// ---------------------------------------------------------------- review of PR #121
+
+test("8.9.5 review of #121 (2): plan-audit's caller_check carries the unlisted doc and lock hit count per symbol", async () => {
+  const d = { hits: code("pin", 2).concat(docs("pin", 300)), auto: docs("pin", 300) };
+  const s = happy();
+  // other: a full map (no unlisted hit)
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "pin", occurrences: code("pin", 2).map(dc) }, { symbol: "other", occurrences: [dc("src/o.py:1")] }];
+  callersDisk(s, "infra:callers", { pin: d, other: { hits: ["src/o.py:1"] } });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const cc = inputsOf(call(out, "role:plan-audit").prompt).caller_check;
+  assert.deepEqual(cc.auto_unlisted, { pin: 300 });
+  assert.deepEqual(cc.auto_dont_care.pin, []);
+  // an inline caller check lists its doc hits, so nothing is unlisted
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = [{ symbol: "pin", occurrences: ["src/p.py:1"].map(dc) }];
+  t["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { pin: ["README.md:1", "src/p.py:1"] }, capped: [], auto_dont_care: { pin: ["README.md:1"] }, doctest_md: [] };
+  const o2 = await runOne(t, ARGS);
+  const c2 = inputsOf(call(o2, "role:plan-audit").prompt).caller_check;
+  assert.deepEqual(c2.auto_unlisted, {});
+  assert.deepEqual(c2.auto_dont_care.pin, ["README.md:1"]);
+});
+
+test("8.9.5 review of #121 (3): a planner entry with the script's reserved reason \"auto: non-code file\" is a finding", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "pin", occurrences: [dc("src/p.py:1"), { at: "README.md:1", criterion: null, dont_care: "auto: non-code file" }] }];
+  s["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { pin: ["README.md:1", "src/p.py:1"] }, capped: [], auto_dont_care: { pin: ["README.md:1"] }, doctest_md: [] };
+  const out = await runOne(s, ARGS);
+  const f = findingsOf(out);
+  assert.ok(f.includes("pin: README.md:1 dont_care \"auto: non-code file\" is reserved for the script; leave the hit unmapped or give your own reason"), f.join("\n"));
+});
+
+test("8.9.5 review of #121 (3): a sealed auto doc that is a doctest at the merge stays in R5 with no read; the base moves it, R5 refuses", async () => {
+  // sealed as auto at plan time (no doctest config); at the merge the base made README.md a doctest
+  const t = upd(CODE, ["README.md"]);
+  t["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { pin: CODE.concat(["README.md:1"]) }, capped: [], auto_dont_care: { pin: ["README.md:1"] }, doctest_md: [] };
+  callersDisk(t, "infra:callers:u1", { pin: { hits: CODE.concat(["README.md:1"]) } }, { file: { doctest_md: ["README.md"] } });
+  const out = await run(t, ARGS);
+  assert.equal(sealedOf(out).filter((o) => o.dont_care === "auto: non-code file").length, 1);
   assert.deepEqual(u1Reads(out), []);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.ok(out.result.reason.includes("(README.md)"), out.result.reason);

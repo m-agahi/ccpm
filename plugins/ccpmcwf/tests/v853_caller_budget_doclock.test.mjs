@@ -77,7 +77,7 @@ test("8.5.3 (#111) non-weakening: code hits over the budget still give the re-gr
   const { s } = realRun(extra);
   const out = await runOne(s, ARGS);
   const f = findingsOf(out);
-  assert.ok(f.includes("c_wrong: the mapped occurrences differ from git grep -w (210 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"), f.join("\n"));
+  assert.ok(f.includes("c_wrong: the mapped occurrences differ from git grep -w (210 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit"), f.join("\n"));
   assert.ok(!f.some((y) => /doc or lock hit\(s\) left to auto dont_care/.test(y)), f.join("\n"));
   assert.equal(reads(out, /:read:all:/).length, 0, reads(out).join(", "));
 });

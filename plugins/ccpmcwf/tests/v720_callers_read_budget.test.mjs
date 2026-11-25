@@ -29,7 +29,7 @@ test("7.2.0 AC11 / 8.9.5: a map with one doc hit of 84 per symbol (6 pages of pa
   assert.deepEqual(reads(out), []);
   const f = findingsOf(out);
   for (const x of names)
-    assert.ok(f.includes(x + ": the mapped occurrences differ from git grep -w (84 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"), f.join("\n"));
+    assert.ok(f.includes(x + ": the mapped occurrences differ from git grep -w (84 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit"), f.join("\n"));
 });
 
 test("7.2.0 AC11: a part-all list over the budget reads nothing and gives one finding per symbol", async () => {
@@ -42,7 +42,7 @@ test("7.2.0 AC11: a part-all list over the budget reads nothing and gives one fi
   assert.deepEqual(reads(out), []);
   const f = findingsOf(out);
   for (const x of names)
-    assert.ok(f.includes(x + ": the mapped occurrences differ from git grep -w (84 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"), f.join("\n"));
+    assert.ok(f.includes(x + ": the mapped occurrences differ from git grep -w (84 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit"), f.join("\n"));
 });
 
 // 8.9.5 (yaadgaar #112): a map with one doc hit each takes part all; 200 hits fill exactly the 4 reads and the

@@ -61,7 +61,7 @@ test("7.4.0 #68 C2 / 8.9.5: 210 doc hits: a map of one doc hit is over the budge
   assert.equal(out.labels.filter((l) => l.includes(":read:")).length, 0, out.labels.join(", "));
   const c = call(out, "role:scope-and-plan:audit-fix");
   assert.ok(c, out.result.status + " " + out.result.reason);
-  assert.deepEqual(inputsOf(c.prompt).prior_round.findings.map((f) => f.finding), [x + ": the mapped occurrences differ from git grep -w (210 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"]);
+  assert.deepEqual(inputsOf(c.prompt).prior_round.findings.map((f) => f.finding), [x + ": the mapped occurrences differ from git grep -w (210 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit"]);
   const t = happy();
   t["role:scope-and-plan"].changed_symbols = [{ symbol: x, occurrences: [{ at: "src/r_one.py:1", criterion: "AC1", dont_care: null }] }];
   callersDisk(t, "infra:callers", { [x]: { hits: ["src/r_one.py:1"].concat(docs(x, 210)), auto: docs(x, 210) } });
