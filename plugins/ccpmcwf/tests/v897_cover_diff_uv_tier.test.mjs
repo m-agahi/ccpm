@@ -241,7 +241,10 @@ test("8.9.7 #110: a census that fails its digest gives cover_diff no tier", asyn
   assert.equal(argsOf(call(out, "infra:gates:r1").prompt, "cover_diff")[6], "");
 });
 
-// ---------------------------------------------------------------- security review of #123: the judged tree cannot repoint coverage
+// ---------------------------------------------------------------- review of #123 (Max: option B, honest-coder gate)
+// The gate does not resist a hostile coder (in-process tampering, ADR-1152, ADR-1325, ADR-1365): the judged tree's
+// lock and pyproject decide which coverage runs. Kept: UV_NO_CONFIG=1, and one accident guard (the judged uv.lock
+// still pins coverage from PyPI).
 
 const REFUSED_NR = (x, why) => {
   assert.equal(x.r.status, 0, x.r.stderr);
@@ -258,88 +261,31 @@ test("8.9.7 #110 review: the uv tier runs uv with UV_NO_CONFIG=1 (no uv.toml or 
   assert.ok(x.envs.every((e) => e === "UV_NO_CONFIG=1"), x.envs.join("\n"));
 });
 
-test("8.9.7 #110 review: a judged pyproject.toml whose [tool.uv.sources] repoints coverage gives not_run", { skip: !HAVE_PY }, () => {
-  const x = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[tool.uv.sources]\ncoverage = { path = "fakecov" }\n' } });
-  REFUSED_NR(x, "pyproject.toml [tool.uv] differs from the plan base");
-  // a [tool.uv] index setting is refused the same way
-  const y = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[tool.uv]\nindex-url = "https://evil.example/simple"\n' } });
-  REFUSED_NR(y, "pyproject.toml [tool.uv] differs from the plan base");
-  // a base that already sources coverage elsewhere is refused too
-  const src = PYPROJECT + '\n[tool.uv.sources]\ncoverage = { path = "fakecov" }\n';
-  const z = fixture({ tier: UV_TIER, baseFiles: { "pyproject.toml": src } });
-  REFUSED_NR(z, "pyproject.toml [tool.uv.sources] names coverage");
-});
-
-test("8.9.7 #110 review: a judged uv.lock whose coverage entry differs from the base gives not_run", { skip: !HAVE_PY }, () => {
-  // another version from PyPI
-  const a = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('version = "7.6.1"', 'version = "7.6.2"') } });
-  REFUSED_NR(a, "the judged uv.lock coverage entry differs from the plan base");
-  // a hash added (the same version)
-  const b = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('source = { registry = "https://pypi.org/simple" }\n', 'source = { registry = "https://pypi.org/simple" }\nsdist = { url = "https://x/c.tar.gz", hash = "sha256:00" }\n') } });
-  REFUSED_NR(b, "the judged uv.lock coverage entry differs from the plan base");
-  // a path source
-  const c = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('source = { registry = "https://pypi.org/simple" }', 'source = { path = "fakecov" }') } });
-  REFUSED_NR(c, "the judged uv.lock does not pin coverage from PyPI");
-  // no lock in the judged tree
-  const d = fixture({ tier: UV_TIER, judged: { "uv.lock": null } });
-  REFUSED_NR(d, "the judged tree has no uv.lock");
-  // a lock that is not TOML
-  const e = fixture({ tier: UV_TIER, judged: { "uv.lock": "[[package\n" } });
-  REFUSED_NR(e, "the judged uv.lock is not TOML");
-  // no lock at the base (the census tier came from elsewhere)
-  const f = fixture({ tier: UV_TIER, lock: false, judged: { "uv.lock": LOCK } });
-  REFUSED_NR(f, "the plan base has no uv.lock");
-  // a change to another package leaves the coverage entry as it is: still runs
-  const g2 = fixture({ judged: { "uv.lock": LOCK.replace('name = "demo"\nversion = "0.1.0"', 'name = "demo"\nversion = "0.2.0"') } });
-  assert.equal(g2.out.status, "ran", g2.out.reason);
-});
-
-test("8.9.7 #110 review: a uv.toml or .python-version change in the judged tree gives not_run", { skip: !HAVE_PY }, () => {
-  const a = fixture({ tier: UV_TIER, judged: { "uv.toml": 'index-url = "https://evil.example/simple"\n' } });
-  REFUSED_NR(a, "uv.toml differs from the plan base");
-  const b = fixture({ tier: UV_TIER, baseFiles: { ".python-version": "3.12\n" }, judged: { ".python-version": "3.13\n" } });
-  REFUSED_NR(b, ".python-version differs from the plan base");
-  // unchanged from the base: runs
-  const c = fixture({ baseFiles: { ".python-version": "3.12\n", "uv.toml": "native-tls = true\n" } });
-  assert.equal(c.out.status, "ran", c.out.reason);
-});
-
 test("8.9.7 #110 review: a `uv run` test_cmd is not checked (the plan audit approved it; as before)", { skip: !HAVE_PY }, () => {
   const x = fixture({ cmd: "uv run --frozen pytest -q", judged: { "uv.toml": "x = 1\n" }, tier: UV_TIER });
   assert.equal(x.out.status, "ran", x.out.reason);
   assert.ok(x.envs.every((e) => e === "UV_NO_CONFIG="), x.envs.join("\n"));
 });
 
-test("8.9.7 #110 review: a tree-local coverage package or module (an editable install can put the tree on sys.path) gives not_run", { skip: !HAVE_PY }, () => {
-  const a = fixture({ tier: UV_TIER, judged: { "coverage/__init__.py": "x = 1\n" } });
-  REFUSED_NR(a, "the judged tree has a path named coverage (coverage/__init__.py), which could shadow the locked coverage");
-  const b = fixture({ tier: UV_TIER, judged: { "src/coverage.py": "x = 1\n" } });
-  REFUSED_NR(b, "the judged tree has a path named coverage (src/coverage.py), which could shadow the locked coverage");
-  // a name that only starts with coverage is fine
-  const c = fixture({ judged: { "pkg/coverage_util.py": "x = 1\n" } });
-  assert.equal(c.out.status, "ran", c.out.reason);
+test("8.9.7 #110 accident guard: the judged uv.lock must still pin coverage from PyPI, else not_run", { skip: !HAVE_PY }, () => {
+  // a path source
+  const a = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('source = { registry = "https://pypi.org/simple" }', 'source = { path = "vendor/coverage" }') } });
+  REFUSED_NR(a, "the judged uv.lock does not pin coverage from PyPI");
+  // coverage dropped from the lock
+  const b = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('name = "coverage"', 'name = "other"') } });
+  REFUSED_NR(b, "the judged uv.lock does not pin coverage from PyPI");
+  // no lock in the judged tree
+  const c = fixture({ tier: UV_TIER, judged: { "uv.lock": null } });
+  REFUSED_NR(c, "the judged tree has no uv.lock");
+  // a lock that is not TOML
+  const d = fixture({ tier: UV_TIER, judged: { "uv.lock": "[[package\n" } });
+  REFUSED_NR(d, "the judged uv.lock is not TOML");
 });
 
-test("8.9.7 #110 review: a judged pyproject.toml that can install a coverage command or remap a package gives not_run", { skip: !HAVE_PY }, () => {
-  const a = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[project.scripts]\ncoverage = "pkg.mod:f"\n' } });
-  REFUSED_NR(a, "pyproject.toml declares a coverage script or entry point");
-  const b = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[project.entry-points.console_scripts]\ncoverage = "pkg.mod:f"\n' } });
-  REFUSED_NR(b, "pyproject.toml declares a coverage script or entry point");
-  const c = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[tool.setuptools.package-dir]\ncoverage = "pkg"\n' } });
-  REFUSED_NR(c, "pyproject.toml [build-system] or a [tool] table other than [tool.uv] differs from the plan base");
-  const d = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n' } });
-  REFUSED_NR(d, "pyproject.toml [build-system] or a [tool] table other than [tool.uv] differs from the plan base");
-  // another script name, and a dependency change, still run
-  const e = fixture({ judged: { "pyproject.toml": PYPROJECT + 'dependencies = ["requests"]\n\n[project.scripts]\ndemo = "pkg.mod:f"\n' } });
-  assert.equal(e.out.status, "ran", e.out.reason);
-});
-
-test("8.9.7 #110 review: a new or changed non-PyPI lock entry gives not_run (the root project's own entry aside)", { skip: !HAVE_PY }, () => {
-  const a = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK + '\n[[package]]\nname = "fakecov"\nversion = "1.0"\nsource = { path = "vendor/fakecov" }\n' } });
-  REFUSED_NR(a, "the judged uv.lock has a non-PyPI entry the plan base lacks (fakecov)");
-  const b = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK + '\n[[package]]\nname = "x"\nversion = "1.0"\nsource = { git = "https://e.example/x" }\n' } });
-  REFUSED_NR(b, "the judged uv.lock has a non-PyPI entry the plan base lacks (x)");
-  // the root project's entry may change (a new dependency), and a new PyPI entry is fine
-  const c = fixture({ judged: { "uv.lock": LOCK.replace('source = { editable = "." }\n', 'source = { editable = "." }\ndependencies = [{ name = "idna" }]\n') + '\n[[package]]\nname = "idna"\nversion = "3.7"\nsource = { registry = "https://pypi.org/simple" }\n' } });
-  assert.equal(c.out.status, "ran", c.out.reason);
+test("8.9.7 #110 honest-coder gate: a lock, pyproject or uv config change that keeps coverage on PyPI still runs (no base comparison)", { skip: !HAVE_PY }, () => {
+  const a = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('version = "7.6.1"', 'version = "7.6.2"') } });
+  assert.equal(a.out.status, "ran", a.out.reason);
+  const b = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[tool.uv]\nindex-url = "https://example.org/simple"\n', "uv.toml": "native-tls = true\n" } });
+  assert.equal(b.out.status, "ran", b.out.reason);
+  assert.ok(b.envs.every((e) => e === "UV_NO_CONFIG=1"), b.envs.join("\n"));
 });

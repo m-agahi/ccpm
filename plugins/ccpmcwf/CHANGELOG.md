@@ -25,19 +25,15 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
 - A `uv run` test_cmd keeps its own flags (as 8.4.1); any other runner, and any other tier value,
   keeps the old behaviour. `mutants.py` keeps its 6 args.
 
-### Security
+### Known limits
 
-- Review of #123: uv resolves coverage from the judged tree's uv.lock and config, which the coder
-  writes; the census read the repo at preflight, not the judged tree. On the new uv path the gate
-  now fails closed before any run (not_run "uv tier refused: ...") unless, read from git objects:
-  the judged uv.lock pins coverage from PyPI with entries equal to the plan base's (version, source,
-  hashes); pyproject.toml `[tool.uv]` equals the base's and `[tool.uv.sources]` does not name
-  coverage; `uv.toml` and `.python-version` equal the base's; no judged path is named `coverage` (or
-  `coverage.py` and the like), which could shadow the locked coverage; every non-PyPI lock entry other than the root project's
-  equals the base's; the judged pyproject declares no `coverage` script or entry point, and its
-  `[build-system]` and every `[tool.*]` table but `[tool.uv]` equal the base's (no package-dir or
-  wheel remap). Every uv-tier run gets
-  `UV_NO_CONFIG=1`. A `uv run` test_cmd (approved by the plan audit) is not checked, as before.
+- The coverage gate resists an honest mistake, not a hostile coder (Max's ruling on #123: option
+  B). On the uv tier, and on a plan-approved `uv run` test_cmd, the judged tree's uv.lock and
+  pyproject.toml decide which coverage runs; the coder writes both. This is accepted, as is a
+  conftest that fakes the result in the same process (ADR-1152, ADR-1325, ADR-1365).
+- One accident guard: on the new uv path the judged uv.lock must still pin coverage from the PyPI
+  registry; else not_run "uv tier refused: ..." (no uv.lock, not TOML, or coverage not from
+  PyPI). Every uv-tier run gets `UV_NO_CONFIG=1`, so no uv.toml or user uv config is read.
 
 ## [8.9.6] - 2026-11-25
 

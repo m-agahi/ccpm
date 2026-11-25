@@ -56,14 +56,10 @@ except Exception:
 # (gate_tools.py) the workflow passes. When it is exactly UV_TIER, a bare pytest or a python -m pytest test_cmd runs
 # coverage as `uv run --frozen coverage` (no uv on PATH: not_run); a uv run test_cmd keeps its own flags, and any
 # other tier value, or none, keeps the shapes below.
-# Security review of #123: uv resolves coverage from the judged tree's uv.lock and config, which the coder writes
-# (the census read the repo at preflight, not this tree). Before any run, the uv tier fails closed (not_run "uv
-# tier refused: ...") unless the judged tree's uv.lock pins coverage from PyPI with an entry equal to the plan
-# base's, its pyproject.toml [tool.uv] table equals the base's and its [tool.uv.sources] does not name coverage,
-# and uv.toml and .python-version equal the base's, and no tree path is named coverage (a package or module that
-# could shadow the locked one); every non-PyPI lock entry but the root project's is the base's, and the judged
-# pyproject declares no coverage script or entry point, with [build-system] and every [tool.*] table but [tool.uv]
-# as at the base. Every run of the uv tier gets UV_NO_CONFIG=1.
+# Review of #123 (Max: option B, an honest-coder gate): uv resolves coverage from the judged tree's uv.lock and
+# pyproject, which the coder writes; like conftest tampering this is an accepted residual (ADR-1152, ADR-1325,
+# ADR-1365). One accident guard: the judged uv.lock must still pin coverage from PyPI (else not_run "uv tier
+# refused: ..."). Every run of the uv tier gets UV_NO_CONFIG=1.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
 SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
@@ -227,68 +223,21 @@ uv_route = uv_tier and head[0] == 'uv' and argv[:2] != ['uv', 'run']
 if uv_route and not shutil.which('uv', path=path):
     emit('not_run', 'no coverage tool: uv is not on PATH')
 def uv_refusal():
-    # the reason the judged tree may not run coverage through uv, or None (read from git objects, never from the copy)
-    def blob(rev, n):
-        r = subprocess.run(G + ['-C', wt, 'cat-file', 'blob', rev + ':' + n], capture_output=True, stdin=subprocess.DEVNULL)
-        return r.stdout if r.returncode == 0 else None
-    def toml(b):
-        try:
-            import tomllib
-            if len(b) > 16777216:
-                return None
-            t = tomllib.loads(b.decode('utf-8'))
-            return t if isinstance(t, dict) else None
-        except Exception:
-            return None
-    # an editable install can put the tree on sys.path: no tree-local coverage package or module may shadow the lock's
-    for n in os.fsdecode(git(wt, 'ls-tree', '-r', '-z', '--name-only', tree)).split('\0'):
-        if any(c == 'coverage' or re.match(r'^coverage\.(py|pyc|pth|so|pyd)$|^coverage\..*\.(so|pyd)$', c) for c in n.split('/')):
-            return 'the judged tree has a path named coverage (' + n + '), which could shadow the locked coverage'
-    lb, lt = blob(base, 'uv.lock'), blob(tree, 'uv.lock')
-    if lt is None:
+    # an accident guard, not a hostile-coder check: the judged uv.lock (its git object) still pins coverage from PyPI
+    r = subprocess.run(G + ['-C', wt, 'cat-file', 'blob', tree + ':uv.lock'], capture_output=True, stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
         return 'the judged tree has no uv.lock'
-    if lb is None:
-        return 'the plan base has no uv.lock'
-    tb, tt = toml(lb), toml(lt)
-    if tt is None:
+    try:
+        import tomllib
+        if len(r.stdout) > 16777216:
+            raise ValueError('over 16 MiB')
+        t = tomllib.loads(r.stdout.decode('utf-8'))
+    except Exception:
         return 'the judged uv.lock is not TOML'
-    if tb is None:
-        return 'the plan base uv.lock is not TOML'
-    cov = lambda t: [e for e in t.get('package')] if isinstance(t.get('package'), list) else []
-    ct = [e for e in cov(tt) if isinstance(e, dict) and e.get('name') == 'coverage']
-    cb = [e for e in cov(tb) if isinstance(e, dict) and e.get('name') == 'coverage']
+    pk = t.get('package') if isinstance(t, dict) else None
+    ct = [e for e in pk if isinstance(e, dict) and e.get('name') == 'coverage'] if isinstance(pk, list) else []
     if not ct or not all(e.get('source') == PYPI for e in ct):
         return 'the judged uv.lock does not pin coverage from PyPI'
-    if ct != cb:
-        return 'the judged uv.lock coverage entry differs from the plan base'
-    # a path, git, url or directory entry can ship its own coverage script: each must be the base's, as it is
-    for e in cov(tt):
-        if isinstance(e, dict) and e.get('source') != PYPI and e.get('source') not in ({'editable': '.'}, {'virtual': '.'}) and e not in cov(tb):
-            return 'the judged uv.lock has a non-PyPI entry the plan base lacks (' + str(e.get('name')) + ')'
-    pp = []
-    for rev in (base, tree):
-        b = blob(rev, 'pyproject.toml')
-        t = {} if b is None else toml(b)
-        if t is None:
-            return 'pyproject.toml is not TOML'
-        pp.append(t)
-    tool = [t.get('tool') if isinstance(t.get('tool'), dict) else {} for t in pp]
-    uvs = [x.get('uv') for x in tool]
-    if uvs[0] != uvs[1]:
-        return 'pyproject.toml [tool.uv] differs from the plan base'
-    if isinstance(uvs[1], dict) and (not isinstance(uvs[1].get('sources', {}), dict) or 'coverage' in uvs[1].get('sources', {})):
-        return 'pyproject.toml [tool.uv.sources] names coverage'
-    # the editable install of the judged project: no coverage command of its own, and (broad, fail closed) the
-    # build backend and every [tool.*] table but [tool.uv] as at the base, so no package-dir or wheel remap
-    pj = pp[1].get('project') if isinstance(pp[1].get('project'), dict) else {}
-    eps = [pj.get('scripts'), pj.get('gui-scripts')] + (list(pj.get('entry-points').values()) if isinstance(pj.get('entry-points'), dict) else [pj.get('entry-points')])
-    if any(x is not None and (not isinstance(x, dict) or 'coverage' in x) for x in eps):
-        return 'pyproject.toml declares a coverage script or entry point'
-    if pp[0].get('build-system') != pp[1].get('build-system') or {k: v for k, v in tool[0].items() if k != 'uv'} != {k: v for k, v in tool[1].items() if k != 'uv'}:
-        return 'pyproject.toml [build-system] or a [tool] table other than [tool.uv] differs from the plan base'
-    for n in ('uv.toml', '.python-version'):
-        if blob(base, n) != blob(tree, n):
-            return n + ' differs from the plan base'
     return None
 if uv_route:
     why = uv_refusal()
