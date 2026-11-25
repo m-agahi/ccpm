@@ -1745,9 +1745,12 @@ What is left (accepted residuals):
 - In-process tampering: the tests share the tracer's process and its data dir in the
   `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
-  install) runs too. On the uv coverage tier (8.9.7), and on a plan-approved `uv run` test_cmd,
-  the judged tree's uv.lock and pyproject.toml decide which coverage runs, and the coder writes
-  both; the gate only checks that the lock still pins coverage from PyPI (an accident guard). The
+  install) runs too. On a plan-approved `uv run` test_cmd the judged tree's uv.lock and
+  pyproject.toml decide which coverage runs, and the coder writes both. On the uv coverage tier
+  (8.9.7) with a bare pytest or `python -m pytest` test_cmd, coverage comes from a venv that
+  cover_diff fills outside the sandbox from the plan base's lock (`uv sync --frozen
+--no-install-project --no-build`, wheels only) and runs offline with `--no-sync`; the gate
+  only checks that the judged lock still pins coverage from PyPI (an accident guard). The
   held-out and coverage verdicts stay in-process by design (ADR-1152, ADR-1325, ADR-1365): a
   sandbox limits what the tests touch, not what they report. Mutation has a placebo
   control (above); a source that hashes its AST or `__code__` rather than its bytes still passes the

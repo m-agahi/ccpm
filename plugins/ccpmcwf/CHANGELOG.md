@@ -24,16 +24,36 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
   install coverage still fails the `--version` probe (not_run).
 - A `uv run` test_cmd keeps its own flags (as 8.4.1); any other runner, and any other tier value,
   keeps the old behaviour. `mutants.py` keeps its 6 args.
+- Review of #123 (F1, Max: prefill the cache from the base lock): the gate's `UV_CACHE_DIR` is
+  fresh per run and the sandbox has no network, so a uv coverage run with an empty cache could
+  never start. On the new uv path `cover_diff.py` now fills the gate's `UV_CACHE_DIR` and
+  `UV_PROJECT_ENVIRONMENT` first, outside the sandbox, from the plan base's pyproject.toml,
+  uv.lock and .python-version (git objects, never the judged tree): `uv sync --frozen
+--no-install-project --no-build --project <a copy of those files>`, with `UV_NO_CONFIG=1`, at
+  most 300 s. Only wheels are installed and no tree code runs. A failed prefill gives not_run
+  ("uv cache prefill failed: ..." or "uv cache prefill not run: ...").
+- Inside the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage`.
+  uv run has no `--no-install-project`, and a sync inside the sandbox would not outlive its fresh
+  overlay, so the judged lock is not installed. If the judged tree needs packages the base lock
+  does not provide, the coverage run goes red after a green host baseline, and the gate gives
+  not_run with that reason (F3: before, this was an error that stopped the build after two rounds).
+- F2: every uv run on the uv tier gets `UV_NO_CONFIG=1`, a `uv run` test_cmd's too.
+- The lock guard reads the blob size (`git cat-file -s`) before it reads the blob (16 MiB cap).
 
 ### Known limits
 
 - The coverage gate resists an honest mistake, not a hostile coder (Max's ruling on #123: option
-  B). On the uv tier, and on a plan-approved `uv run` test_cmd, the judged tree's uv.lock and
-  pyproject.toml decide which coverage runs; the coder writes both. This is accepted, as is a
-  conftest that fakes the result in the same process (ADR-1152, ADR-1325, ADR-1365).
+  B). On a plan-approved `uv run` test_cmd, the judged tree's uv.lock and pyproject.toml decide
+  which coverage runs; the coder writes both. On the new uv path coverage comes from the venv
+  prefilled from the base lock, but the tests still run in the same process as coverage. Both
+  are accepted, as is a conftest that fakes the result (ADR-1152, ADR-1325, ADR-1365).
 - One accident guard: on the new uv path the judged uv.lock must still pin coverage from the PyPI
-  registry; else not_run "uv tier refused: ..." (no uv.lock, not TOML, or coverage not from
-  PyPI). Every uv-tier run gets `UV_NO_CONFIG=1`, so no uv.toml or user uv config is read.
+  registry; else not_run "uv tier refused: ..." (no uv.lock, over 16 MiB, not TOML, or coverage
+  not from PyPI). Every uv run on the uv tier gets `UV_NO_CONFIG=1`, so no uv.toml or user uv
+  config is read.
+- The prefill needs network access for the gate agent's Bash call; without it the gate gives
+  not_run "uv cache prefill failed: ...". A base project that needs a build (an sdist, a path or
+  workspace member) fails the `--no-build` prefill the same way.
 
 ## [8.9.6] - 2026-11-25
 

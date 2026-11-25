@@ -59,11 +59,23 @@ except Exception:
 # Review of #123 (Max: option B, an honest-coder gate): uv resolves coverage from the judged tree's uv.lock and
 # pyproject, which the coder writes; like conftest tampering this is an accepted residual (ADR-1152, ADR-1325,
 # ADR-1365). One accident guard: the judged uv.lock must still pin coverage from PyPI (else not_run "uv tier
-# refused: ..."). Every run of the uv tier gets UV_NO_CONFIG=1.
+# refused: ..."). Every uv run on the uv tier (a uv run test_cmd's too) gets UV_NO_CONFIG=1.
+# Review of #123 (F1, Max: prefill the cache from the base lock): the gate's UV_CACHE_DIR is fresh per run and the
+# sandbox has no network, so on the new uv path this program first fills UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT
+# outside the sandbox from the plan BASE's pyproject.toml, uv.lock and .python-version (git objects copied to its
+# own work dir, never the judged tree): `uv sync --frozen --no-install-project --no-build --project <that dir>`,
+# argv only, UV_NO_CONFIG=1, at most 300 s (wheels only; no tree code runs). A failed prefill: not_run. Inside
+# the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage` (uv run has no
+# --no-install-project, and a sync inside would not outlive its fresh sandbox): the judged lock is not installed.
+# A failed probe there is not_run, and so is a red coverage run after a green host baseline (the judged lock
+# needs packages the base lock does not provide, or the venv and the host test env differ), never an error.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
 SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
 UV_TIER = 'uv run --frozen coverage'
+UV_HEAD = ['uv', 'run', '--frozen', '--offline', '--no-sync', 'coverage']
+UV_SYNC = ['sync', '--frozen', '--no-install-project', '--no-build']
+BLOB_CAP = 16777216
 PYPI = {'registry': 'https://pypi.org/simple'}
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 # the python -m pytest shape's coverage launcher: coverage from the interpreter (-I: no cwd) or a PYTHONPATH dir
@@ -192,10 +204,10 @@ if argv[:2] == ['uv', 'run']:
     while i < len(argv) and (argv[i] in ('--frozen', '--no-sync') or (argv[i] == '--extra' and i + 1 < len(argv))):
         i += 2 if argv[i] == '--extra' else 1
 if argv[i:i + 1] == ['pytest']:
-    head = argv[:i] + ['coverage'] if i or not uv_tier else ['uv', 'run', '--frozen', 'coverage']
+    head = argv[:i] + ['coverage'] if i or not uv_tier else list(UV_HEAD)
     shown = ' '.join(head)
 elif uv_tier and argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
-    head, i = ['uv', 'run', '--frozen', 'coverage'], 2
+    head, i = list(UV_HEAD), 2
     shown = ' '.join(head)
 elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
     # car F (A-M3): never python -m coverage (the copy is first on sys.path, so a tree-local coverage
@@ -222,22 +234,60 @@ if head[0] == 'coverage' and not shutil.which('coverage', path=path):
 uv_route = uv_tier and head[0] == 'uv' and argv[:2] != ['uv', 'run']
 if uv_route and not shutil.which('uv', path=path):
     emit('not_run', 'no coverage tool: uv is not on PATH')
+def blob(rev, n):
+    # a git object's bytes; None when absent, False when over BLOB_CAP (the size is read first)
+    z = subprocess.run(G + ['-C', wt, 'cat-file', '-s', rev + ':' + n], capture_output=True, stdin=subprocess.DEVNULL)
+    if z.returncode != 0 or not z.stdout.strip().isdigit():
+        return None
+    if int(z.stdout) > BLOB_CAP:
+        return False
+    r = subprocess.run(G + ['-C', wt, 'cat-file', 'blob', rev + ':' + n], capture_output=True, stdin=subprocess.DEVNULL)
+    return r.stdout if r.returncode == 0 else None
 def uv_refusal():
     # an accident guard, not a hostile-coder check: the judged uv.lock (its git object) still pins coverage from PyPI
-    r = subprocess.run(G + ['-C', wt, 'cat-file', 'blob', tree + ':uv.lock'], capture_output=True, stdin=subprocess.DEVNULL)
-    if r.returncode != 0:
+    b = blob(tree, 'uv.lock')
+    if b is None:
         return 'the judged tree has no uv.lock'
+    if b is False:
+        return 'the judged uv.lock is over 16 MiB'
     try:
         import tomllib
-        if len(r.stdout) > 16777216:
-            raise ValueError('over 16 MiB')
-        t = tomllib.loads(r.stdout.decode('utf-8'))
+        t = tomllib.loads(b.decode('utf-8'))
     except Exception:
         return 'the judged uv.lock is not TOML'
     pk = t.get('package') if isinstance(t, dict) else None
     ct = [e for e in pk if isinstance(e, dict) and e.get('name') == 'coverage'] if isinstance(pk, list) else []
     if not ct or not all(e.get('source') == PYPI for e in ct):
         return 'the judged uv.lock does not pin coverage from PyPI'
+    return None
+def prefill(env):
+    # F1: the gate's uv cache and venv from the plan base's files, outside the sandbox; None, or the not_run reason
+    if not all(os.path.isabs(env.get(k) or '') for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT')):
+        return 'uv cache prefill not run: the gate env has no absolute UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT'
+    proj = os.path.join(work, 'base-project')
+    os.mkdir(proj)
+    for n, need in (('pyproject.toml', True), ('uv.lock', True), ('.python-version', False)):
+        b = blob(base, n)
+        if b is False:
+            return 'uv cache prefill not run: the plan base ' + n + ' is over 16 MiB'
+        if b is None:
+            if need:
+                return 'uv cache prefill not run: the plan base has no ' + n
+            continue
+        with open(os.path.join(proj, n), 'wb') as fh:
+            fh.write(b)
+    uvb = shutil.which('uv', path=env['PATH'])
+    if not uvb:
+        return 'no coverage tool: uv is not on PATH'
+    t = max(1, min(300, left() - 60))
+    try:
+        r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=dict(env, UV_NO_CONFIG='1'), stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
+    except subprocess.TimeoutExpired:
+        return 'uv cache prefill failed: uv sync timed out after %d s' % t
+    except OSError as e:
+        return 'uv cache prefill failed: ' + str(e)
+    if r.returncode != 0:
+        return 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, (r.stdout + r.stderr).decode('utf-8', 'replace')[-300:])
     return None
 if uv_route:
     why = uv_refusal()
@@ -294,12 +344,18 @@ try:
     for k in [k for k in env if k.startswith('COVERAGE_')]:
         del env[k]
     env['PATH'] = guard + ':' + path
-    if uv_route:
+    if uv_tier and head[0] == 'uv':
         env['UV_NO_CONFIG'] = '1'
     cov = ['--rcfile=' + rc, '--data-file=' + data]
+    if uv_route:
+        why = prefill(env)
+        if why:
+            emit('not_run', why)
     keep = dbsnap(env)
     try:
         code, tail = run(head + ['--version'], tmp, env, log)
+        if code != 0 and uv_route:
+            emit('not_run', 'no coverage tool in the venv prefilled from the base lock (' + shown + ' --version exit %d): %s' % (code, tail.strip()[-300:]))
         if code != 0:
             emit('not_run', 'no coverage tool: ' + shown + ' --version exit %d' % code)
         code, tail = run(argv, tmp, env, log)
@@ -320,6 +376,8 @@ try:
             emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
         code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log, [dirs[1]], [dirs[0]])
         if code != 0:
+            if uv_route:
+                emit('not_run', "uv coverage run exit %d with a green host baseline: the judged uv.lock needs packages the base lock does not provide, or the uv venv does not match the host test_cmd's environment: %s" % (code, tail.strip()[-300:]))
             sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
         code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log, [dirs[2]], [dirs[0], dirs[1]])
         if code != 0:

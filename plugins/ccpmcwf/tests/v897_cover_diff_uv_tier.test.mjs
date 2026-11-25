@@ -9,6 +9,13 @@
 // judged tree (as v800_coverage.test.mjs), a pass-through bwrap and a stub-only PATH. gate_tools.py runs on
 // the repo first and gives the tier; cover_diff.py gets that tier. The uv stub logs 'uv ' + argv and acts as
 // coverage behind `uv run --frozen coverage`; no real uv or coverage runs.
+//
+// Review of #123 (F1, Max: "prefill cache from the base lock"): the gate's UV_CACHE_DIR is fresh per run and the
+// sandbox has no network, so before the sandboxed runs cover_diff.py fills the cache and the gate venv
+// (UV_PROJECT_ENVIRONMENT) from the plan BASE's pyproject.toml and uv.lock, outside the sandbox:
+// `uv sync --frozen --no-install-project --no-build --project <a copy of the base files>`, UV_NO_CONFIG=1 (wheels
+// only; no tree code runs). Inside, coverage runs in that venv as `uv run --frozen --offline --no-sync coverage`.
+// The last test runs real uv in the real sandbox (it skips with no uv, no bwrap or no PyPI).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,6 +32,8 @@ const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf
 const GIT = which("git");
 const CP = which("cp");
 const UV_TIER = "uv run --frozen coverage";
+const UVH = "uv run --frozen --offline --no-sync coverage";
+const SYNC_RE = /^uv sync --frozen --no-install-project --no-build --project \S+$/;
 
 function g(cwd, ...a) {
   const r = spawnSync(GIT, a, { cwd, encoding: "utf8", env: { PATH: process.env.PATH, HOME: cwd, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" } });
@@ -39,7 +48,8 @@ const LOCK =
 const REPORT = { meta: {}, files: { "pkg/mod.py": { executed_lines: [1, 2, 5, 6, 7], missing_lines: [9], excluded_lines: [] } } };
 
 // opts: {cmd, lock (default true: the PyPI-pinned uv.lock), uv (default true: a uv stub on PATH),
-// tier (override the census tier), uvVersion (the exit of `uv run --frozen coverage --version`),
+// tier (override the census tier), uvVersion (the exit of the uv coverage `--version` probe), runExit (the exit of
+// the uv coverage run), syncExit (the exit of `uv sync`), noUvEnv (no UV_CACHE_DIR / UV_PROJECT_ENVIRONMENT),
 // baseFiles ({path: text} in the base commit), judged ({path: text | null} in the judged tree only; null deletes)}
 function fixture(opts = {}) {
   const d = mkdtempSync(join(tmpdir(), "fleet-uvt-"));
@@ -74,6 +84,7 @@ function fixture(opts = {}) {
   rmSync(idx, { force: true });
   const log = join(d, "calls.log");
   const envlog = join(d, "env.log");
+  const synced = join(d, "synced.lock");
   symlinkSync(GIT, join(bin, "git"));
   passBwrap(bin);
   writeFileSync(join(d, "cov.json"), JSON.stringify(REPORT));
@@ -89,11 +100,13 @@ function fixture(opts = {}) {
       "uv",
       'echo "uv $*" >> \'' + log + "'\n" +
         'echo "UV_NO_CONFIG=$UV_NO_CONFIG" >> \'' + envlog + "'\n" +
-        // a `uv run ... pytest` baseline passes; any coverage call other than `run --frozen coverage` fails
-        'case "$*" in "run --frozen coverage "*) shift 3 ;; *coverage*) exit 1 ;; "run "*pytest*) exit 0 ;; *) exit 1 ;; esac\n' +
+        // the prefill: keeps the lock it was given (the base's), then exits syncExit
+        'if [ "$1" = sync ]; then while [ "$1" != "--project" ]; do shift; done; ' + CP + ' "$2/uv.lock" \'' + synced + "'; exit " + (opts.syncExit || 0) + "; fi\n" +
+        // a `uv run ... pytest` baseline passes; any coverage call other than the two served prefixes fails
+        'case "$*" in "run --frozen --offline --no-sync coverage "*) shift 5 ;; "run --frozen coverage "*) shift 3 ;; *coverage*) exit 1 ;; "run "*pytest*) exit 0 ;; *) exit 1 ;; esac\n' +
         'case "$1" in\n' +
         "  --version) exit " + (opts.uvVersion || 0) + " ;;\n" +
-        "  run) exit 0 ;;\n" +
+        "  run) exit " + (opts.runExit || 0) + " ;;\n" +
         '  json) while [ "$1" != "-o" ]; do shift; done; ' + CP + " '" + join(d, "cov.json") + "' \"$2\" ;;\n" +
         "  *) exit 1 ;;\n" +
         "esac\n",
@@ -106,7 +119,8 @@ function fixture(opts = {}) {
   // the census never ran uv; only the gate does
   if (existsSync(log)) rmSync(log);
   if (existsSync(envlog)) rmSync(envlog);
-  const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify({ TZ: "UTC" }), JSON.stringify(["tests/test_mod.py"]), tier];
+  const uvEnv = opts.noUvEnv ? {} : { UV_CACHE_DIR: join(d, "scratch", "uv-cache", "n1", "gate"), UV_PROJECT_ENVIRONMENT: join(d, "scratch", "build", "n1", "gates-r1", "uv-venv") };
+  const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify(Object.assign({ TZ: "UTC" }, uvEnv)), JSON.stringify(["tests/test_mod.py"]), tier];
   const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: Object.assign({ PATH: bin }, bwrapOk(bin)) });
   const res = {
     r,
@@ -115,6 +129,7 @@ function fixture(opts = {}) {
     out: r.status === 0 ? JSON.parse(r.stdout) : null,
     calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [],
     envs: existsSync(envlog) ? readFileSync(envlog, "utf8").trim().split("\n") : [],
+    synced: existsSync(synced) ? readFileSync(synced, "utf8") : null,
   };
   rmSync(d, { recursive: true, force: true });
   return res;
@@ -132,12 +147,16 @@ test("8.9.7 #110: uv tier + a bare `pytest` test_cmd runs coverage through `uv r
   assert.equal(x.out.status, "ran", x.out.reason);
   assert.deepEqual(x.out.findings, [{ path: "pkg/mod.py", lines: [9] }]);
   assert.equal(x.out.args[6], UV_TIER);
-  assert.equal(x.calls[0], "uv run --frozen coverage --version");
-  assert.equal(x.calls[1], "pytest -q", "the plain baseline is the test_cmd as given");
-  const rc = runCall(x.calls, "uv run --frozen coverage");
+  // F1: the prefill from the base lock first (outside the sandbox), then the offline coverage probe
+  assert.match(x.calls[0], SYNC_RE);
+  assert.equal(x.synced, LOCK, "the prefill got the base's uv.lock");
+  assert.equal(x.calls[1], UVH + " --version");
+  assert.equal(x.calls[2], "pytest -q", "the plain baseline is the test_cmd as given");
+  const rc = runCall(x.calls, UVH);
   assert.ok(rc, x.calls.join("\n"));
-  assert.match(rc, /^uv run --frozen coverage run --rcfile=\S+ --data-file=\S+ -m pytest -q$/);
-  assert.ok(x.calls.some((c) => /^uv run --frozen coverage json --rcfile=\S+ --data-file=\S+ -o \S+$/.test(c)), x.calls.join("\n"));
+  assert.ok(rc.startsWith(UVH + " run --rcfile="), rc);
+  assert.match(rc, / --data-file=\S+ -m pytest -q$/);
+  assert.ok(x.calls.some((c) => c.startsWith(UVH + " json --rcfile=")), x.calls.join("\n"));
 });
 
 test("8.9.7 #110: uv tier + `python -m pytest` runs coverage through `uv run --frozen coverage` too", { skip: !HAVE_PY }, () => {
@@ -146,11 +165,12 @@ test("8.9.7 #110: uv tier + `python -m pytest` runs coverage through `uv run --f
     assert.equal(x.r.status, 0, x.r.stderr);
     assert.equal(x.out.status, "ran", x.out.reason);
     assert.deepEqual(x.out.findings, [{ path: "pkg/mod.py", lines: [9] }]);
-    assert.equal(x.calls[0], "uv run --frozen coverage --version");
-    assert.equal(x.calls[1], py + " -m pytest -q");
-    const rc = runCall(x.calls, "uv run --frozen coverage");
+    assert.match(x.calls[0], SYNC_RE);
+    assert.equal(x.calls[1], UVH + " --version");
+    assert.equal(x.calls[2], py + " -m pytest -q");
+    const rc = runCall(x.calls, UVH);
     assert.ok(rc, x.calls.join("\n"));
-    assert.match(rc, /^uv run --frozen coverage run --rcfile=\S+ --data-file=\S+ -m pytest -q$/);
+    assert.match(rc, / --data-file=\S+ -m pytest -q$/);
     assert.ok(!x.calls.some((c) => / -I -c /.test(c)), "no in-process coverage launcher on the uv tier");
   }
 });
@@ -166,6 +186,7 @@ test("8.9.7 #110: uv tier + a `uv run` test_cmd behaves as before (its own flags
   assert.equal(b.out.status, "ran", b.out.reason);
   assert.equal(b.calls[1], "uv run --frozen pytest -q");
   assert.match(runCall(b.calls, "uv run --frozen coverage"), /^uv run --frozen coverage run --rcfile=\S+ --data-file=\S+ -m pytest -q$/);
+  assert.ok(!b.calls.some((c) => c.startsWith("uv sync")), "no prefill for a uv run test_cmd");
 });
 
 test("8.9.7 #110: a non-uv tier with no host coverage still gives not_run", { skip: !HAVE_PY }, () => {
@@ -191,10 +212,13 @@ test("8.9.7 #110: uv tier with uv missing, or a lock that does not install cover
   assert.equal(a.out.status, "not_run");
   assert.equal(a.out.reason, "no coverage tool: uv is not on PATH");
   assert.deepEqual(a.calls, []);
+  // F1: the offline probe fails in the prefilled venv
   const b = fixture({ uvVersion: 2 });
   assert.equal(b.out.status, "not_run");
-  assert.equal(b.out.reason, "no coverage tool: uv run --frozen coverage --version exit 2");
-  assert.deepEqual(b.calls, ["uv run --frozen coverage --version"]);
+  assert.equal(b.out.reason, "no coverage tool in the venv prefilled from the base lock (" + UVH + " --version exit 2): ");
+  assert.equal(b.calls.length, 2);
+  assert.match(b.calls[0], SYNC_RE);
+  assert.equal(b.calls[1], UVH + " --version");
 });
 
 test("8.9.7 #110: an other runner keeps today's unsupported not_run on the uv tier", { skip: !HAVE_PY }, () => {
@@ -261,10 +285,15 @@ test("8.9.7 #110 review: the uv tier runs uv with UV_NO_CONFIG=1 (no uv.toml or 
   assert.ok(x.envs.every((e) => e === "UV_NO_CONFIG=1"), x.envs.join("\n"));
 });
 
-test("8.9.7 #110 review: a `uv run` test_cmd is not checked (the plan audit approved it; as before)", { skip: !HAVE_PY }, () => {
+test("8.9.7 #110 review F2: a `uv run` test_cmd on the uv tier gets UV_NO_CONFIG=1 too (no lock guard, no prefill)", { skip: !HAVE_PY }, () => {
   const x = fixture({ cmd: "uv run --frozen pytest -q", judged: { "uv.toml": "x = 1\n" }, tier: UV_TIER });
   assert.equal(x.out.status, "ran", x.out.reason);
-  assert.ok(x.envs.every((e) => e === "UV_NO_CONFIG="), x.envs.join("\n"));
+  assert.ok(x.envs.length >= 3, x.envs.join("\n"));
+  assert.ok(x.envs.every((e) => e === "UV_NO_CONFIG=1"), x.envs.join("\n"));
+  // off the uv tier, a uv run test_cmd is as before
+  const y = fixture({ cmd: "uv run --frozen pytest -q", tier: "coverage" });
+  assert.equal(y.out.status, "ran", y.out.reason);
+  assert.ok(y.envs.every((e) => e === "UV_NO_CONFIG="), y.envs.join("\n"));
 });
 
 test("8.9.7 #110 accident guard: the judged uv.lock must still pin coverage from PyPI, else not_run", { skip: !HAVE_PY }, () => {
@@ -285,7 +314,103 @@ test("8.9.7 #110 accident guard: the judged uv.lock must still pin coverage from
 test("8.9.7 #110 honest-coder gate: a lock, pyproject or uv config change that keeps coverage on PyPI still runs (no base comparison)", { skip: !HAVE_PY }, () => {
   const a = fixture({ tier: UV_TIER, judged: { "uv.lock": LOCK.replace('version = "7.6.1"', 'version = "7.6.2"') } });
   assert.equal(a.out.status, "ran", a.out.reason);
+  assert.equal(a.synced, LOCK, "the prefill reads the base's lock, never the judged one");
   const b = fixture({ tier: UV_TIER, judged: { "pyproject.toml": PYPROJECT + '\n[tool.uv]\nindex-url = "https://example.org/simple"\n', "uv.toml": "native-tls = true\n" } });
   assert.equal(b.out.status, "ran", b.out.reason);
   assert.ok(b.envs.every((e) => e === "UV_NO_CONFIG=1"), b.envs.join("\n"));
+});
+
+test("8.9.7 #110 review F1: a failed or impossible prefill gives not_run before any test run (no error loop)", { skip: !HAVE_PY }, () => {
+  const a = fixture({ syncExit: 1 });
+  assert.equal(a.r.status, 0, a.r.stderr);
+  assert.equal(a.out.status, "not_run");
+  assert.match(a.out.reason, /^uv cache prefill failed: uv sync --frozen --no-install-project --no-build exit 1/);
+  assert.equal(a.calls.length, 1);
+  assert.match(a.calls[0], SYNC_RE);
+  // no gate uv env to fill
+  const b = fixture({ noUvEnv: true });
+  assert.equal(b.r.status, 0, b.r.stderr);
+  assert.equal(b.out.status, "not_run");
+  assert.equal(b.out.reason, "uv cache prefill not run: the gate env has no absolute UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT");
+  assert.deepEqual(b.calls, []);
+  // no base lock to fill from (the judged tree adds one)
+  const c = fixture({ tier: UV_TIER, lock: false, judged: { "uv.lock": LOCK } });
+  assert.equal(c.out.status, "not_run");
+  assert.equal(c.out.reason, "uv cache prefill not run: the plan base has no uv.lock");
+  assert.deepEqual(c.calls, []);
+});
+
+test("8.9.7 #110 review F3: a red uv coverage run after a green host baseline gives not_run, not an error", { skip: !HAVE_PY }, () => {
+  const x = fixture({ runExit: 1 });
+  assert.equal(x.r.status, 0, x.r.stderr);
+  assert.equal(x.out.status, "not_run", JSON.stringify(x.out));
+  assert.match(x.out.reason, /^uv coverage run exit 1 with a green host baseline: the judged uv\.lock needs packages the base lock does not provide, or the uv venv does not match/);
+});
+
+// ---------------------------------------------------------------- F1 with real uv in the real sandbox
+
+const UV = which("uv");
+const BWRAP = which("bwrap");
+const NO_REAL = (() => {
+  if (!HAVE_PY) return "no python3";
+  if (!UV) return "uv is not on PATH: the real-uv prefill test skips";
+  if (!BWRAP) return "bwrap is not on PATH (CI has none): the real-uv prefill test skips";
+  // the plain baseline runs the host's pytest (a stub dir under /tmp does not come back in the sandbox)
+  if (!which("pytest")) return "no host pytest for the plain baseline: the real-uv prefill test skips";
+  const d = mkdtempSync(join(tmpdir(), "fleet-uvr-chk-"));
+  const r = spawnSync(BWRAP, ["--unshare-all", "--die-with-parent", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--overlay-src", d, "--tmp-overlay", d, "--", PY, "-I", "-S", "-c", ""], { encoding: "utf8" });
+  rmSync(d, { recursive: true, force: true });
+  return r.status === 0 ? false : "bwrap cannot make the sandbox here: " + (r.stderr || "").trim();
+})();
+
+test("8.9.7 #110 review F1 (real uv): an empty cache, the base lock prefilled outside, the offline sandboxed coverage run reaches ran", { skip: NO_REAL, timeout: 600000 }, (t) => {
+  const d = spawnSync("realpath", [mkdtempSync(join(tmpdir(), "fleet-uvr-"))], { encoding: "utf8" }).stdout.trim();
+  try {
+    const wt = join(d, "main");
+    mkdirSync(join(wt, "pkg"), { recursive: true });
+    mkdirSync(join(wt, "tests"));
+    const ver = spawnSync(PY, ["-I", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(wt, "pyproject.toml"), '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=' + ver + '"\ndependencies = ["coverage", "pytest"]\n');
+    writeFileSync(join(wt, "pkg", "__init__.py"), "");
+    // a root conftest puts the repo root on sys.path for the host pytest baseline
+    writeFileSync(join(wt, "conftest.py"), "");
+    writeFileSync(join(wt, "pkg", "mod.py"), BASE_MOD);
+    writeFileSync(join(wt, "tests", "test_mod.py"), "from pkg import mod\n\n\ndef test_f():\n    assert mod.f(1) == 1\n");
+    const lk = spawnSync(UV, ["lock", "--python", PY], { cwd: wt, encoding: "utf8", env: { PATH: process.env.PATH, HOME: d, UV_CACHE_DIR: join(d, "lock-cache"), UV_NO_CONFIG: "1", UV_PYTHON_DOWNLOADS: "never" } });
+    if (lk.status !== 0) {
+      t.skip("uv lock failed (no PyPI access?): " + (lk.stderr || "").trim().slice(-200));
+      return;
+    }
+    rmSync(join(d, "lock-cache"), { recursive: true, force: true });
+    g(wt, "init", "-q", "-b", "master");
+    g(wt, "add", "-A");
+    g(wt, "commit", "-qm", "base");
+    const base = g(wt, "rev-parse", "HEAD");
+    writeFileSync(join(wt, "pkg", "mod.py"), NEW_MOD);
+    writeFileSync(join(wt, "tests", "test_mod.py"), "from pkg import mod\n\n\ndef test_f():\n    assert mod.f(1) == 1\n\n\ndef test_g():\n    pass\n");
+    const idx = join(d, "idx");
+    const ie = { PATH: process.env.PATH, GIT_INDEX_FILE: idx };
+    spawnSync(GIT, ["read-tree", "HEAD"], { cwd: wt, env: ie });
+    spawnSync(GIT, ["add", "-A"], { cwd: wt, env: ie });
+    const tree = spawnSync(GIT, ["write-tree"], { cwd: wt, env: ie, encoding: "utf8" }).stdout.trim();
+    rmSync(idx, { force: true });
+    const cache = join(d, "scratch", "uv-cache", "n1", "gate");
+    const venv = join(d, "scratch", "build", "n1", "gates-r1", "uv-venv");
+    const env = { TZ: "UTC", UV_CACHE_DIR: cache, UV_PROJECT_ENVIRONMENT: venv, UV_PYTHON: PY, UV_PYTHON_DOWNLOADS: "never" };
+    const home = join(d, "home");
+    const tmpd = join(d, "tmp");
+    mkdirSync(home);
+    mkdirSync(tmpd);
+    assert.ok(!existsSync(cache), "the gate cache starts empty");
+    const args = [wt, base, tree, "pytest -q <paths>", JSON.stringify(env), JSON.stringify(["tests/test_mod.py"]), UV_TIER];
+    const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, TMPDIR: tmpd } });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    console.log("REAL-UV RESULT " + JSON.stringify({ status: out.status, reason: out.reason, findings: out.findings }));
+    assert.equal(out.status, "ran", out.reason);
+    assert.deepEqual(out.findings, [{ path: "pkg/mod.py", lines: [6, 7, 9] }]);
+    assert.ok(existsSync(join(venv, "bin", "coverage")), "the prefill made the gate venv outside the sandbox");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
 });
