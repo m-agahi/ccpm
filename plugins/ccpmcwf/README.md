@@ -1195,8 +1195,10 @@ re-run enters at or before the failed check:
   one this run sealed, so the planner and the plan audit do not run again. The build-mode `:rerun`
   gates run the intent (G1), command and hook id (G2) and scope (G3) checks again, after a fresh
   read of the task for its current rulings. The plan-mode blockers (change kind, new behaviour,
-  IaC path, task id) are not checked again: they passed on the same sealed plan facts before the
-  auto gates ran, and the IaC pre-push check still runs at the push. A relaxed plan re-runs with
+  IaC path, task id) are not checked again. A default or unattended launch checks them before
+  the auto gates and asks Max on any of them, so its auto gates ran only on sealed plan facts
+  that passed them. An attended `confirm: "auto"` launch never checks them, in plan mode or in
+  the build. The IaC pre-push check still runs at the push. A relaxed plan re-runs with
   the list this run sealed in the ref, and the `:rerun` intent judge checks each item again
   (8.9.2). The once-only rule and the engine marker apply as for every re-run.
 - A launch that reached the build: `mode: "build"` and `plan_ref`. With no run-state milestone and

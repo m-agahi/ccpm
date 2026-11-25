@@ -42,11 +42,19 @@ ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406
 - (g) the P3 round carry after a refused checkpoint: described only, as `#117` asks (see the PR
   body).
 - The build-mode `:rerun` gates do not check the plan-mode blockers (change kind, new behaviour,
-  IaC path, task id) again. For (f) they passed on the same sealed facts before the auto gates ran,
-  and the IaC pre-push check still runs at the push. Adding them to every `:rerun` build would
-  change what that gate refuses for existing launches.
-- An in-run re-plan that stops after its plan ref commit and before its build still re-runs a build
-  of the launch's ref, as before.
+  IaC path, task id) again. For (f), a default or unattended launch checked them before its auto
+  gates (any of them asks Max), so the re-run builds sealed facts that passed them; an attended
+  `confirm: "auto"` launch never checks them, in plan mode or in the build. The IaC pre-push check
+  still runs at the push. Adding them to every `:rerun` build would change what that gate refuses
+  for existing launches.
+- An in-run re-plan (unattended `plan_wrong`) whose auto gates stop transiently after its plan ref
+  commit is unchanged and still answers `rerun` with the launch's (old) `plan_ref` and
+  `freeze_digest`. By then `infra:replan-reset` has moved the branch to the plan base and the plan
+  ref tag holds the new ref, so that re-run would stop on a changed plan ref (safety): it spends the
+  one automatic re-run. Fixing it (a build of the new ref, or `none`) needs Max's ruling.
+- After a CI-timeout re-run, the final CI outcome (green or merged) does not reach the ledger: the
+  recorded CI write-back is not posted again (before 8.9.3 the second write-back was skipped by its
+  marker, with the same result).
 
 ### Tests
 

@@ -371,3 +371,18 @@ test("8.9.3 (i): a body_decided that is not a count of the run-state's auto_deci
 test("8.9.3 (i): the README says where late automatic decisions go", () => {
   assert.match(flat(README), /automatic decisions made after the PR body was written \(8\.9\.3\) are listed in the CI write-back/);
 });
+
+test("8.9.3 (f): an unattended plan that touches an IaC path asks Max before the auto gates, so it never reaches the build re-run", async () => {
+  const s = Object.assign(happy(), INTENT_OK);
+  s["role:scope-and-plan"] = JSON.parse(JSON.stringify(s["role:scope-and-plan"]));
+  s["role:scope-and-plan"].allowed_additions = { files: ["src/main.tf"], symbols: [], deps: [], settings: [] };
+  const out = await runOne(s, Object.assign({}, ARGS, { unattended: true }));
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.match(out.result.confirm_reason, /plan touches IaC path src\/main\.tf/);
+  assert.equal(out.result.recover, null);
+  assert.ok(!has(out, "role:fleet-intent-judge"), out.labels.join(", "));
+});
+
+test("8.9.3 (f): the README says which launches check the plan-mode blockers", () => {
+  assert.match(flat(README), /A default or unattended launch checks them before the auto gates and asks Max on any of them, so its auto gates ran only on sealed plan facts that passed them\. An attended `confirm: "auto"` launch never checks them, in plan mode or in the build\./);
+});
