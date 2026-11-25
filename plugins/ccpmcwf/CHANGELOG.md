@@ -1,5 +1,33 @@
 # Changelog
 
+## [8.9.5] - 2026-11-25
+
+ccpmcwf 8.9.5 (yaadgaar `#112` item 1): the caller check compares code hits only, with no doc or
+lock read. A doc or lock hit (by the script's list, not a doctest) is `dont_care` by definition, so
+the auto (doc and lock) pages of 8.5.3 are gone: no auto-page agent runs any more.
+
+### Changed
+
+- `callers.py` file mode prints `code_count`, `code_sha256`, `code_path_count` and
+  `code_paths_sha256` per symbol: the hits that are not auto, and their paths. They replace
+  `path_count` and `paths_sha256`. `code_count` must equal `count - auto_count`. Read mode has the
+  parts `all` and `paths` only; part `paths` lists code paths only.
+- The plan accepts a map that is exactly the code hits (checked against `code_sha256`) with no
+  read. Those doc and lock hits are not listed and not sealed in `changed_symbols`; the gate line
+  gives their count. A map that is neither the full hit set nor the code set reads part `all`
+  (budgeted) as before, so a changed or stale code caller is caught as before. A map that holds
+  some doc hits now takes that budgeted read too (8.5.3 read the auto pages outside the budget).
+- R5 at the update merge compares code paths only. A sealed `auto: non-code file` entry (in a plan
+  ref of any version) is left out, and so is an inline grep's auto hit that the script's doc and
+  lock list agrees with. A doc the planner mapped itself stays in the moved-file check. Doc paths
+  never take a `paths` read, so many doc-path changes at the merge no longer refuse R5 (`#112`
+  item 3).
+
+### Removed
+
+- `CALLER_AUTO_PAGES_MAX`, `AUTO_READ_RE`, `state.autoReads`, the auto page reads and their
+  `callers` stop (21 pages or more of doc and lock hits). `#112` items 2 and 5 are moot.
+
 ## [8.9.4] - 2026-11-25
 
 ccpmcwf 8.9.4 (yaadgaar `#114`, ADR-1403): the dist collapse tokenizer (`collapse` in

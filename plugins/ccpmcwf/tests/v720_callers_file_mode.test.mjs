@@ -33,7 +33,16 @@ test("7.2.0 AC2: file mode writes callers-<sha256>.json and prints the summary w
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.symbols, {
-      foo: { count: 3, sha256: "84048ae2c9d38392fc0b8888ebb4cda38a23ad15c39f161fd299260d9546cff7", auto_count: 1, path_count: 2, paths_sha256: "5dcffd5e752a42faea01117f350cba43ae8288d1ff98a0033f4378efc4dd8ad1" },
+      // 8.9.5 (yaadgaar #112): the code hashes replace path_count and paths_sha256
+      foo: {
+        count: 3,
+        sha256: "84048ae2c9d38392fc0b8888ebb4cda38a23ad15c39f161fd299260d9546cff7",
+        auto_count: 1,
+        code_count: 2,
+        code_sha256: "0d6929e120b4a6c7de63332677250787bb7bdaf699bbc8524ef8693ab9161a6c",
+        code_path_count: 1,
+        code_paths_sha256: "ab74f77bcbbda6f03ee88a40ee6ca88e13b97ead7f322c07fde1ef785f0e970f",
+      },
     });
     assert.deepEqual(o.capped, []);
     assert.deepEqual(o.doctest_md, []);
@@ -63,7 +72,7 @@ test("7.2.0 AC2: a capped symbol has count 0 and the hash of []", () => {
     const r = fileRun(wt, "docs/plans/x.md", '["bar"]', "100", S);
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
-    assert.deepEqual(o.symbols.bar, { count: 0, sha256: EMPTY, auto_count: 0, path_count: 0, paths_sha256: EMPTY });
+    assert.deepEqual(o.symbols.bar, { count: 0, sha256: EMPTY, auto_count: 0, code_count: 0, code_sha256: EMPTY, code_path_count: 0, code_paths_sha256: EMPTY });
     assert.deepEqual(o.capped, ["bar"]);
   } finally {
     rmSync(wt, { recursive: true, force: true });

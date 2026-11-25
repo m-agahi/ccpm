@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.4";
+const FLEET_VERSION="8.9.5";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -167,8 +167,6 @@ const CALLER_INLINE_CAP=8192;
 const CALLER_SUMMARY_CAP_ONE=16384;
 const CALLER_PAGE=50;
 const CALLER_READ_BUDGET=4;
-const CALLER_AUTO_PAGES_MAX=20;
-const AUTO_READ_RE=/^infra:callers(:[a-z0-9-]+)*:read:auto:[0-9]+(:(digest|args)-retry)?$/;
 const CALLER_METHOD=
 "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS=[
@@ -1533,7 +1531,7 @@ return typeof r.digest==="string"&&SHA256_RE.test(r.digest)&&sha256Hex(canonical
 const PROGRAM_SHA256 = {
 "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
 "build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
-"callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
+"callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
 "changed_defs": "b104493bc23e3f342cd6a32db469ca14b00424b690a26138b8a2c67955970723",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "cover_diff": "1863425a52a6802613800a5bb04a77c32c79f5a5fd591ecacc83c9c8ce49e2db",
@@ -1892,7 +1890,7 @@ capped:STRS,
 auto_dont_care:STR_LISTS,
 doctest_md:STRS,
 digest:STR,
-symbols:{type:"object",additionalProperties:{type:"object",properties:{count:INT,sha256:STR,auto_count:INT,path_count:INT,paths_sha256:STR}}},
+symbols:{type:"object",additionalProperties:{type:"object",properties:{count:INT,sha256:STR,auto_count:INT,code_count:INT,code_sha256:STR,code_path_count:INT,code_paths_sha256:STR}}},
 file:STR,
 args:STRS,
 part:STR,
@@ -3411,7 +3409,6 @@ sealedRelaxed:null,
 review:null,
 repo:null,
 pathChecks:0,
-autoReads:0,
 buildResets:0,
 buildScratch:null,
 testCmd:null,
@@ -3473,7 +3470,7 @@ const J_FIX=J("fix the findings on the PR by hand","run plan again with the find
 const J_BASE=J("run plan again on the new base","fix the PR by hand",O_DROP);
 const J_CI=J("fix the failing checks on the PR by hand","run plan again with the CI failure in the task text",O_DROP);
 function capped(){
-return state.agents-state.pathChecks-state.autoReads-state.buildResets-state.tail-!!state.lock;
+return state.agents-state.pathChecks-state.buildResets-state.tail-!!state.lock;
 }
 const TAIL_RE=/^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
 function tailWriter(l){
@@ -3534,14 +3531,12 @@ async function dispatch(label,prompt,opts){
 const model=relayModel(label);
 const ic=infraCall(label,prompt,opts);
 if(TAIL_RE.test(label)||tailWriter(label))state.tail++;
-else if(AUTO_READ_RE.test(label))state.autoReads++;
 reserve(1,label);
 state.agents++;
 let r=await agentT(ic.prompt,agentOpts(ic.opts,label,model));
 if(r==null&&ic.opts.agentType===JUDGE_AGENT&&capped()+1<=MAX_AGENTS){
 autoDecide("transient","retry",label+" returned no result; once more on "+model);
 if(TAIL_RE.test(label))state.tail++;
-else if(AUTO_READ_RE.test(label))state.autoReads++;
 state.agents++;
 r=await agentT(ic.prompt+"\nA first dispatch of this step returned no result: run it again.",agentOpts(ic.opts,label,model));
 }
@@ -4740,8 +4735,8 @@ return Array.from(new Set(xs)).sort(codePointCompare);
 }
 const isStrList=(x)=>Array.isArray(x)&&x.every((v)=>typeof v==="string");
 async function callerGrep(label,names,worktree,planPath,phaseName,expected,level){
-const all={occurrences:{},capped:[],auto_dont_care:{},doctest_md:[],unread:{},paths:{}};
-const disk={expected:expected&&typeof expected==="object"?expected:{},pathLevel:level==="path",left:CALLER_READ_BUDGET,autoLeft:CALLER_AUTO_PAGES_MAX,worktree,planPath,phaseName};
+const all={occurrences:{},capped:[],auto_dont_care:{},doctest_md:[],unread:{},paths:{},auto_unlisted:{}};
+const disk={expected:expected&&typeof expected==="object"?expected:{},pathLevel:level==="path",left:CALLER_READ_BUDGET,worktree,planPath,phaseName};
 const per=CALLER_BATCH_SYMBOLS;
 const queue=[];
 for(let i=0;i<names.length;i+=per)queue.push({part:names.slice(i,i+per),disk:false});
@@ -4818,7 +4813,7 @@ const cnt=(x)=>Number.isInteger(x)&&x>=0;
 const hex=(x)=>typeof x==="string"&&SHA256_RE.test(x);
 for(const s of part){
 const e=Object.prototype.hasOwnProperty.call(sm,s)?sm[s]:null;
-if(!e||typeof e!=="object"||!cnt(e.count)||!hex(e.sha256)||!cnt(e.auto_count)||e.auto_count>e.count||!cnt(e.path_count)||e.path_count>e.count||!hex(e.paths_sha256))
+if(!e||typeof e!=="object"||!cnt(e.count)||!hex(e.sha256)||!cnt(e.auto_count)||e.auto_count>e.count||!cnt(e.code_count)||e.code_count!==e.count-e.auto_count||!hex(e.code_sha256)||!cnt(e.code_path_count)||e.code_path_count>e.code_count||!hex(e.code_paths_sha256))
 halt("s","failed",fl+": the summary has no valid entry for "+s);
 }
 if(!isStrList(r.capped)||!isStrList(r.doctest_md))halt("s","failed",fl+": the summary has no capped or doctest_md string list");
@@ -4827,22 +4822,23 @@ const live=part.filter((s)=>r.capped.indexOf(s)<0);
 const want=(s)=>(Array.isArray(disk.expected[s])?disk.expected[s]:[]);
 const sumOf=(xs,k)=>xs.reduce((a,s)=>a+sm[s][k],0);
 const unread=(xs,p)=>{
-for(const s of xs)all.unread[s]={part:p,count:sm[s].count,path_count:sm[s].path_count};
+for(const s of xs)all.unread[s]={part:p,count:sm[s].count};
 };
 if(disk.pathLevel){
+const doctest=r.doctest_md.map(normPath);
 const P={};
 const differ=[];
 for(const s of live){
-P[s]=uniqSorted(want(s).map((x)=>normPath(String(x))).filter(Boolean));
-if(P[s].length===sm[s].path_count&&sha256Hex(canonical(P[s]))===sm[s].paths_sha256)all.paths[s]=P[s];
+P[s]=uniqSorted(want(s).map((x)=>normPath(String(x))).filter((p)=>p&&!(docOrLockFile(p)&&doctest.indexOf(p)<0)));
+if(P[s].length===sm[s].code_path_count&&sha256Hex(canonical(P[s]))===sm[s].code_paths_sha256)all.paths[s]=P[s];
 else differ.push(s);
 }
 if(!differ.length)return[];
-const got=await callerReadParts(lb,r.file,"paths",differ,sumOf(differ,"path_count"),disk);
+const got=await callerReadParts(lb,r.file,"paths",differ,sumOf(differ,"code_path_count"),disk);
 if(!got)return unread(differ,"paths"),[];
 for(const s of differ){
 const Q=got[s]||[];
-if(Q.length!==sm[s].path_count||sha256Hex(canonical(Q))!==sm[s].paths_sha256)
+if(Q.length!==sm[s].code_path_count||sha256Hex(canonical(Q))!==sm[s].code_paths_sha256)
 halt("s","failed",lb+":read:paths: the read occurrences of "+s+" do not match the summary count or sha256");
 all.paths[s]=Q;
 }
@@ -4853,26 +4849,17 @@ all.occurrences[s]=[];
 all.auto_dont_care[s]=[];
 }
 const E={};
-const autoSet=[];
 let allSet=[];
 for(const s of live){
 E[s]=uniqSorted(want(s).map(occurrenceKey).filter(Boolean));
 if(E[s].length===sm[s].count&&sha256Hex(canonical(E[s]))===sm[s].sha256){
 all.occurrences[s]=E[s];
 all.auto_dont_care[s]=[];
-}else(sm[s].auto_count>0?autoSet:allSet).push(s);
-}
-if(autoSet.length){
-const got=await callerReadParts(lb,r.file,"auto",autoSet,sumOf(autoSet,"auto_count"),disk);
-for(const s of autoSet){
-const A=got[s]||[];
-if(A.length!==sm[s].auto_count)halt("s","failed",lb+":read:auto: the read occurrences of "+s+" do not match the summary auto_count");
-const U=uniqSorted(E[s].concat(A));
-if(U.length===sm[s].count&&sha256Hex(canonical(U))===sm[s].sha256){
-all.occurrences[s]=U;
-all.auto_dont_care[s]=A;
+}else if(E[s].length===sm[s].code_count&&sha256Hex(canonical(E[s]))===sm[s].code_sha256){
+all.occurrences[s]=E[s];
+all.auto_dont_care[s]=[];
+all.auto_unlisted[s]=sm[s].auto_count;
 }else allSet.push(s);
-}
 }
 allSet=allSet.sort(codePointCompare);
 if(allSet.length){
@@ -4899,12 +4886,7 @@ return[];
 async function callerReadParts(lb,file,part,syms,total,disk){
 const sorted=syms.slice().sort(codePointCompare);
 const pages=Math.max(1,Math.ceil(total/CALLER_PAGE));
-if(part==="auto"){
-if(pages>disk.autoLeft)
-halt(J_SYMS(sorted),"needs_human",lb+": the auto lists of "+sorted.join(", ")+" ("+total+" doc or lock hit(s)) need "+pages+" read(s); over the "+CALLER_AUTO_PAGES_MAX+" auto reads a caller check may take ("+disk.autoLeft+" left); map those hits in changed_symbols (dont_care with a reason; a full map needs no read) or split the change","callers");
-disk.autoLeft-=pages;
-gate(lb+": the auto lists of "+sorted.join(", ")+" ("+total+" doc or lock hit(s)) take "+pages+" read(s) outside the caller read budget and the agent cap");
-}else if(pages>disk.left){
+if(pages>disk.left){
 gate(lb+": the "+part+" lists of "+sorted.join(", ")+" need "+pages+" read(s); "+disk.left+" of the caller read budget ("+CALLER_READ_BUDGET+") left; not read");
 return null;
 }else disk.left-=pages;
@@ -4980,7 +4962,7 @@ for(const k of mapped)
 if(hits.indexOf(k)<0)
 findings.push({criterion:null,symbol:s.symbol,finding:s.symbol+": "+k+" is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)"});
 }
-return{findings,occurrences:occ,auto};
+return{findings,occurrences:occ,auto,unlisted:r.auto_unlisted};
 }
 function buildCallerFindings(relayed,symbols,scopeFiles){
 const occ={};
@@ -5417,7 +5399,8 @@ const add=cc.auto[s.symbol].filter((h)=>have.indexOf(h)<0).map((h)=>({at:h,crite
 return add.length?{symbol:s.symbol,occurrences:s.occurrences.concat(add)}:s;
 });
 const nAuto=symbolMap.reduce((a,s,i)=>a+s.occurrences.length-cs.clean[i].occurrences.length,0);
-gate("callers: "+cs.clean.map((s)=>s.symbol+" "+s.occurrences.length).join(", ")+" occurrence(s) mapped; git grep -w agrees"+(nAuto?"; "+nAuto+" doc or lock hit(s) mapped "+JSON.stringify(AUTO_DONT_CARE):""));
+const nUnl=Object.keys(cc.unlisted).reduce((a,k)=>a+cc.unlisted[k],0);
+gate("callers: "+cs.clean.map((s)=>s.symbol+" "+s.occurrences.length).join(", ")+" occurrence(s) mapped; git grep -w agrees"+(nAuto?"; "+nAuto+" doc or lock hit(s) mapped "+JSON.stringify(AUTO_DONT_CARE):"")+(nUnl?"; "+nUnl+" doc or lock hit(s) left to auto dont_care by count and hash (not listed)":""));
 }
 planFacts.changed_symbols=symbolMap;
 const fb=slugify(String(ctx.remoteSlug||"").split("/").pop(),20);
@@ -7522,14 +7505,16 @@ const syms=planFacts.changed_symbols||[];
 if(syms.length){
 const at=(k)=>normPath(String(k).slice(0,String(k).lastIndexOf(":")));
 const sealedPaths={};
-for(const x of syms)sealedPaths[x.symbol]=(x.occurrences||[]).map((o)=>at(occurrenceKey(o.at)||o.at));
+for(const x of syms)sealedPaths[x.symbol]=(x.occurrences||[]).filter((o)=>!(o&&o.dont_care===AUTO_DONT_CARE&&docOrLockFile(at(o.at)))).map((o)=>at(occurrenceKey(o.at)||o.at));
 const g=await callerGrep("infra:callers:u1",syms.map((x)=>x.symbol),mainWt,ref.plan_path,"Review",sealedPaths,"path");
 if(g.capped.length)return"the occurrences of "+g.capped.join(", ")+" cannot be listed at the update merge (more than "+MAX_SYMBOL_HITS+" call-shaped occurrences)";
 const unread=Object.keys(g.unread).sort(codePointCompare);
 if(unread.length)return"the occurrences of "+unread.join(", ")+" at the update merge differ from the sealed map and are over the caller read budget";
 const occ=[];
 for(const x of syms)for(const p of sealedPaths[x.symbol])occ.push(p);
-for(const n of Object.keys(g.occurrences))for(const k of g.occurrences[n])occ.push(at(k));
+const dt=Array.isArray(g.doctest_md)?g.doctest_md.map(normPath):null;
+const autoHit=(n,k)=>!!dt&&Array.isArray(g.auto_dont_care[n])&&g.auto_dont_care[n].indexOf(k)>=0&&docOrLockFile(at(k))&&dt.indexOf(at(k))<0;
+for(const n of Object.keys(g.occurrences))for(const k of g.occurrences[n])if(!autoHit(n,k))occ.push(at(k));
 for(const n of Object.keys(g.paths))for(const p of g.paths[n])occ.push(normPath(p));
 const oc=mv.filter((p)=>occ.indexOf(p)>=0);
 if(oc.length)return"the base change touches files with occurrences of the changed symbols"+list(oc);

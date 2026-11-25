@@ -156,7 +156,6 @@ const SPECIAL = [
 const JREASON = [
   [/full path but no testable criteria/, "no criterion names a test file: the task or plan needs a human edit"],
   [/CALLER_SUMMARY_CAP_ONE/, "one symbol has too many callers to relay: a narrower name or scope is a human choice"],
-  [/the auto lists of/, "doc and lock hits need more reads than a caller check may take: map them or narrow the scope"],
   [/plan-audit verdict/, "the plan audit did not approve (a human reads its findings); a missing verdict is a relay contract break (safety)"],
   [/ug\.reason/, "the task requires a gate the census reports unsupported: run unattended, or edit the task"],
   [/stillClaims/, "the PR body still states test counts after one scripted rewrite: a human edits the body"],
@@ -293,7 +292,7 @@ export function render(source) {
   for (const r of rows) for (const c of r.names.split(" / ")) count[c] = (count[c] || 0) + 1;
   const counts = ["safety", "judgment", "transient", "mechanical", "per caller"].map((c) => c + " " + (count[c] || 0)).join(", ");
   return [
-    "# Stop classes of build-engine.js (ccpmcwf 8.9.4)",
+    "# Stop classes of build-engine.js (ccpmcwf 8.9.5)",
     "",
     "yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in",
     "script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or",

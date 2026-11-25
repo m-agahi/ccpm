@@ -13,20 +13,22 @@ const findingsOf = (out) => {
 };
 const map1 = (sym, at) => ({ symbol: sym, occurrences: [{ at, criterion: "AC1", dont_care: null }] });
 
-test("7.2.0 AC6: one auto read joins the doc hit; the sealed map gets it as auto dont_care", async () => {
+// 8.9.5 (yaadgaar #112): the code hash replaces the auto read; the doc hit is not read and not in the sealed map
+test("7.2.0 AC6 / 8.9.5: a map of the code hit matches code_sha256 with no read; the doc hit is not sealed", async () => {
   const s = happy();
   s["role:scope-and-plan"].changed_symbols = [map1("b_sym", "src/b.py:2")];
   callersDisk(s, "infra:callers", { b_sym: { hits: ["docs/b.md:4", "src/b.py:2"], auto: ["docs/b.md:4"] } });
   const out = await runOne(s, ARGS);
-  assert.deepEqual(reads(out), ["infra:callers:read:auto:0"]);
+  assert.deepEqual(reads(out), []);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const pa = inputsOf(call(out, "role:plan-audit").prompt);
-  assert.deepEqual(pa.caller_check.auto_dont_care.b_sym, ["docs/b.md:4"]);
+  assert.deepEqual(pa.caller_check.auto_dont_care.b_sym, []);
   const sealed = pa.changed_symbols.find((x) => x.symbol === "b_sym");
-  assert.ok(sealed.occurrences.some((o) => o.at === "docs/b.md:4" && o.criterion === null && o.dont_care === "auto: non-code file"), JSON.stringify(sealed));
+  assert.deepEqual(sealed.occurrences.map((o) => o.at), ["src/b.py:2"]);
+  assert.ok(out.logs.some((g) => String(g).includes("; 1 doc or lock hit(s) left to auto dont_care by count and hash (not listed)")), out.logs.join("\n"));
 });
 
-test("7.2.0 AC6: three auto symbols (40 + 50 + 60) read in exactly 3 batch-wide pages", async () => {
+test("7.2.0 AC6 / 8.9.5: three symbols with 40 + 50 + 60 doc hits need no read", async () => {
   const s = happy();
   const data = {};
   const syms = [["a_sym", 40], ["b_sym", 50], ["c_sym", 60]];
@@ -37,18 +39,16 @@ test("7.2.0 AC6: three auto symbols (40 + 50 + 60) read in exactly 3 batch-wide 
   s["role:scope-and-plan"].changed_symbols = syms.map(([x]) => map1(x, "src/" + x + ".py:1"));
   callersDisk(s, "infra:callers", data);
   const out = await runOne(s, ARGS);
-  assert.deepEqual(reads(out), ["infra:callers:read:auto:0", "infra:callers:read:auto:1", "infra:callers:read:auto:2"]);
-  const i0 = inputsOf(call(out, "infra:callers:read:auto:0").prompt);
-  assert.deepEqual([i0.file, i0.part, JSON.stringify(i0.symbols), String(i0.page)].slice(1), ["auto", '["a_sym","b_sym","c_sym"]', "0"]);
+  assert.deepEqual(reads(out), []);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
 });
 
-test("7.2.0 AC6: a stale map falls through auto to part all and gets today's findings", async () => {
+test("7.2.0 AC6: a stale map reads part all and gets today's findings", async () => {
   const s = happy();
   s["role:scope-and-plan"].changed_symbols = [map1("b_sym", "src/b.py:9")];
   callersDisk(s, "infra:callers", { b_sym: { hits: ["docs/b.md:4", "src/b.py:2"], auto: ["docs/b.md:4"] } });
   const out = await runOne(s, ARGS);
-  assert.deepEqual(reads(out), ["infra:callers:read:auto:0", "infra:callers:read:all:0"]);
+  assert.deepEqual(reads(out), ["infra:callers:read:all:0"]);
   const f = findingsOf(out);
   assert.ok(f.includes("b_sym: src/b.py:2 is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason"), f.join("\n"));
   assert.ok(f.includes("b_sym: src/b.py:9 is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)"), f.join("\n"));

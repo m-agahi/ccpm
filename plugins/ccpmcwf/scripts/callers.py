@@ -48,6 +48,9 @@ def list_sha(xs):
     return hashlib.sha256(json.dumps(sorted(xs), separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 def hit_paths(hits):
     return sorted(set(h.rsplit(':', 1)[0] for h in hits))
+def code_hits(hits, auto):
+    a = set(auto)
+    return [h for h in hits if h not in a]
 def digest_of(o):
     return hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 def read_mode(argv):
@@ -74,8 +77,9 @@ def read_mode(argv):
     adc = obj.get('auto_dont_care') if isinstance(obj, dict) else None
     if not isinstance(occ, dict) or not isinstance(adc, dict):
         no('the file is not a callers object')
-    if part not in ('all', 'auto', 'paths'):
-        no('part is not all, auto or paths: ' + part)
+    # 8.9.5 (yaadgaar #112): part paths lists the paths of the code hits (not auto); there is no part auto
+    if part not in ('all', 'paths'):
+        no('part is not all or paths: ' + part)
     try:
         syms = json.loads(syms_s)
     except ValueError:
@@ -89,7 +93,7 @@ def read_mode(argv):
         no('page is not an integer >= 0: ' + page_s)
     entries = []
     for s in sorted(syms):
-        lst = sorted(occ[s]) if part == 'all' else sorted(adc.get(s, [])) if part == 'auto' else hit_paths(occ[s])
+        lst = sorted(occ[s]) if part == 'all' else hit_paths(code_hits(occ[s], adc.get(s, [])))
         entries.extend((s, e) for e in lst)
     count = max(1, -(-len(entries) // PAGE))
     k = int(page_s)
@@ -113,8 +117,10 @@ def file_mode(text, out, syms, args):
     symbols = {}
     for s in syms:
         hits = out['occurrences'][s]
-        paths = hit_paths(hits)
-        symbols[s] = {'count': len(hits), 'sha256': list_sha(hits), 'auto_count': len(out['auto_dont_care'][s]), 'path_count': len(paths), 'paths_sha256': list_sha(paths)}
+        # 8.9.5 (yaadgaar #112): the hashes of the code hits (every hit not auto) and of their paths
+        code = code_hits(hits, out['auto_dont_care'][s])
+        cpaths = hit_paths(code)
+        symbols[s] = {'count': len(hits), 'sha256': list_sha(hits), 'auto_count': len(out['auto_dont_care'][s]), 'code_count': len(code), 'code_sha256': list_sha(code), 'code_path_count': len(cpaths), 'code_paths_sha256': list_sha(cpaths)}
     o = {'symbols': symbols, 'capped': out['capped'], 'doctest_md': out['doctest_md'], 'file': path, 'args': list(args), 'program': _PROG}
     o['digest'] = digest_of(o)
     t = json.dumps(o, sort_keys=True, ensure_ascii=False)

@@ -1289,7 +1289,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.4/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.5/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -2097,11 +2097,14 @@ function cpCompare(a, b) {
 export const callersPathsOf = (hits) => Array.from(new Set(hits.map((h) => h.slice(0, h.lastIndexOf(":"))))).sort(cpCompare);
 export const ON_DISK = (syms) => ({ status: "failed", reason: "FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap (9000 bytes; symbols: " + syms.join(", ") + ")" });
 export const callersFileOf = (scratch) => scratch + "/callers/callers-" + "a".repeat(64) + ".json";
+// 8.9.5 (yaadgaar #112): the code hits of {hits, auto}: every hit the program does not list as auto
+export const callersCodeOf = (d) => (d.hits || []).filter((h) => (d.auto || []).indexOf(h) < 0);
 // one summary entry for a symbol {hits, auto} (over replaces fields)
 export function callersEntry(d, over) {
   const hits = d.hits || [];
-  const paths = callersPathsOf(hits);
-  return Object.assign({ count: hits.length, sha256: callersHash(hits), auto_count: (d.auto || []).length, path_count: paths.length, paths_sha256: callersHash(paths) }, over || {});
+  const code = callersCodeOf(d);
+  const cpaths = callersPathsOf(code);
+  return Object.assign({ count: hits.length, sha256: callersHash(hits), auto_count: (d.auto || []).length, code_count: code.length, code_sha256: callersHash(code), code_path_count: cpaths.length, code_paths_sha256: callersHash(cpaths) }, over || {});
 }
 // the file-mode relay for data {<sym>: {hits, auto, summary?}}; fillPrograms adds program and digest
 export function callersFileStub(data, over) {
@@ -2122,7 +2125,7 @@ export function callersReadStub(data, over) {
     const L = [];
     for (const s of i.symbols.slice().sort(cpCompare)) {
       const d = data[s] || {};
-      const list = i.part === "auto" ? (d.auto || []).slice().sort(cpCompare) : i.part === "paths" ? callersPathsOf(d.hits || []) : (d.hits || []).slice().sort(cpCompare);
+      const list = i.part === "paths" ? callersPathsOf(callersCodeOf(d)) : (d.hits || []).slice().sort(cpCompare);
       for (const e of list) L.push([s, e]);
     }
     const k = Number(i.page);
@@ -2135,11 +2138,12 @@ export function callersReadStub(data, over) {
   };
 }
 // scripts the disk path under one label prefix: inline ON_DISK, the file relay, and read pages 0..9 of every part
+// (8.9.5, yaadgaar #112: parts all and paths; part paths lists code paths only)
 export function callersDisk(s, prefix, data, opts) {
   const o = opts || {};
   s[prefix] = (p) => ON_DISK(inputsOf(p).symbols);
   s[prefix + ":file"] = callersFileStub(data, o.file);
-  for (const part of ["all", "auto", "paths"]) for (let k = 0; k < 10; k++) s[prefix + ":read:" + part + ":" + k] = callersReadStub(data, o.read);
+  for (const part of ["all", "paths"]) for (let k = 0; k < 10; k++) s[prefix + ":read:" + part + ":" + k] = callersReadStub(data, o.read);
   return s;
 }
 

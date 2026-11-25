@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, SCRIPTS_SRC, happy, runOne, scratchRepo, sh, spawnSync, callersDisk } from "./harness.mjs";
+import { ARGS, SCRIPTS_SRC, happy, runOne, scratchRepo, sh, spawnSync, callersDisk, call, inputsOf } from "./harness.mjs";
 
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 
@@ -50,14 +50,22 @@ test("7.4.0 #68 C1: one symbol alone over the one-symbol cap stops naming 16384 
 
 const docs = (x, n) => Array.from({ length: n }, (_, j) => "docs/" + x + "_" + String(j).padStart(3, "0") + ".md:1");
 
-// 8.5.3 (#111): auto hits no longer use the read budget, so this finding is gone; the 5 pages are read
-test("7.4.0 #68 C2 / 8.5.3: 210 auto hits (5 pages) are read outside the budget, with no finding", async () => {
+// 8.5.3 (#111) read the 5 auto pages outside the budget. 8.9.5 (yaadgaar #112): there is no auto read; a map that
+// holds a doc hit is checked by part all (budgeted), and a map of the code hits only needs no read
+test("7.4.0 #68 C2 / 8.9.5: 210 doc hits: a map of one doc hit is over the budget; a map with no doc hit needs no read", async () => {
   const s = happy();
   const x = "r_one";
   s["role:scope-and-plan"].changed_symbols = [{ symbol: x, occurrences: [{ at: docs(x, 1)[0], criterion: null, dont_care: "a doc" }] }];
   callersDisk(s, "infra:callers", { [x]: { hits: docs(x, 210), auto: docs(x, 210) } });
   const out = await runOne(s, ARGS);
-  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix"), out.result.status + " " + out.result.reason);
-  assert.equal(out.labels.filter((l) => l.startsWith("infra:callers:read:auto:")).length, 5, out.labels.join(", "));
-  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.equal(out.labels.filter((l) => l.includes(":read:")).length, 0, out.labels.join(", "));
+  const c = call(out, "role:scope-and-plan:audit-fix");
+  assert.ok(c, out.result.status + " " + out.result.reason);
+  assert.deepEqual(inputsOf(c.prompt).prior_round.findings.map((f) => f.finding), [x + ": the mapped occurrences differ from git grep -w (210 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit"]);
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = [{ symbol: x, occurrences: [{ at: "src/r_one.py:1", criterion: "AC1", dont_care: null }] }];
+  callersDisk(t, "infra:callers", { [x]: { hits: ["src/r_one.py:1"].concat(docs(x, 210)), auto: docs(x, 210) } });
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.labels.filter((l) => l.includes(":read:")).length, 0, o2.labels.join(", "));
+  assert.equal(o2.result.status, "awaiting_confirmation", o2.result.reason);
 });

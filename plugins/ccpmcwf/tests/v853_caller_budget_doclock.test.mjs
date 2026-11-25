@@ -4,6 +4,8 @@
 // reads, so the last batch could not read its auto lists ("19 doc or lock hit(s) left to auto
 // dont_care are over the caller read budget"). Code hits keep the budget and the stop.
 // fixtures/v853_callers_b3.json is the hit list of that last batch (the real callers file).
+// 8.9.5 (yaadgaar #112): the doc and lock hits are checked by the summary's code_sha256 with no read at all,
+// so the auto pages (and their per-check bound, CALLER_AUTO_PAGES_MAX) are gone.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -45,21 +47,20 @@ function realRun(extra) {
   return { s, names };
 }
 
-test("8.5.3 (#111): the real 16-symbol pin plan reads its doc and lock hits outside the budget and reaches confirmation", async () => {
+test("8.5.3 (#111) / 8.9.5: the real 16-symbol pin plan reads no doc or lock hit and reaches confirmation", async () => {
   assert.ok(REAL.length === 8 && AUTO_TOTAL === 113, REAL.join(",") + " " + AUTO_TOTAL);
   const { s } = realRun();
   const out = await runOne(s, ARGS);
   assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix"), "re-plan round: " + JSON.stringify(out.result));
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  // b2 (the first 8) spends 4 auto pages, b3 (the real 8) reads its 113 auto hits in 3 more pages
-  assert.equal(reads(out, /:b2:read:auto:/).length, 4, reads(out).join(", "));
-  assert.equal(reads(out, /:b3:read:auto:/).length, 3, reads(out).join(", "));
-  // every doc or lock hit (200 + 113) is sealed in the map as auto dont_care
-  assert.ok(out.logs.some((g) => String(g).includes("; 313 doc or lock hit(s) mapped \"auto: non-code file\"")), out.logs.join("\n"));
+  // 8.5.3 read 4 auto pages in b2 and 3 in b3; 8.9.5 reads none
+  assert.deepEqual(reads(out), []);
+  // every doc or lock hit (200 + 113) is auto dont_care by count and hash, not sealed in the map
+  assert.ok(out.logs.some((g) => String(g).includes("; 313 doc or lock hit(s) left to auto dont_care by count and hash (not listed)")), out.logs.join("\n"));
   assert.ok(!out.logs.some((g) => /of the caller read budget \(4\) left; not read/.test(String(g))), out.logs.join("\n"));
 });
 
-test("8.5.3 (#111): 300 doc hits of one symbol (6 pages) still map to auto dont_care with no finding", async () => {
+test("8.5.3 (#111) / 8.9.5: 300 doc hits of one symbol are auto dont_care with no read and no finding", async () => {
   const s = happy();
   const d = { hits: code("big_pin", 1).concat(docs("big_pin", 300)), auto: docs("big_pin", 300) };
   s["role:scope-and-plan"].changed_symbols = [mapCode("big_pin", d)];
@@ -67,7 +68,7 @@ test("8.5.3 (#111): 300 doc hits of one symbol (6 pages) still map to auto dont_
   const out = await runOne(s, ARGS);
   assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix"), "re-plan round: " + JSON.stringify(out.result));
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.equal(reads(out, /:read:auto:/).length, 6, reads(out).join(", "));
+  assert.deepEqual(reads(out), []);
 });
 
 test("8.5.3 (#111) non-weakening: code hits over the budget still give the re-grep finding", async () => {
@@ -100,7 +101,9 @@ const SAME_RUN = {
   "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
 };
 // the incident's 16-symbol plan, then the build in the same run, under a lowered agent cap. The real
-// agents of this run need a cap of 66; the 7 auto reads would need 73 if they counted.
+// agents of this run needed a cap of 66 in 8.5.3; the 7 auto reads would have needed 73 if they counted.
+// 8.9.5 (yaadgaar #112): a cap of 63. No auto read runs, and the sealed map holds no 313 auto entries, so
+// the plan ref takes 3 fewer plan-chunks writers (r0w2-r0w4).
 async function sameRunAt(cap) {
   const { s } = realRun();
   Object.assign(s, JSON.parse(JSON.stringify(SAME_RUN)));
@@ -110,37 +113,26 @@ async function sameRunAt(cap) {
   return runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
 }
 
-test("8.5.3 (#111, PR #108 review a): the auto reads are outside the agent cap: the same-run plan+build fits a cap its real agents fit", async () => {
-  const out = await sameRunAt(66);
+test("8.5.3 (#111, PR #108 review a) / 8.9.5: the same-run plan+build fits the cap its real agents need, with no read", async () => {
+  const out = await sameRunAt(63);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(reads(out, /:read:auto:/).length, 7, reads(out).join(", "));
+  assert.deepEqual(reads(out), []);
+  assert.ok(!out.labels.includes("infra:plan-chunks:r0w2"), out.labels.join(", "));
 });
 
 test("8.5.3 (#111, PR #108 review c): the agent cap still stops on real agents (one under the cap the real agents need)", async () => {
-  const out = await sameRunAt(65);
+  const out = await sameRunAt(62);
   assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.match(out.result.reason, /^agent cap 65 reached: /);
+  assert.match(out.result.reason, /^agent cap 62 reached: /);
 });
 
-test("8.5.3 (#111, PR #108 review b): auto pages over the per-check bound (20 pages) stop at the callers gate, naming the symbols and the hit count", async () => {
+// 8.9.5 (yaadgaar #112): the per-check auto bound (20 pages) is gone with the auto reads; 1001 doc hits pass
+test("8.9.5 (#112): 1001 doc hits (21 pages before) need no read and no stop", async () => {
   const s = happy();
   const d = { hits: code("huge_pin", 1).concat(docs("huge_pin", 1001)), auto: docs("huge_pin", 1001) };
   s["role:scope-and-plan"].changed_symbols = [mapCode("huge_pin", d)];
   callersDisk(s, "infra:callers", { huge_pin: d });
   const out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.equal(out.result.stop_gate, "callers");
-  assert.match(out.result.reason, /^infra:callers: the auto lists of huge_pin \(1001 doc or lock hit\(s\)\) need 21 read\(s\); over the 20 auto reads a caller check may take/);
-  assert.equal(reads(out).length, 0, reads(out).join(", "));
-});
-
-test("8.5.3 (#111, PR #108 review b): 1000 doc hits (exactly 20 pages) are read with no stop", async () => {
-  const s = happy();
-  const d = { hits: code("big_pin", 1).concat(docs("big_pin", 1000)), auto: docs("big_pin", 1000) };
-  s["role:scope-and-plan"].changed_symbols = [mapCode("big_pin", d)];
-  callersDisk(s, "infra:callers", { big_pin: d });
-  for (let k = 10; k < 20; k++) s["infra:callers:read:auto:" + k] = s["infra:callers:read:auto:0"];
-  const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.equal(reads(out, /:read:auto:/).length, 20, reads(out).join(", "));
+  assert.deepEqual(reads(out), []);
 });
