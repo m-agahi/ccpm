@@ -27,11 +27,17 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
 - Review of #123 (F1, Max: prefill the cache from the base lock): the gate's `UV_CACHE_DIR` is
   fresh per run and the sandbox has no network, so a uv coverage run with an empty cache could
   never start. On the new uv path `cover_diff.py` now fills the gate's `UV_CACHE_DIR` and
-  `UV_PROJECT_ENVIRONMENT` first, outside the sandbox, from the plan base's pyproject.toml,
-  uv.lock and .python-version (git objects, never the judged tree): `uv sync --frozen
---no-install-project --no-build --project <a copy of those files>`, with `UV_NO_CONFIG=1`, at
-  most 300 s. Only wheels are installed and no tree code runs. A failed prefill gives not_run
-  ("uv cache prefill failed: ..." or "uv cache prefill not run: ...").
+  `UV_PROJECT_ENVIRONMENT` first, outside the sandbox, from the plan base's pyproject.toml and
+  uv.lock only (git objects copied to the program's own work dir, never the judged tree): the
+  command `uv sync --frozen --no-install-project --no-build --project <that dir>`, at most 300 s. Only wheels are
+  installed and no tree code runs. A failed prefill gives not_run ("uv cache prefill failed: ..."
+  or "uv cache prefill not run: ...").
+- Security review of the prefill: the host-side uv comes only from the agent PATH with no entry
+  inside the worktree or the scratch dir (`clean_path`), never from the plan env's PATH, so a uv
+  planted there never runs on the host. The prefill env drops every `UV_*`, `VIRTUAL_ENV` and
+  `PYTHON*` variable but the two gate dirs (which must be outside the worktree and the copy), and
+  sets `UV_PYTHON` to the program's own interpreter, `UV_PYTHON_DOWNLOADS=never` and
+  `UV_NO_CONFIG=1`.
 - Inside the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage`.
   uv run has no `--no-install-project`, and a sync inside the sandbox would not outlive its fresh
   overlay, so the judged lock is not installed. If the judged tree needs packages the base lock

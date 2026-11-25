@@ -62,9 +62,12 @@ except Exception:
 # refused: ..."). Every uv run on the uv tier (a uv run test_cmd's too) gets UV_NO_CONFIG=1.
 # Review of #123 (F1, Max: prefill the cache from the base lock): the gate's UV_CACHE_DIR is fresh per run and the
 # sandbox has no network, so on the new uv path this program first fills UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT
-# outside the sandbox from the plan BASE's pyproject.toml, uv.lock and .python-version (git objects copied to its
-# own work dir, never the judged tree): `uv sync --frozen --no-install-project --no-build --project <that dir>`,
-# argv only, UV_NO_CONFIG=1, at most 300 s (wheels only; no tree code runs). A failed prefill: not_run. Inside
+# outside the sandbox from the plan BASE's pyproject.toml and uv.lock only (git objects copied to its own work
+# dir, never the judged tree): `uv sync --frozen --no-install-project --no-build --project <that dir>`, argv only,
+# at most 300 s (wheels only; no tree code runs). Security review of 2ea5feb: that uv comes from the agent PATH
+# with no worktree or scratch entry (clean_path), and its env drops every UV_*, VIRTUAL_ENV and PYTHON* var but
+# the two gate dirs (outside the worktree and the copy), with UV_PYTHON=this interpreter, UV_PYTHON_DOWNLOADS=never
+# and UV_NO_CONFIG=1. A failed prefill: not_run. Inside
 # the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage` (uv run has no
 # --no-install-project, and a sync inside would not outlive its fresh sandbox): the judged lock is not installed.
 # A failed probe there is not_run, and so is a red coverage run after a green host baseline (the judged lock
@@ -222,6 +225,8 @@ if any(os.path.basename(x) in REFUSED for x in argv):
 # this program's PATH with no entry inside the worktree or the scratch dir; a guard dir before both
 scratch = os.path.join(os.path.realpath(os.path.dirname(os.path.realpath(wt))), 'scratch')
 path = clean_path((wt, scratch))
+# the host prefill's PATH: the agent PATH with no entry inside the worktree or the scratch dir (never an env PATH)
+host_path = path
 if 'PATH' in env_in:
     ents = [e for e in env_in.pop('PATH').split(':') if e]
     if not all(os.path.isabs(e) for e in ents) or any(os.path.lexists(os.path.join(e, n)) for e in ents for n in REFUSED):
@@ -260,28 +265,38 @@ def uv_refusal():
     if not ct or not all(e.get('source') == PYPI for e in ct):
         return 'the judged uv.lock does not pin coverage from PyPI'
     return None
+def under(p, d):
+    p, d = os.path.realpath(p), os.path.realpath(d)
+    return p == d or p.startswith(d.rstrip('/') + '/')
 def prefill(env):
     # F1: the gate's uv cache and venv from the plan base's files, outside the sandbox; None, or the not_run reason
     if not all(os.path.isabs(env.get(k) or '') for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT')):
         return 'uv cache prefill not run: the gate env has no absolute UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT'
+    # both outside the worktree and the copy (the coder writes those)
+    if any(under(env[k], d) for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT') for d in (wt, tmp)):
+        return 'uv cache prefill not run: UV_CACHE_DIR or UV_PROJECT_ENVIRONMENT is inside the worktree or the copy'
+    # the project: the base's pyproject.toml and uv.lock only, in this program's own work dir (0700, outside scratch)
     proj = os.path.join(work, 'base-project')
     os.mkdir(proj)
-    for n, need in (('pyproject.toml', True), ('uv.lock', True), ('.python-version', False)):
+    for n in ('pyproject.toml', 'uv.lock'):
         b = blob(base, n)
         if b is False:
             return 'uv cache prefill not run: the plan base ' + n + ' is over 16 MiB'
         if b is None:
-            if need:
-                return 'uv cache prefill not run: the plan base has no ' + n
-            continue
+            return 'uv cache prefill not run: the plan base has no ' + n
         with open(os.path.join(proj, n), 'wb') as fh:
             fh.write(b)
-    uvb = shutil.which('uv', path=env['PATH'])
+    # uv from the trusted PATH only (a uv planted in a worktree or scratch dir never runs on the host)
+    uvb = shutil.which('uv', path=host_path)
     if not uvb:
         return 'no coverage tool: uv is not on PATH'
+    # the agent env, no UV_*, VIRTUAL_ENV or PYTHON* of its own or of the plan env: only the two gate dirs, this
+    # program's interpreter, no downloads, no config
+    pe = {k: v for k, v in os.environ.items() if not (k.startswith('UV_') or k.startswith('PYTHON') or k == 'VIRTUAL_ENV')}
+    pe.update(PATH=host_path, UV_CACHE_DIR=env['UV_CACHE_DIR'], UV_PROJECT_ENVIRONMENT=env['UV_PROJECT_ENVIRONMENT'], UV_PYTHON=sys.executable, UV_PYTHON_DOWNLOADS='never', UV_NO_CONFIG='1')
     t = max(1, min(300, left() - 60))
     try:
-        r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=dict(env, UV_NO_CONFIG='1'), stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
+        r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=pe, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
     except subprocess.TimeoutExpired:
         return 'uv cache prefill failed: uv sync timed out after %d s' % t
     except OSError as e:

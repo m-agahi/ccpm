@@ -31,6 +31,7 @@ const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.ex
 const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf8" }).stdout.trim();
 const GIT = which("git");
 const CP = which("cp");
+const LS = which("ls");
 const UV_TIER = "uv run --frozen coverage";
 const UVH = "uv run --frozen --offline --no-sync coverage";
 const SYNC_RE = /^uv sync --frozen --no-install-project --no-build --project \S+$/;
@@ -50,7 +51,8 @@ const REPORT = { meta: {}, files: { "pkg/mod.py": { executed_lines: [1, 2, 5, 6,
 // opts: {cmd, lock (default true: the PyPI-pinned uv.lock), uv (default true: a uv stub on PATH),
 // tier (override the census tier), uvVersion (the exit of the uv coverage `--version` probe), runExit (the exit of
 // the uv coverage run), syncExit (the exit of `uv sync`), noUvEnv (no UV_CACHE_DIR / UV_PROJECT_ENVIRONMENT),
-// baseFiles ({path: text} in the base commit), judged ({path: text | null} in the judged tree only; null deletes)}
+// baseFiles ({path: text} in the base commit), judged ({path: text | null} in the judged tree only; null deletes),
+// env (more env_in vars), plant (a uv in <wt>/.plant, first on the env_in PATH, that logs "PLANTED")}
 function fixture(opts = {}) {
   const d = mkdtempSync(join(tmpdir(), "fleet-uvt-"));
   const wt = join(d, "wt");
@@ -83,8 +85,17 @@ function fixture(opts = {}) {
   const tree = spawnSync(GIT, ["write-tree"], { cwd: wt, env, encoding: "utf8" }).stdout.trim();
   rmSync(idx, { force: true });
   const log = join(d, "calls.log");
+  const plantEnv = {};
+  if (opts.plant) {
+    // after the tree is written: a uv the coder planted in a worktree dir on the env PATH
+    mkdirSync(join(wt, ".plant"));
+    writeFileSync(join(wt, ".plant", "uv"), "#!/bin/sh\necho \"PLANTED $*\" >> '" + log + "'\nexit 1\n");
+    chmodSync(join(wt, ".plant", "uv"), 0o755);
+    plantEnv.PATH = join(wt, ".plant");
+  }
   const envlog = join(d, "env.log");
   const synced = join(d, "synced.lock");
+  const syncenv = join(d, "sync.env");
   symlinkSync(GIT, join(bin, "git"));
   passBwrap(bin);
   writeFileSync(join(d, "cov.json"), JSON.stringify(REPORT));
@@ -101,7 +112,9 @@ function fixture(opts = {}) {
       'echo "uv $*" >> \'' + log + "'\n" +
         'echo "UV_NO_CONFIG=$UV_NO_CONFIG" >> \'' + envlog + "'\n" +
         // the prefill: keeps the lock it was given (the base's), then exits syncExit
-        'if [ "$1" = sync ]; then while [ "$1" != "--project" ]; do shift; done; ' + CP + ' "$2/uv.lock" \'' + synced + "'; exit " + (opts.syncExit || 0) + "; fi\n" +
+        // (and records the env it got and the project dir's entries)
+        'if [ "$1" = sync ]; then echo "UV_INDEX_URL=$UV_INDEX_URL VIRTUAL_ENV=$VIRTUAL_ENV PYTHONPATH=$PYTHONPATH UV_PYTHON=$UV_PYTHON UV_PYTHON_DOWNLOADS=$UV_PYTHON_DOWNLOADS UV_NO_CONFIG=$UV_NO_CONFIG" > \'' + syncenv + "'; " +
+        'while [ "$1" != "--project" ]; do shift; done; echo "proj:" $(' + LS + ' -A "$2") >> \'' + syncenv + "'; " + CP + ' "$2/uv.lock" \'' + synced + "'; exit " + (opts.syncExit || 0) + "; fi\n" +
         // a `uv run ... pytest` baseline passes; any coverage call other than the two served prefixes fails
         'case "$*" in "run --frozen --offline --no-sync coverage "*) shift 5 ;; "run --frozen coverage "*) shift 3 ;; *coverage*) exit 1 ;; "run "*pytest*) exit 0 ;; *) exit 1 ;; esac\n' +
         'case "$1" in\n' +
@@ -120,7 +133,7 @@ function fixture(opts = {}) {
   if (existsSync(log)) rmSync(log);
   if (existsSync(envlog)) rmSync(envlog);
   const uvEnv = opts.noUvEnv ? {} : { UV_CACHE_DIR: join(d, "scratch", "uv-cache", "n1", "gate"), UV_PROJECT_ENVIRONMENT: join(d, "scratch", "build", "n1", "gates-r1", "uv-venv") };
-  const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify(Object.assign({ TZ: "UTC" }, uvEnv)), JSON.stringify(["tests/test_mod.py"]), tier];
+  const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify(Object.assign({ TZ: "UTC" }, uvEnv, plantEnv, opts.env || {})), JSON.stringify(["tests/test_mod.py"]), tier];
   const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: Object.assign({ PATH: bin }, bwrapOk(bin)) });
   const res = {
     r,
@@ -130,6 +143,7 @@ function fixture(opts = {}) {
     calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [],
     envs: existsSync(envlog) ? readFileSync(envlog, "utf8").trim().split("\n") : [],
     synced: existsSync(synced) ? readFileSync(synced, "utf8") : null,
+    syncenv: existsSync(syncenv) ? readFileSync(syncenv, "utf8").trim().split("\n") : null,
   };
   rmSync(d, { recursive: true, force: true });
   return res;
@@ -413,4 +427,26 @@ test("8.9.7 #110 review F1 (real uv): an empty cache, the base lock prefilled ou
   } finally {
     rmSync(d, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- security review of 2ea5feb: the host prefill runs only trusted inputs
+
+test("8.9.7 #110 review (host prefill): a uv planted in a worktree PATH entry never runs on the host", { skip: !HAVE_PY }, () => {
+  // a clean uv exists: the prefill runs it; the planted one is never the prefill
+  const a = fixture({ plant: true });
+  assert.equal(a.r.status, 0, a.r.stderr);
+  assert.match(a.calls[0], SYNC_RE, a.calls.join("\n"));
+  assert.ok(!a.calls.some((c) => c.startsWith("PLANTED sync")), a.calls.join("\n"));
+  // no clean uv: not_run, and the planted one did not run at all
+  const b = fixture({ plant: true, uv: false, tier: UV_TIER });
+  assert.equal(b.r.status, 0, b.r.stderr);
+  assert.equal(b.out.status, "not_run");
+  assert.equal(b.out.reason, "no coverage tool: uv is not on PATH");
+  assert.deepEqual(b.calls, []);
+});
+
+test("8.9.7 #110 review (host prefill): stray UV_*, VIRTUAL_ENV and PYTHON* vars never reach it; it gets the trusted interpreter, no downloads, no config, the base pyproject and lock only", { skip: !HAVE_PY }, () => {
+  const x = fixture({ env: { UV_INDEX_URL: "https://evil.example/simple", VIRTUAL_ENV: "/evil/venv", PYTHONPATH: "/evil", UV_PYTHON: "/evil/python" }, baseFiles: { ".python-version": "3.12\n", "uv.toml": "x = 1\n" } });
+  assert.equal(x.out.status, "ran", x.out.reason);
+  assert.deepEqual(x.syncenv, ["UV_INDEX_URL= VIRTUAL_ENV= PYTHONPATH= UV_PYTHON=" + PY + " UV_PYTHON_DOWNLOADS=never UV_NO_CONFIG=1", "proj: pyproject.toml uv.lock"]);
 });
