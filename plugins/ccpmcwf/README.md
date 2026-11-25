@@ -1749,9 +1749,12 @@ What is left (accepted residuals):
   pyproject.toml decide which coverage runs, and the coder writes both. On the uv coverage tier
   (8.9.7) with a bare pytest or `python -m pytest` test_cmd, coverage comes from a venv that
   cover_diff fills outside the sandbox from the plan base's pyproject.toml and lock (a `uv sync`
-  with `--frozen`, `--no-install-project` and `--no-build`: wheels only; uv from the agent PATH
-  with no worktree or scratch entry; no inherited uv, virtualenv or python env var) and runs
-  offline with `--no-sync`; the gate only checks that the judged lock still pins coverage from PyPI (an accident guard). The
+  with `--frozen`, `--no-install-project`, `--no-build`, every extra and group: wheels only; uv
+  from the agent PATH with no worktree or scratch entry; no inherited uv, virtualenv or python env
+  var) and runs offline with `--no-sync`. uv walks up from that dir to find a workspace root, so
+  the prefill counts only when uv's `--verbose` log shows that the base project was its own root
+  (else not_run). The judged lock is checked only for an accident (it must still pin coverage from
+  PyPI); that check does not pick the coverage that runs. The
   held-out and coverage verdicts stay in-process by design (ADR-1152, ADR-1325, ADR-1365): a
   sandbox limits what the tests touch, not what they report. Mutation has a placebo
   control (above); a source that hashes its AST or `__code__` rather than its bytes still passes the

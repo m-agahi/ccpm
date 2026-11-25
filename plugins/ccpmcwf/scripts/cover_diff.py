@@ -59,25 +59,31 @@ except Exception:
 # Review of #123 (Max: option B, an honest-coder gate): uv resolves coverage from the judged tree's uv.lock and
 # pyproject, which the coder writes; like conftest tampering this is an accepted residual (ADR-1152, ADR-1325,
 # ADR-1365). One accident guard: the judged uv.lock must still pin coverage from PyPI (else not_run "uv tier
-# refused: ..."). Every uv run on the uv tier (a uv run test_cmd's too) gets UV_NO_CONFIG=1.
+# refused: ..."). It checks the judged lock only: on the new uv path the coverage that runs comes from the base
+# lock (below), so the guard does not pick it. Every uv run on the uv tier (a uv run test_cmd's too) gets
+# UV_NO_CONFIG=1.
 # Review of #123 (F1, Max: prefill the cache from the base lock): the gate's UV_CACHE_DIR is fresh per run and the
 # sandbox has no network, so on the new uv path this program first fills UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT
-# outside the sandbox from the plan BASE's pyproject.toml and uv.lock only (git objects copied to its own work
-# dir, never the judged tree): `uv sync --frozen --no-install-project --no-build --project <that dir>`, argv only,
-# at most 300 s (wheels only; no tree code runs). Security review of 2ea5feb: that uv comes from the agent PATH
-# with no worktree or scratch entry (clean_path), and its env drops every UV_*, VIRTUAL_ENV and PYTHON* var but
-# the two gate dirs (outside the worktree and the copy), with UV_PYTHON=this interpreter, UV_PYTHON_DOWNLOADS=never
-# and UV_NO_CONFIG=1. A failed prefill: not_run. Inside
+# outside the sandbox from the plan BASE's pyproject.toml and uv.lock (git objects copied to its own work dir,
+# never the judged tree): `uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose
+# --project <that dir>`, argv only, at most 300 s (wheels only; no tree code runs; every extra and group, so a
+# coverage or pytest in a test extra or group is there too). Security review of 2ea5feb: that uv comes from the
+# agent PATH with no worktree or scratch entry (clean_path), and its env drops every UV_*, VIRTUAL_ENV, PYTHON* and
+# RUST_LOG var but the two gate dirs (outside the worktree and the copy), with UV_PYTHON=this interpreter,
+# UV_PYTHON_DOWNLOADS=never and UV_NO_CONFIG=1. Review of 9e23242 (M1): uv still walks up from the work dir, and an
+# ancestor pyproject.toml whose [tool.uv.workspace] matches it would be the workspace root, with that root's
+# uv.lock read in place of the base's. So the prefill counts only when uv's --verbose log shows the base project
+# was its own root (ws_refusal); else not_run. A failed prefill: not_run. Inside
 # the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage` (uv run has no
 # --no-install-project, and a sync inside would not outlive its fresh sandbox): the judged lock is not installed.
-# A failed probe there is not_run, and so is a red coverage run after a green host baseline (the judged lock
+# A failed probe there is not_run, and so is a red coverage run after a green plain baseline (the judged lock
 # needs packages the base lock does not provide, or the venv and the host test env differ), never an error.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
 SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
 UV_TIER = 'uv run --frozen coverage'
 UV_HEAD = ['uv', 'run', '--frozen', '--offline', '--no-sync', 'coverage']
-UV_SYNC = ['sync', '--frozen', '--no-install-project', '--no-build']
+UV_SYNC = ['sync', '--frozen', '--no-install-project', '--no-build', '--all-extras', '--all-groups', '--verbose']
 BLOB_CAP = 16777216
 PYPI = {'registry': 'https://pypi.org/simple'}
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
@@ -292,8 +298,9 @@ def prefill(env):
         return 'no coverage tool: uv is not on PATH'
     # the agent env, no UV_*, VIRTUAL_ENV or PYTHON* of its own or of the plan env: only the two gate dirs, this
     # program's interpreter, no downloads, no config
-    pe = {k: v for k, v in os.environ.items() if not (k.startswith('UV_') or k.startswith('PYTHON') or k == 'VIRTUAL_ENV')}
-    pe.update(PATH=host_path, UV_CACHE_DIR=env['UV_CACHE_DIR'], UV_PROJECT_ENVIRONMENT=env['UV_PROJECT_ENVIRONMENT'], UV_PYTHON=sys.executable, UV_PYTHON_DOWNLOADS='never', UV_NO_CONFIG='1')
+    # (and no RUST_LOG, which would override --verbose and hide the workspace line the check below reads)
+    pe = {k: v for k, v in os.environ.items() if not (k.startswith('UV_') or k.startswith('PYTHON') or k in ('VIRTUAL_ENV', 'RUST_LOG'))}
+    pe.update(PATH=host_path, UV_CACHE_DIR=env['UV_CACHE_DIR'], UV_PROJECT_ENVIRONMENT=env['UV_PROJECT_ENVIRONMENT'], UV_PYTHON=sys.executable, UV_PYTHON_DOWNLOADS='never', UV_NO_CONFIG='1', NO_COLOR='1')
     t = max(1, min(300, left() - 60))
     try:
         r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=pe, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
@@ -301,8 +308,32 @@ def prefill(env):
         return 'uv cache prefill failed: uv sync timed out after %d s' % t
     except OSError as e:
         return 'uv cache prefill failed: ' + str(e)
+    log = (r.stdout + r.stderr).decode('utf-8', 'replace')
     if r.returncode != 0:
-        return 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, (r.stdout + r.stderr).decode('utf-8', 'replace')[-300:])
+        tail = '\n'.join(x for x in log.splitlines() if not re.match(r'\s*(DEBUG|TRACE)\b', x))
+        return 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, tail[-300:])
+    return ws_refusal(r.stderr.decode('utf-8', 'replace'), proj)
+def ws_refusal(log, proj):
+    # review of 9e23242 (M1): uv walks up from --project, and an ancestor pyproject.toml with a
+    # [tool.uv.workspace] that matches the dir (/tmp is world-writable) becomes the workspace root, whose uv.lock
+    # --frozen then reads. uv sync has no --no-workspace, so the prefill counts only when uv's own --verbose log
+    # says it used the base project as its root: a "No workspace root found, using project root" line, or a
+    # "Found workspace root: <dir>" line naming the project dir itself (a base that is its own workspace root),
+    # and no root line naming any other dir. No such line (a uv that words it differently): not_run.
+    seen, other = False, []
+    for x in log.splitlines():
+        x = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', x).rstrip()
+        if re.search(r'(?:^|\s)No workspace root found, using project root$', x):
+            seen = True
+        m = re.search(r'(?:^|\s)Found workspace root: `?(.+?)`?$', x)
+        if m:
+            seen = True
+            if not os.path.isabs(m.group(1)) or os.path.realpath(m.group(1)) != os.path.realpath(proj):
+                other.append(m.group(1))
+    if other:
+        return 'uv cache prefill refused: uv used the workspace root ' + other[0] + ', not the plan base project (an ancestor pyproject.toml)'
+    if not seen:
+        return 'uv cache prefill refused: uv --verbose did not log that it used the plan base project as its root'
     return None
 if uv_route:
     why = uv_refusal()
@@ -392,7 +423,7 @@ try:
         code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log, [dirs[1]], [dirs[0]])
         if code != 0:
             if uv_route:
-                emit('not_run', "uv coverage run exit %d with a green host baseline: the judged uv.lock needs packages the base lock does not provide, or the uv venv does not match the host test_cmd's environment: %s" % (code, tail.strip()[-300:]))
+                emit('not_run', "uv coverage run exit %d with a green plain baseline: the judged uv.lock needs packages the base lock does not provide, or the uv venv does not match the host test_cmd's environment: %s" % (code, tail.strip()[-300:]))
             sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
         code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log, [dirs[2]], [dirs[0], dirs[1]])
         if code != 0:

@@ -32,9 +32,10 @@ const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf
 const GIT = which("git");
 const CP = which("cp");
 const LS = which("ls");
+const GREP = which("grep");
 const UV_TIER = "uv run --frozen coverage";
 const UVH = "uv run --frozen --offline --no-sync coverage";
-const SYNC_RE = /^uv sync --frozen --no-install-project --no-build --project \S+$/;
+const SYNC_RE = /^uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose --project \S+$/;
 
 function g(cwd, ...a) {
   const r = spawnSync(GIT, a, { cwd, encoding: "utf8", env: { PATH: process.env.PATH, HOME: cwd, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" } });
@@ -52,7 +53,11 @@ const REPORT = { meta: {}, files: { "pkg/mod.py": { executed_lines: [1, 2, 5, 6,
 // tier (override the census tier), uvVersion (the exit of the uv coverage `--version` probe), runExit (the exit of
 // the uv coverage run), syncExit (the exit of `uv sync`), noUvEnv (no UV_CACHE_DIR / UV_PROJECT_ENVIRONMENT),
 // baseFiles ({path: text} in the base commit), judged ({path: text | null} in the judged tree only; null deletes),
-// env (more env_in vars), plant (a uv in <wt>/.plant, first on the env_in PATH, that logs "PLANTED")}
+// env (more env_in vars), plant (a uv that logs "PLANTED": true or "wt" puts it in <wt>/.plant, first on the env_in
+// PATH; "scratch" puts it in <scratch>/.plant, first on the env_in PATH and on this program's own PATH),
+// wsRoot (review of 9e23242, M1: TMPDIR is <d>/t, and <d>/t holds a planted workspace-root pyproject.toml and a
+// uv.lock of its own), syncLog (false: the uv stub's sync logs no workspace line)}
+const PLANTED_LOCK = LOCK.replace('version = "7.6.1"', 'version = "6.6.6"');
 function fixture(opts = {}) {
   const d = mkdtempSync(join(tmpdir(), "fleet-uvt-"));
   const wt = join(d, "wt");
@@ -86,12 +91,22 @@ function fixture(opts = {}) {
   rmSync(idx, { force: true });
   const log = join(d, "calls.log");
   const plantEnv = {};
+  let agentPlant = null;
   if (opts.plant) {
-    // after the tree is written: a uv the coder planted in a worktree dir on the env PATH
-    mkdirSync(join(wt, ".plant"));
-    writeFileSync(join(wt, ".plant", "uv"), "#!/bin/sh\necho \"PLANTED $*\" >> '" + log + "'\nexit 1\n");
-    chmodSync(join(wt, ".plant", "uv"), 0o755);
-    plantEnv.PATH = join(wt, ".plant");
+    // after the tree is written: a uv the coder planted in a worktree or scratch dir on the env PATH
+    const pd = opts.plant === "scratch" ? join(d, "scratch", ".plant") : join(wt, ".plant");
+    mkdirSync(pd, { recursive: true });
+    writeFileSync(join(pd, "uv"), "#!/bin/sh\necho \"PLANTED $*\" >> '" + log + "'\nexit 1\n");
+    chmodSync(join(pd, "uv"), 0o755);
+    plantEnv.PATH = pd;
+    if (opts.plant === "scratch") agentPlant = pd;
+  }
+  const tmpd = join(d, "t");
+  if (opts.wsRoot) {
+    // M1: an ancestor of the prefill's work dir (TMPDIR) is a workspace root with a lock the base did not choose
+    mkdirSync(tmpd);
+    writeFileSync(join(tmpd, "pyproject.toml"), '[tool.uv.workspace]\nmembers = ["*/base-project"]\n');
+    writeFileSync(join(tmpd, "uv.lock"), PLANTED_LOCK);
   }
   const envlog = join(d, "env.log");
   const synced = join(d, "synced.lock");
@@ -114,7 +129,15 @@ function fixture(opts = {}) {
         // the prefill: keeps the lock it was given (the base's), then exits syncExit
         // (and records the env it got and the project dir's entries)
         'if [ "$1" = sync ]; then echo "UV_INDEX_URL=$UV_INDEX_URL VIRTUAL_ENV=$VIRTUAL_ENV PYTHONPATH=$PYTHONPATH UV_PYTHON=$UV_PYTHON UV_PYTHON_DOWNLOADS=$UV_PYTHON_DOWNLOADS UV_NO_CONFIG=$UV_NO_CONFIG" > \'' + syncenv + "'; " +
-        'while [ "$1" != "--project" ]; do shift; done; echo "proj:" $(' + LS + ' -A "$2") >> \'' + syncenv + "'; " + CP + ' "$2/uv.lock" \'' + synced + "'; exit " + (opts.syncExit || 0) + "; fi\n" +
+        // M1: it models uv's walk-up: the nearest dir from the project up with a [tool.uv.workspace] pyproject.toml
+        // is the root, and the lock it keeps is that root's; with --verbose it logs uv's workspace line on stderr
+        'v=; case " $* " in *" --verbose "*) v=1 ;; esac; ' +
+        'while [ "$1" != "--project" ]; do shift; done; echo "proj:" $(' + LS + ' -A "$2") >> \'' + syncenv + "'; " +
+        'p=$(cd "$2" && pwd -P); r=$p; while :; do ' + GREP + ' -q "^\\[tool\\.uv\\.workspace\\]" "$r/pyproject.toml" 2>/dev/null && break; ' +
+        'if [ "$r" = / ]; then r=; break; fi; r=${r%/*}; [ -z "$r" ] && r=/; done; ' +
+        (opts.syncLog === false ? "v=; " : "") +
+        'if [ -n "$r" ]; then [ -n "$v" ] && echo "DEBUG Found workspace root: $r" >&2; else r=$p; [ -n "$v" ] && echo "DEBUG No workspace root found, using project root" >&2; fi; ' +
+        CP + ' "$r/uv.lock" \'' + synced + "'; exit " + (opts.syncExit || 0) + "; fi\n" +
         // a `uv run ... pytest` baseline passes; any coverage call other than the two served prefixes fails
         'case "$*" in "run --frozen --offline --no-sync coverage "*) shift 5 ;; "run --frozen coverage "*) shift 3 ;; *coverage*) exit 1 ;; "run "*pytest*) exit 0 ;; *) exit 1 ;; esac\n' +
         'case "$1" in\n' +
@@ -134,7 +157,7 @@ function fixture(opts = {}) {
   if (existsSync(envlog)) rmSync(envlog);
   const uvEnv = opts.noUvEnv ? {} : { UV_CACHE_DIR: join(d, "scratch", "uv-cache", "n1", "gate"), UV_PROJECT_ENVIRONMENT: join(d, "scratch", "build", "n1", "gates-r1", "uv-venv") };
   const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify(Object.assign({ TZ: "UTC" }, uvEnv, plantEnv, opts.env || {})), JSON.stringify(["tests/test_mod.py"]), tier];
-  const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: Object.assign({ PATH: bin }, bwrapOk(bin)) });
+  const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: Object.assign({ PATH: agentPlant ? agentPlant + ":" + bin : bin }, opts.wsRoot ? { TMPDIR: tmpd } : {}, bwrapOk(bin)) });
   const res = {
     r,
     census,
@@ -338,7 +361,7 @@ test("8.9.7 #110 review F1: a failed or impossible prefill gives not_run before 
   const a = fixture({ syncExit: 1 });
   assert.equal(a.r.status, 0, a.r.stderr);
   assert.equal(a.out.status, "not_run");
-  assert.match(a.out.reason, /^uv cache prefill failed: uv sync --frozen --no-install-project --no-build exit 1/);
+  assert.match(a.out.reason, /^uv cache prefill failed: uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose exit 1/);
   assert.equal(a.calls.length, 1);
   assert.match(a.calls[0], SYNC_RE);
   // no gate uv env to fill
@@ -354,11 +377,11 @@ test("8.9.7 #110 review F1: a failed or impossible prefill gives not_run before 
   assert.deepEqual(c.calls, []);
 });
 
-test("8.9.7 #110 review F3: a red uv coverage run after a green host baseline gives not_run, not an error", { skip: !HAVE_PY }, () => {
+test("8.9.7 #110 review F3: a red uv coverage run after a green plain baseline gives not_run, not an error", { skip: !HAVE_PY }, () => {
   const x = fixture({ runExit: 1 });
   assert.equal(x.r.status, 0, x.r.stderr);
   assert.equal(x.out.status, "not_run", JSON.stringify(x.out));
-  assert.match(x.out.reason, /^uv coverage run exit 1 with a green host baseline: the judged uv\.lock needs packages the base lock does not provide, or the uv venv does not match/);
+  assert.match(x.out.reason, /^uv coverage run exit 1 with a green plain baseline: the judged uv\.lock needs packages the base lock does not provide, or the uv venv does not match/);
 });
 
 // ---------------------------------------------------------------- F1 with real uv in the real sandbox
@@ -449,4 +472,105 @@ test("8.9.7 #110 review (host prefill): stray UV_*, VIRTUAL_ENV and PYTHON* vars
   const x = fixture({ env: { UV_INDEX_URL: "https://evil.example/simple", VIRTUAL_ENV: "/evil/venv", PYTHONPATH: "/evil", UV_PYTHON: "/evil/python" }, baseFiles: { ".python-version": "3.12\n", "uv.toml": "x = 1\n" } });
   assert.equal(x.out.status, "ran", x.out.reason);
   assert.deepEqual(x.syncenv, ["UV_INDEX_URL= VIRTUAL_ENV= PYTHONPATH= UV_PYTHON=" + PY + " UV_PYTHON_DOWNLOADS=never UV_NO_CONFIG=1", "proj: pyproject.toml uv.lock"]);
+});
+
+test("8.9.7 #110 review (host prefill, L4): a uv planted in a scratch-dir PATH entry never runs on the host", { skip: !HAVE_PY }, () => {
+  // on the env_in PATH and first on this program's own PATH: clean_path drops it from the prefill's PATH
+  const a = fixture({ plant: "scratch" });
+  assert.equal(a.r.status, 0, a.r.stderr);
+  assert.match(a.calls[0], SYNC_RE, a.calls.join("\n"));
+  assert.ok(!a.calls.some((c) => c.startsWith("PLANTED sync")), a.calls.join("\n"));
+  // no clean uv: not_run, and the planted one did not run at all
+  const b = fixture({ plant: "scratch", uv: false, tier: UV_TIER });
+  assert.equal(b.r.status, 0, b.r.stderr);
+  assert.equal(b.out.status, "not_run");
+  assert.equal(b.out.reason, "no coverage tool: uv is not on PATH");
+  assert.deepEqual(b.calls, []);
+});
+
+// ---------------------------------------------------------------- review of 9e23242 (M1): uv's workspace walk-up
+
+const HIJACK_RE = /^uv cache prefill refused: uv used the workspace root (\S+), not the plan base project \(an ancestor pyproject\.toml\)$/;
+
+test("8.9.7 #110 review M1: an ancestor workspace root above the prefill's work dir gives not_run, never a venv from its lock", { skip: !HAVE_PY }, () => {
+  const x = fixture({ wsRoot: true });
+  assert.equal(x.r.status, 0, x.r.stderr);
+  assert.equal(x.synced, PLANTED_LOCK, "the stub models uv: the ancestor root's lock was the one read");
+  assert.equal(x.out.status, "not_run", JSON.stringify(x.out));
+  const m = HIJACK_RE.exec(x.out.reason);
+  assert.ok(m, x.out.reason);
+  assert.ok(m[1].endsWith("/t"), m[1]);
+  assert.equal(x.calls.length, 1, "no test run after the refused prefill: " + x.calls.join("\n"));
+  assert.match(x.calls[0], SYNC_RE);
+});
+
+test("8.9.7 #110 review M1: a base that is its own workspace root still runs; a sync that logs no workspace line is not_run", { skip: !HAVE_PY }, () => {
+  const a = fixture({ baseFiles: { "pyproject.toml": PYPROJECT + "\n[tool.uv.workspace]\nmembers = []\n" } });
+  assert.equal(a.out.status, "ran", a.out.reason);
+  assert.equal(a.synced, LOCK);
+  const b = fixture({ syncLog: false });
+  assert.equal(b.out.status, "not_run");
+  assert.equal(b.out.reason, "uv cache prefill refused: uv --verbose did not log that it used the plan base project as its root");
+  assert.equal(b.calls.length, 1);
+});
+
+const NO_UV = !HAVE_PY ? "no python3" : !UV ? "uv is not on PATH: the real-uv workspace test skips" : false;
+
+test("8.9.7 #110 review M1 (real uv): a planted virtual workspace root above TMPDIR is refused; the clean run passes the prefill", { skip: NO_UV, timeout: 300000 }, () => {
+  // no PyPI, bwrap or pytest needed: the base project has no dependencies, so the sync installs nothing
+  const d = spawnSync("realpath", [mkdtempSync(join(tmpdir(), "fleet-uvw-"))], { encoding: "utf8" }).stdout.trim();
+  try {
+    const ver = spawnSync(PY, ["-I", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"], { encoding: "utf8" }).stdout.trim();
+    const proj = '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=' + ver + '"\ndependencies = []\n';
+    const uvEnv = { PATH: process.env.PATH, HOME: d, UV_CACHE_DIR: join(d, "lock-cache"), UV_NO_CONFIG: "1", UV_PYTHON_DOWNLOADS: "never", UV_PYTHON: PY };
+    const wt = join(d, "main");
+    mkdirSync(join(wt, "pkg"), { recursive: true });
+    writeFileSync(join(wt, "pyproject.toml"), proj);
+    writeFileSync(join(wt, "pkg", "mod.py"), BASE_MOD);
+    const lk = spawnSync(UV, ["lock", "--offline"], { cwd: wt, encoding: "utf8", env: uvEnv });
+    assert.equal(lk.status, 0, lk.stderr);
+    g(wt, "init", "-q", "-b", "master");
+    g(wt, "add", "-A");
+    g(wt, "commit", "-qm", "base");
+    const base = g(wt, "rev-parse", "HEAD");
+    // the judged tree: the PyPI-pinned lock the accident guard wants (the prefill never reads it)
+    writeFileSync(join(wt, "pkg", "mod.py"), NEW_MOD);
+    writeFileSync(join(wt, "uv.lock"), LOCK);
+    const idx = join(d, "idx");
+    const ie = { PATH: process.env.PATH, GIT_INDEX_FILE: idx };
+    spawnSync(GIT, ["read-tree", "HEAD"], { cwd: wt, env: ie });
+    spawnSync(GIT, ["add", "-A"], { cwd: wt, env: ie });
+    const tree = spawnSync(GIT, ["write-tree"], { cwd: wt, env: ie, encoding: "utf8" }).stdout.trim();
+    rmSync(idx, { force: true });
+    // a virtual workspace root whose members glob matches <TMPDIR>/tmp*/base-project, locked by real uv
+    const root = join(d, "t");
+    mkdirSync(join(root, "seed", "base-project"), { recursive: true });
+    writeFileSync(join(root, "pyproject.toml"), '[tool.uv.workspace]\nmembers = ["*/base-project"]\n');
+    writeFileSync(join(root, "seed", "base-project", "pyproject.toml"), proj);
+    const rl = spawnSync(UV, ["lock", "--offline"], { cwd: root, encoding: "utf8", env: uvEnv });
+    assert.equal(rl.status, 0, rl.stderr);
+    rmSync(join(root, "seed"), { recursive: true, force: true });
+    const home = join(d, "home");
+    mkdirSync(home);
+    const go = (tmpd, tag) => {
+      const env = { TZ: "UTC", UV_CACHE_DIR: join(d, "scratch", "uv-cache-" + tag), UV_PROJECT_ENVIRONMENT: join(d, "scratch", "venv-" + tag) };
+      const args = [wt, base, tree, "pytest -q <paths>", JSON.stringify(env), JSON.stringify([]), UV_TIER];
+      const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, TMPDIR: tmpd } });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const bad = go(root, "bad");
+    console.log("REAL-UV M1 HIJACK " + JSON.stringify({ status: bad.status, reason: bad.reason }));
+    assert.equal(bad.status, "not_run");
+    assert.equal(bad.reason, "uv cache prefill refused: uv used the workspace root " + root + ", not the plan base project (an ancestor pyproject.toml)");
+    const clean = join(d, "clean");
+    mkdirSync(clean);
+    const ok = go(clean, "ok");
+    console.log("REAL-UV M1 CLEAN " + JSON.stringify({ status: ok.status, reason: ok.reason }));
+    // past the prefill: whatever the sandbox step gives here (no bwrap, no coverage in an empty venv), never a prefill reason
+    assert.ok(!/^uv cache prefill/.test(ok.reason || ""), ok.reason);
+    assert.ok(existsSync(join(d, "scratch", "venv-ok", "pyvenv.cfg")), "the clean prefill made the venv");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
 });

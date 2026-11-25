@@ -28,20 +28,30 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
   fresh per run and the sandbox has no network, so a uv coverage run with an empty cache could
   never start. On the new uv path `cover_diff.py` now fills the gate's `UV_CACHE_DIR` and
   `UV_PROJECT_ENVIRONMENT` first, outside the sandbox, from the plan base's pyproject.toml and
-  uv.lock only (git objects copied to the program's own work dir, never the judged tree): the
-  command `uv sync --frozen --no-install-project --no-build --project <that dir>`, at most 300 s. Only wheels are
-  installed and no tree code runs. A failed prefill gives not_run ("uv cache prefill failed: ..."
-  or "uv cache prefill not run: ...").
+  uv.lock (git objects copied to the program's own work dir, never the judged tree): the command
+  `uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose --project <that dir>`,
+  at most 300 s. Only wheels are installed and no tree code runs. Every extra and
+  dependency group is synced, so a coverage or pytest in a `test` extra or group is in the venv
+  too. A failed prefill gives not_run ("uv cache prefill failed: ..." or "uv cache prefill not
+  run: ...").
+- Review of 9e23242 (M1): uv walks up from the work dir, and an ancestor pyproject.toml with a
+  `[tool.uv.workspace]` that matches it (for example a `/tmp/pyproject.toml` from another user)
+  becomes the workspace root; `--frozen` then reads that root's uv.lock, not the base's. uv sync
+  has no `--no-workspace` and `UV_NO_CONFIG` does not stop the walk. The prefill now counts only
+  when uv's `--verbose` log shows that the base project was its own root ("No workspace root
+  found, using project root", or "Found workspace root:" naming the project dir itself); any other
+  root, or no such line, gives not_run "uv cache prefill refused: ...". `RUST_LOG` is dropped from
+  the prefill env, so it cannot hide that line.
 - Security review of the prefill: the host-side uv comes only from the agent PATH with no entry
   inside the worktree or the scratch dir (`clean_path`), never from the plan env's PATH, so a uv
   planted there never runs on the host. The prefill env drops every `UV_*`, `VIRTUAL_ENV` and
-  `PYTHON*` variable but the two gate dirs (which must be outside the worktree and the copy), and
+  `PYTHON*` variable (and `RUST_LOG`) but the two gate dirs (which must be outside the worktree and the copy), and
   sets `UV_PYTHON` to the program's own interpreter, `UV_PYTHON_DOWNLOADS=never` and
   `UV_NO_CONFIG=1`.
 - Inside the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage`.
   uv run has no `--no-install-project`, and a sync inside the sandbox would not outlive its fresh
   overlay, so the judged lock is not installed. If the judged tree needs packages the base lock
-  does not provide, the coverage run goes red after a green host baseline, and the gate gives
+  does not provide, the coverage run goes red after a green plain baseline, and the gate gives
   not_run with that reason (F3: before, this was an error that stopped the build after two rounds).
 - F2: every uv run on the uv tier gets `UV_NO_CONFIG=1`, a `uv run` test_cmd's too.
 - The lock guard reads the blob size (`git cat-file -s`) before it reads the blob (16 MiB cap).
@@ -55,11 +65,14 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
   are accepted, as is a conftest that fakes the result (ADR-1152, ADR-1325, ADR-1365).
 - One accident guard: on the new uv path the judged uv.lock must still pin coverage from the PyPI
   registry; else not_run "uv tier refused: ..." (no uv.lock, over 16 MiB, not TOML, or coverage
-  not from PyPI). Every uv run on the uv tier gets `UV_NO_CONFIG=1`, so no uv.toml or user uv
+  not from PyPI). The guard reads the judged lock only and does not pick the coverage that runs:
+  that comes from the venv prefilled from the base lock. Every uv run on the uv tier gets `UV_NO_CONFIG=1`, so no uv.toml or user uv
   config is read.
 - The prefill needs network access for the gate agent's Bash call; without it the gate gives
   not_run "uv cache prefill failed: ...". A base project that needs a build (an sdist, a path or
-  workspace member) fails the `--no-build` prefill the same way.
+  workspace member) fails the `--no-build` prefill the same way, and so does a base whose extras
+  are declared to conflict (`--all-extras`). A uv whose `--verbose` log does not word the
+  workspace decision as uv 0.13 does gives not_run "uv cache prefill refused: ..." (fail closed).
 
 ## [8.9.6] - 2026-11-25
 
