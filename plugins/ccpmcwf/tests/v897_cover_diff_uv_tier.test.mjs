@@ -19,7 +19,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { HERE, HAVE_PY, ARGS, happy, run, call, spawnSync, passBwrap, bwrapOk, relayDigestOf, K } from "./harness.mjs";
@@ -33,6 +33,7 @@ const GIT = which("git");
 const CP = which("cp");
 const LS = which("ls");
 const GREP = which("grep");
+const MKDIR = which("mkdir");
 const UV_TIER = "uv run --frozen coverage";
 const UVH = "uv run --frozen --offline --no-sync coverage";
 const SYNC_RE = /^uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose --project \S+$/;
@@ -132,6 +133,8 @@ function fixture(opts = {}) {
         // M1: it models uv's walk-up: the nearest dir from the project up with a [tool.uv.workspace] pyproject.toml
         // is the root, and the lock it keeps is that root's; with --verbose it logs uv's workspace line on stderr
         'v=; case " $* " in *" --verbose "*) v=1 ;; esac; ' +
+        // L-A: as uv does, it fills the gate cache and venv before it is done
+        MKDIR + ' -p "$UV_CACHE_DIR" "$UV_PROJECT_ENVIRONMENT"; : > "$UV_CACHE_DIR/wheel"; : > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg"; ' +
         'while [ "$1" != "--project" ]; do shift; done; echo "proj:" $(' + LS + ' -A "$2") >> \'' + syncenv + "'; " +
         'p=$(cd "$2" && pwd -P); r=$p; while :; do ' + GREP + ' -q "^\\[tool\\.uv\\.workspace\\]" "$r/pyproject.toml" 2>/dev/null && break; ' +
         'if [ "$r" = / ]; then r=; break; fi; r=${r%/*}; [ -z "$r" ] && r=/; done; ' +
@@ -167,6 +170,8 @@ function fixture(opts = {}) {
     envs: existsSync(envlog) ? readFileSync(envlog, "utf8").trim().split("\n") : [],
     synced: existsSync(synced) ? readFileSync(synced, "utf8") : null,
     syncenv: existsSync(syncenv) ? readFileSync(syncenv, "utf8").trim().split("\n") : null,
+    // L-A: what the gate cache and venv hold after the run
+    left: opts.noUvEnv ? null : [uvEnv.UV_CACHE_DIR, uvEnv.UV_PROJECT_ENVIRONMENT].map((p) => (existsSync(p) ? readdirSync(p).length : -1)),
   };
   rmSync(d, { recursive: true, force: true });
   return res;
@@ -563,6 +568,9 @@ test("8.9.7 #110 review M1 (real uv): a planted virtual workspace root above TMP
     console.log("REAL-UV M1 HIJACK " + JSON.stringify({ status: bad.status, reason: bad.reason }));
     assert.equal(bad.status, "not_run");
     assert.equal(bad.reason, "uv cache prefill refused: uv used the workspace root " + root + ", not the plan base project (an ancestor pyproject.toml)");
+    // L-A: the refused prefill deleted the shared gate cache and the venv uv made
+    assert.ok(!existsSync(join(d, "scratch", "uv-cache-bad")), "the gate cache is gone");
+    assert.ok(!existsSync(join(d, "scratch", "venv-bad")), "the gate venv is gone");
     const clean = join(d, "clean");
     mkdirSync(clean);
     const ok = go(clean, "ok");
@@ -573,4 +581,20 @@ test("8.9.7 #110 review M1 (real uv): a planted virtual workspace root above TMP
   } finally {
     rmSync(d, { recursive: true, force: true });
   }
+});
+
+test("8.9.7 #110 review of c22baa9 (L-A): a refused or failed prefill deletes the shared gate cache and the venv; a good one keeps them", { skip: !HAVE_PY }, () => {
+  const a = fixture({ wsRoot: true });
+  assert.match(a.out.reason, HIJACK_RE);
+  assert.deepEqual(a.left, [-1, -1], "the hijacked root's wheels are not left in the gate cache or venv");
+  const b = fixture({ syncLog: false });
+  assert.equal(b.out.status, "not_run");
+  assert.deepEqual(b.left, [-1, -1]);
+  const c = fixture({ syncExit: 1 });
+  assert.match(c.out.reason, /^uv cache prefill failed: /);
+  assert.deepEqual(c.left, [-1, -1]);
+  // a good prefill: the cache and venv stay for the sandboxed run
+  const g = fixture();
+  assert.equal(g.out.status, "ran", g.out.reason);
+  assert.deepEqual(g.left, [1, 1]);
 });

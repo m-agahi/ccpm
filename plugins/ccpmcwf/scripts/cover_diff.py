@@ -73,7 +73,8 @@ except Exception:
 # UV_PYTHON_DOWNLOADS=never and UV_NO_CONFIG=1. Review of 9e23242 (M1): uv still walks up from the work dir, and an
 # ancestor pyproject.toml whose [tool.uv.workspace] matches it would be the workspace root, with that root's
 # uv.lock read in place of the base's. So the prefill counts only when uv's --verbose log shows the base project
-# was its own root (ws_refusal); else not_run. A failed prefill: not_run. Inside
+# was its own root (ws_refusal); else not_run. A failed prefill: not_run. Review of c22baa9 (L-A): a refused or
+# failed sync first deletes UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT (wipe), since other roles share that cache. Inside
 # the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage` (uv run has no
 # --no-install-project, and a sync inside would not outlive its fresh sandbox): the judged lock is not installed.
 # A failed probe there is not_run, and so is a red coverage run after a green plain baseline (the judged lock
@@ -305,14 +306,22 @@ def prefill(env):
     try:
         r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=pe, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
     except subprocess.TimeoutExpired:
-        return 'uv cache prefill failed: uv sync timed out after %d s' % t
+        return wipe(env, 'uv cache prefill failed: uv sync timed out after %d s' % t)
     except OSError as e:
-        return 'uv cache prefill failed: ' + str(e)
+        return wipe(env, 'uv cache prefill failed: ' + str(e))
     log = (r.stdout + r.stderr).decode('utf-8', 'replace')
     if r.returncode != 0:
         tail = '\n'.join(x for x in log.splitlines() if not re.match(r'\s*(DEBUG|TRACE)\b', x))
-        return 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, tail[-300:])
-    return ws_refusal(r.stderr.decode('utf-8', 'replace'), proj)
+        return wipe(env, 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, tail[-300:]))
+    why = ws_refusal(r.stderr.decode('utf-8', 'replace'), proj)
+    return wipe(env, why) if why else None
+def wipe(env, why):
+    # review of c22baa9 (L-A): once uv sync has started, a refused or failed prefill deletes the gate cache and venv
+    # (both checked outside the worktree and the copy above): the other gate roles and the hook envs share that cache,
+    # and a hashless lock (a private index, find-links) would install wheels a hijacked root lock put there
+    for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT'):
+        shutil.rmtree(env[k], ignore_errors=True)
+    return why
 def ws_refusal(log, proj):
     # review of 9e23242 (M1): uv walks up from --project, and an ancestor pyproject.toml with a
     # [tool.uv.workspace] that matches the dir (/tmp is world-writable) becomes the workspace root, whose uv.lock

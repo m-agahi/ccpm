@@ -1971,6 +1971,12 @@ the script does not create it.
   `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows of `BUILD_ENV_ROWS` are not verified on the real tools.
 - One fleet run per worktree at a time (7.4.0, #18): a second run's build reset deletes the first
   run's build dirs. A drift retry empties only the retried role's own build dir.
+- The uv coverage prefill (8.9.7) syncs every extra and dependency group with `--no-build`. A
+  package with no wheel (sdist only) in any extra or group, docs or lint among them, gives the
+  coverage gate not_run, and so do extras or groups the base declares to conflict (uv: "Groups x
+  and y are incompatible with the conflicts"). A uv whose `--verbose` log words the workspace
+  decision differently from uv 0.13 gives not_run too (fail closed). A refused or failed prefill
+  deletes the gate uv cache and venv.
 
 ### Frozen set
 

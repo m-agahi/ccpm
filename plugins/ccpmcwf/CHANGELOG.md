@@ -42,6 +42,11 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
   found, using project root", or "Found workspace root:" naming the project dir itself); any other
   root, or no such line, gives not_run "uv cache prefill refused: ...". `RUST_LOG` is dropped from
   the prefill env, so it cannot hide that line.
+- Review of c22baa9 (L-A): once uv sync has started, a refused or failed prefill (a workspace
+  refusal, a non-zero exit, a timeout) deletes the gate's `UV_CACHE_DIR` and
+  `UV_PROJECT_ENVIRONMENT` before the not_run. The other gate roles and the hook envs share that
+  cache, and with a lock that has no hashes (a private index or find-links) a later sync would
+  install the wheels a hijacked root lock put there.
 - Security review of the prefill: the host-side uv comes only from the agent PATH with no entry
   inside the worktree or the scratch dir (`clean_path`), never from the plan env's PATH, so a uv
   planted there never runs on the host. The prefill env drops every `UV_*`, `VIRTUAL_ENV` and
@@ -70,8 +75,10 @@ uv when the gate census credits the uv tier, whatever the pytest shape of the te
   config is read.
 - The prefill needs network access for the gate agent's Bash call; without it the gate gives
   not_run "uv cache prefill failed: ...". A base project that needs a build (an sdist, a path or
-  workspace member) fails the `--no-build` prefill the same way, and so does a base whose extras
-  are declared to conflict (`--all-extras`). A uv whose `--verbose` log does not word the
+  workspace member) fails the `--no-build` prefill the same way. Because every extra and group is
+  synced, a package with no wheel (sdist only) in ANY extra or dependency group, docs or lint
+  among them, gives not_run too, and so does a base whose extras or groups are declared to
+  conflict (uv: "Groups x and y are incompatible with the conflicts"). A uv whose `--verbose` log does not word the
   workspace decision as uv 0.13 does gives not_run "uv cache prefill refused: ..." (fail closed).
 
 ## [8.9.6] - 2026-11-25
