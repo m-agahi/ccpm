@@ -17,6 +17,10 @@ as the `intake:rulings` re-read does since PR #105 review R1.
 - A general delegation still passes a delegated launch (unattended, confirm auto or default) and
   an unattended run still records the relaunch pass in `auto_decisions`.
 
+### Tests
+
+- Review of #122: a task-id input whose every ledger `tried` entry is `absent`, with a request relay, halts with relaunch and not with the no-ledger stop (pins the request check ahead of `noLedgerStop`).
+
 ## [8.9.5] - 2026-11-25
 
 ccpmcwf 8.9.5 (yaadgaar `#112` item 1): the caller check compares code hits only, with no doc or

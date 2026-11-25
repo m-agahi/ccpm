@@ -69,3 +69,18 @@ test("#109: a general delegation still passes an unattended launch and records o
     [{ gate: "relaunch", decision: "pass", reason: "general delegation: run the loop" }],
   );
 });
+
+test("#109 (review of #122): a task id with every ledger tried absent and a request relay halts with relaunch, ahead of the no-ledger stop", async () => {
+  const s = happy();
+  s.preflight = { ledger_tools: [] };
+  s.intake = {
+    status: "needs_human",
+    reason: "no task ledger available; give a URL, Jira key or text",
+    tried: [{ ledger: "yaadgaar", project: "o/r", call: "mcp__yaadgaar__read_task", error: "absent" }],
+    relay: { kind: "request", text: "fix the login page" },
+  };
+  const out = await runOne(s, { ...ARGS, input: "123", project: "o/r", confirm: "ask" });
+  assertRelaunch(out);
+  assert.equal(out.result.reason, "intake: relayed message is a request, not the build input: fix the login page" + TAIL);
+  assert.ok(!out.result.reason.includes("no task ledger available"), out.result.reason);
+});
