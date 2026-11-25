@@ -1745,8 +1745,18 @@ What is left (accepted residuals):
 - In-process tampering: the tests share the tracer's process and its data dir in the
   `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
-  install) runs too. The held-out and coverage verdicts stay in-process by design (ADR-1152,
-  ADR-1325): a sandbox limits what the tests touch, not what they report. Mutation has a placebo
+  install) runs too. On a plan-approved `uv run` test_cmd the judged tree's uv.lock and
+  pyproject.toml decide which coverage runs, and the coder writes both. On the uv coverage tier
+  (8.9.7) with a bare pytest or `python -m pytest` test_cmd, coverage comes from a venv that
+  cover_diff fills outside the sandbox from the plan base's pyproject.toml and lock (a `uv sync`
+  with `--frozen`, `--no-install-project`, `--no-build`, every extra and group: wheels only; uv
+  from the agent PATH with no worktree or scratch entry; no inherited uv, virtualenv or python env
+  var) and runs offline with `--no-sync`. uv walks up from that dir to find a workspace root, so
+  the prefill counts only when uv's `--verbose` log shows that the base project was its own root
+  (else not_run). The judged lock is checked only for an accident (it must still pin coverage from
+  PyPI); that check does not pick the coverage that runs. The
+  held-out and coverage verdicts stay in-process by design (ADR-1152, ADR-1325, ADR-1365): a
+  sandbox limits what the tests touch, not what they report. Mutation has a placebo
   control (above); a source that hashes its AST or `__code__` rather than its bytes still passes the
   placebo. The code judge's step 9 lists the tamper signatures as advisory findings (`os._exit`,
   the `coverage` API, `sys.settrace`, a module that hashes its own `__file__`, `atexit` exit codes).
@@ -1961,6 +1971,12 @@ the script does not create it.
   `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows of `BUILD_ENV_ROWS` are not verified on the real tools.
 - One fleet run per worktree at a time (7.4.0, #18): a second run's build reset deletes the first
   run's build dirs. A drift retry empties only the retried role's own build dir.
+- The uv coverage prefill (8.9.7) syncs every extra and dependency group with `--no-build`. A
+  package with no wheel (sdist only) in any extra or group, docs or lint among them, gives the
+  coverage gate not_run, and so do extras or groups the base declares to conflict (uv: "Groups x
+  and y are incompatible with the conflicts"). A uv whose `--verbose` log words the workspace
+  decision differently from uv 0.13 gives not_run too (fail closed). A refused or failed prefill
+  deletes the gate uv cache and venv.
 
 ### Frozen set
 

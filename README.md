@@ -157,7 +157,7 @@ cp ~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md ./tf-nam
 
 Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-level file takes precedence automatically.
 
-### ccpmcwf (v8.9.6)
+### ccpmcwf (v8.9.7)
 
 ccpm coding workflow (the plugin was named fleet before 8.0.0): a role fleet for one task, run as a Claude Code workflow.
 

@@ -1,5 +1,86 @@
 # Changelog
 
+## [8.9.7] - 2026-11-25
+
+ccpmcwf 8.9.7 (yaadgaar `#110`, Max's ruling: option a): the coverage gate runs coverage through
+uv when the gate census credits the uv tier, whatever the pytest shape of the test_cmd.
+
+### Fixed
+
+- The census (`gate_tools.py`) credits python coverage as `uv run --frozen coverage` when uv.lock
+  pins coverage from PyPI, but `cover_diff.py` used the `uv run` prefix only for a `uv run` pytest
+  test_cmd. A bare `pytest` or `python -m pytest` test_cmd with no host coverage gave not_run
+  ("coverage is not on PATH"), so a task that needs coverage passed intake and the gate never ran.
+  Now the workflow passes the digest-checked census python coverage row to `cover_diff.py` as a
+  7th arg (`""` with no usable census), and on exactly `uv run --frozen coverage` the gate builds
+  its coverage argv as `uv run --frozen coverage ...` for those shapes too.
+
+### Changed
+
+- With the uv tier, a bare `pytest` or `python -m pytest` test_cmd now runs coverage through uv
+  even when the host has coverage on PATH (the python -m pytest in-process launcher is not used
+  on the uv tier). The plain baseline still runs the test_cmd as given.
+- No uv on PATH on the uv tier: not_run "no coverage tool: uv is not on PATH". A lock that does not
+  install coverage still fails the `--version` probe (not_run).
+- A `uv run` test_cmd keeps its own flags (as 8.4.1); any other runner, and any other tier value,
+  keeps the old behaviour. `mutants.py` keeps its 6 args.
+- Review of #123 (F1, Max: prefill the cache from the base lock): the gate's `UV_CACHE_DIR` is
+  fresh per run and the sandbox has no network, so a uv coverage run with an empty cache could
+  never start. On the new uv path `cover_diff.py` now fills the gate's `UV_CACHE_DIR` and
+  `UV_PROJECT_ENVIRONMENT` first, outside the sandbox, from the plan base's pyproject.toml and
+  uv.lock (git objects copied to the program's own work dir, never the judged tree): the command
+  `uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose --project <that dir>`,
+  at most 300 s. Only wheels are installed and no tree code runs. Every extra and
+  dependency group is synced, so a coverage or pytest in a `test` extra or group is in the venv
+  too. A failed prefill gives not_run ("uv cache prefill failed: ..." or "uv cache prefill not
+  run: ...").
+- Review of 9e23242 (M1): uv walks up from the work dir, and an ancestor pyproject.toml with a
+  `[tool.uv.workspace]` that matches it (for example a `/tmp/pyproject.toml` from another user)
+  becomes the workspace root; `--frozen` then reads that root's uv.lock, not the base's. uv sync
+  has no `--no-workspace` and `UV_NO_CONFIG` does not stop the walk. The prefill now counts only
+  when uv's `--verbose` log shows that the base project was its own root ("No workspace root
+  found, using project root", or "Found workspace root:" naming the project dir itself); any other
+  root, or no such line, gives not_run "uv cache prefill refused: ...". `RUST_LOG` is dropped from
+  the prefill env, so it cannot hide that line.
+- Review of c22baa9 (L-A): once uv sync has started, a refused or failed prefill (a workspace
+  refusal, a non-zero exit, a timeout) deletes the gate's `UV_CACHE_DIR` and
+  `UV_PROJECT_ENVIRONMENT` before the not_run. The other gate roles and the hook envs share that
+  cache, and with a lock that has no hashes (a private index or find-links) a later sync would
+  install the wheels a hijacked root lock put there.
+- Security review of the prefill: the host-side uv comes only from the agent PATH with no entry
+  inside the worktree or the scratch dir (`clean_path`), never from the plan env's PATH, so a uv
+  planted there never runs on the host. The prefill env drops every `UV_*`, `VIRTUAL_ENV` and
+  `PYTHON*` variable (and `RUST_LOG`) but the two gate dirs (which must be outside the worktree and the copy), and
+  sets `UV_PYTHON` to the program's own interpreter, `UV_PYTHON_DOWNLOADS=never` and
+  `UV_NO_CONFIG=1`.
+- Inside the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage`.
+  uv run has no `--no-install-project`, and a sync inside the sandbox would not outlive its fresh
+  overlay, so the judged lock is not installed. If the judged tree needs packages the base lock
+  does not provide, the coverage run goes red after a green plain baseline, and the gate gives
+  not_run with that reason (F3: before, this was an error that stopped the build after two rounds).
+- F2: every uv run on the uv tier gets `UV_NO_CONFIG=1`, a `uv run` test_cmd's too.
+- The lock guard reads the blob size (`git cat-file -s`) before it reads the blob (16 MiB cap).
+
+### Known limits
+
+- The coverage gate resists an honest mistake, not a hostile coder (Max's ruling on #123: option
+  B). On a plan-approved `uv run` test_cmd, the judged tree's uv.lock and pyproject.toml decide
+  which coverage runs; the coder writes both. On the new uv path coverage comes from the venv
+  prefilled from the base lock, but the tests still run in the same process as coverage. Both
+  are accepted, as is a conftest that fakes the result (ADR-1152, ADR-1325, ADR-1365).
+- One accident guard: on the new uv path the judged uv.lock must still pin coverage from the PyPI
+  registry; else not_run "uv tier refused: ..." (no uv.lock, over 16 MiB, not TOML, or coverage
+  not from PyPI). The guard reads the judged lock only and does not pick the coverage that runs:
+  that comes from the venv prefilled from the base lock. Every uv run on the uv tier gets `UV_NO_CONFIG=1`, so no uv.toml or user uv
+  config is read.
+- The prefill needs network access for the gate agent's Bash call; without it the gate gives
+  not_run "uv cache prefill failed: ...". A base project that needs a build (an sdist, a path or
+  workspace member) fails the `--no-build` prefill the same way. Because every extra and group is
+  synced, a package with no wheel (sdist only) in ANY extra or dependency group, docs or lint
+  among them, gives not_run too, and so does a base whose extras or groups are declared to
+  conflict (uv: "Groups x and y are incompatible with the conflicts"). A uv whose `--verbose` log does not word the
+  workspace decision as uv 0.13 does gives not_run "uv cache prefill refused: ..." (fail closed).
+
 ## [8.9.6] - 2026-11-25
 
 ccpmcwf 8.9.6 (yaadgaar `#109`): plan-mode intake relaunches on a relayed request at any status,

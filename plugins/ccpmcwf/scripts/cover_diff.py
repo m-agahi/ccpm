@@ -52,9 +52,41 @@ except Exception:
 # fresh sandbox (the copy a fresh overlay each time); the coverage data dir is writable in the run step only,
 # the report dir in the json step only; the base re-run follows a reset of the test database. No sandbox (no
 # bwrap, a failed self-check, sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
+# 8.9.7 (#110, option a): an optional 7th arg <tier>, the python coverage row of the digest-checked gate census
+# (gate_tools.py) the workflow passes. When it is exactly UV_TIER, a bare pytest or a python -m pytest test_cmd runs
+# coverage as `uv run --frozen coverage` (no uv on PATH: not_run); a uv run test_cmd keeps its own flags, and any
+# other tier value, or none, keeps the shapes below.
+# Review of #123 (Max: option B, an honest-coder gate): uv resolves coverage from the judged tree's uv.lock and
+# pyproject, which the coder writes; like conftest tampering this is an accepted residual (ADR-1152, ADR-1325,
+# ADR-1365). One accident guard: the judged uv.lock must still pin coverage from PyPI (else not_run "uv tier
+# refused: ..."). It checks the judged lock only: on the new uv path the coverage that runs comes from the base
+# lock (below), so the guard does not pick it. Every uv run on the uv tier (a uv run test_cmd's too) gets
+# UV_NO_CONFIG=1.
+# Review of #123 (F1, Max: prefill the cache from the base lock): the gate's UV_CACHE_DIR is fresh per run and the
+# sandbox has no network, so on the new uv path this program first fills UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT
+# outside the sandbox from the plan BASE's pyproject.toml and uv.lock (git objects copied to its own work dir,
+# never the judged tree): `uv sync --frozen --no-install-project --no-build --all-extras --all-groups --verbose
+# --project <that dir>`, argv only, at most 300 s (wheels only; no tree code runs; every extra and group, so a
+# coverage or pytest in a test extra or group is there too). Security review of 2ea5feb: that uv comes from the
+# agent PATH with no worktree or scratch entry (clean_path), and its env drops every UV_*, VIRTUAL_ENV, PYTHON* and
+# RUST_LOG var but the two gate dirs (outside the worktree and the copy), with UV_PYTHON=this interpreter,
+# UV_PYTHON_DOWNLOADS=never and UV_NO_CONFIG=1. Review of 9e23242 (M1): uv still walks up from the work dir, and an
+# ancestor pyproject.toml whose [tool.uv.workspace] matches it would be the workspace root, with that root's
+# uv.lock read in place of the base's. So the prefill counts only when uv's --verbose log shows the base project
+# was its own root (ws_refusal); else not_run. A failed prefill: not_run. Review of c22baa9 (L-A): a refused or
+# failed sync first deletes UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT (wipe), since other roles share that cache. Inside
+# the sandbox coverage runs in that venv as `uv run --frozen --offline --no-sync coverage` (uv run has no
+# --no-install-project, and a sync inside would not outlive its fresh sandbox): the judged lock is not installed.
+# A failed probe there is not_run, and so is a red coverage run after a green plain baseline (the judged lock
+# needs packages the base lock does not provide, or the venv and the host test env differ), never an error.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
 SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
+UV_TIER = 'uv run --frozen coverage'
+UV_HEAD = ['uv', 'run', '--frozen', '--offline', '--no-sync', 'coverage']
+UV_SYNC = ['sync', '--frozen', '--no-install-project', '--no-build', '--all-extras', '--all-groups', '--verbose']
+BLOB_CAP = 16777216
+PYPI = {'registry': 'https://pypi.org/simple'}
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 # the python -m pytest shape's coverage launcher: coverage from the interpreter (-I: no cwd) or a PYTHONPATH dir
 # outside the copy, then the PYTHONPATH dirs in the copy for the tests
@@ -159,9 +191,10 @@ def run(argv, cwd, env, log, rw=(), ro=()):
     with open(log, 'rb') as fh:
         return r['exit'], fh.read()[-2000:].decode('utf-8', 'replace')
 a = sys.argv[1:]
-if len(a) != 6:
-    sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json>')
+if len(a) not in (6, 7):
+    sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json> [<tier>]')
 wt, base, tree, cmd = a[0], a[1], a[2], a[3]
+uv_tier = len(a) == 7 and a[6] == UV_TIER
 try:
     env_in, exclude = json.loads(a[4]), json.loads(a[5])
 except ValueError:
@@ -181,7 +214,10 @@ if argv[:2] == ['uv', 'run']:
     while i < len(argv) and (argv[i] in ('--frozen', '--no-sync') or (argv[i] == '--extra' and i + 1 < len(argv))):
         i += 2 if argv[i] == '--extra' else 1
 if argv[i:i + 1] == ['pytest']:
-    head = argv[:i] + ['coverage']
+    head = argv[:i] + ['coverage'] if i or not uv_tier else list(UV_HEAD)
+    shown = ' '.join(head)
+elif uv_tier and argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
+    head, i = list(UV_HEAD), 2
     shown = ' '.join(head)
 elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
     # car F (A-M3): never python -m coverage (the copy is first on sys.path, so a tree-local coverage
@@ -196,6 +232,8 @@ if any(os.path.basename(x) in REFUSED for x in argv):
 # this program's PATH with no entry inside the worktree or the scratch dir; a guard dir before both
 scratch = os.path.join(os.path.realpath(os.path.dirname(os.path.realpath(wt))), 'scratch')
 path = clean_path((wt, scratch))
+# the host prefill's PATH: the agent PATH with no entry inside the worktree or the scratch dir (never an env PATH)
+host_path = path
 if 'PATH' in env_in:
     ents = [e for e in env_in.pop('PATH').split(':') if e]
     if not all(os.path.isabs(e) for e in ents) or any(os.path.lexists(os.path.join(e, n)) for e in ents for n in REFUSED):
@@ -205,6 +243,111 @@ if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in RE
     sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
 if head[0] == 'coverage' and not shutil.which('coverage', path=path):
     emit('not_run', 'no coverage tool: coverage is not on PATH')
+uv_route = uv_tier and head[0] == 'uv' and argv[:2] != ['uv', 'run']
+if uv_route and not shutil.which('uv', path=path):
+    emit('not_run', 'no coverage tool: uv is not on PATH')
+def blob(rev, n):
+    # a git object's bytes; None when absent, False when over BLOB_CAP (the size is read first)
+    z = subprocess.run(G + ['-C', wt, 'cat-file', '-s', rev + ':' + n], capture_output=True, stdin=subprocess.DEVNULL)
+    if z.returncode != 0 or not z.stdout.strip().isdigit():
+        return None
+    if int(z.stdout) > BLOB_CAP:
+        return False
+    r = subprocess.run(G + ['-C', wt, 'cat-file', 'blob', rev + ':' + n], capture_output=True, stdin=subprocess.DEVNULL)
+    return r.stdout if r.returncode == 0 else None
+def uv_refusal():
+    # an accident guard, not a hostile-coder check: the judged uv.lock (its git object) still pins coverage from PyPI
+    b = blob(tree, 'uv.lock')
+    if b is None:
+        return 'the judged tree has no uv.lock'
+    if b is False:
+        return 'the judged uv.lock is over 16 MiB'
+    try:
+        import tomllib
+        t = tomllib.loads(b.decode('utf-8'))
+    except Exception:
+        return 'the judged uv.lock is not TOML'
+    pk = t.get('package') if isinstance(t, dict) else None
+    ct = [e for e in pk if isinstance(e, dict) and e.get('name') == 'coverage'] if isinstance(pk, list) else []
+    if not ct or not all(e.get('source') == PYPI for e in ct):
+        return 'the judged uv.lock does not pin coverage from PyPI'
+    return None
+def under(p, d):
+    p, d = os.path.realpath(p), os.path.realpath(d)
+    return p == d or p.startswith(d.rstrip('/') + '/')
+def prefill(env):
+    # F1: the gate's uv cache and venv from the plan base's files, outside the sandbox; None, or the not_run reason
+    if not all(os.path.isabs(env.get(k) or '') for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT')):
+        return 'uv cache prefill not run: the gate env has no absolute UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT'
+    # both outside the worktree and the copy (the coder writes those)
+    if any(under(env[k], d) for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT') for d in (wt, tmp)):
+        return 'uv cache prefill not run: UV_CACHE_DIR or UV_PROJECT_ENVIRONMENT is inside the worktree or the copy'
+    # the project: the base's pyproject.toml and uv.lock only, in this program's own work dir (0700, outside scratch)
+    proj = os.path.join(work, 'base-project')
+    os.mkdir(proj)
+    for n in ('pyproject.toml', 'uv.lock'):
+        b = blob(base, n)
+        if b is False:
+            return 'uv cache prefill not run: the plan base ' + n + ' is over 16 MiB'
+        if b is None:
+            return 'uv cache prefill not run: the plan base has no ' + n
+        with open(os.path.join(proj, n), 'wb') as fh:
+            fh.write(b)
+    # uv from the trusted PATH only (a uv planted in a worktree or scratch dir never runs on the host)
+    uvb = shutil.which('uv', path=host_path)
+    if not uvb:
+        return 'no coverage tool: uv is not on PATH'
+    # the agent env, no UV_*, VIRTUAL_ENV or PYTHON* of its own or of the plan env: only the two gate dirs, this
+    # program's interpreter, no downloads, no config
+    # (and no RUST_LOG, which would override --verbose and hide the workspace line the check below reads)
+    pe = {k: v for k, v in os.environ.items() if not (k.startswith('UV_') or k.startswith('PYTHON') or k in ('VIRTUAL_ENV', 'RUST_LOG'))}
+    pe.update(PATH=host_path, UV_CACHE_DIR=env['UV_CACHE_DIR'], UV_PROJECT_ENVIRONMENT=env['UV_PROJECT_ENVIRONMENT'], UV_PYTHON=sys.executable, UV_PYTHON_DOWNLOADS='never', UV_NO_CONFIG='1', NO_COLOR='1')
+    t = max(1, min(300, left() - 60))
+    try:
+        r = subprocess.run([uvb] + UV_SYNC + ['--project', proj], cwd=proj, env=pe, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=t)
+    except subprocess.TimeoutExpired:
+        return wipe(env, 'uv cache prefill failed: uv sync timed out after %d s' % t)
+    except OSError as e:
+        return wipe(env, 'uv cache prefill failed: ' + str(e))
+    log = (r.stdout + r.stderr).decode('utf-8', 'replace')
+    if r.returncode != 0:
+        tail = '\n'.join(x for x in log.splitlines() if not re.match(r'\s*(DEBUG|TRACE)\b', x))
+        return wipe(env, 'uv cache prefill failed: uv %s exit %d: %s' % (' '.join(UV_SYNC), r.returncode, tail[-300:]))
+    why = ws_refusal(r.stderr.decode('utf-8', 'replace'), proj)
+    return wipe(env, why) if why else None
+def wipe(env, why):
+    # review of c22baa9 (L-A): once uv sync has started, a refused or failed prefill deletes the gate cache and venv
+    # (both checked outside the worktree and the copy above): the other gate roles and the hook envs share that cache,
+    # and a hashless lock (a private index, find-links) would install wheels a hijacked root lock put there
+    for k in ('UV_CACHE_DIR', 'UV_PROJECT_ENVIRONMENT'):
+        shutil.rmtree(env[k], ignore_errors=True)
+    return why
+def ws_refusal(log, proj):
+    # review of 9e23242 (M1): uv walks up from --project, and an ancestor pyproject.toml with a
+    # [tool.uv.workspace] that matches the dir (/tmp is world-writable) becomes the workspace root, whose uv.lock
+    # --frozen then reads. uv sync has no --no-workspace, so the prefill counts only when uv's own --verbose log
+    # says it used the base project as its root: a "No workspace root found, using project root" line, or a
+    # "Found workspace root: <dir>" line naming the project dir itself (a base that is its own workspace root),
+    # and no root line naming any other dir. No such line (a uv that words it differently): not_run.
+    seen, other = False, []
+    for x in log.splitlines():
+        x = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', x).rstrip()
+        if re.search(r'(?:^|\s)No workspace root found, using project root$', x):
+            seen = True
+        m = re.search(r'(?:^|\s)Found workspace root: `?(.+?)`?$', x)
+        if m:
+            seen = True
+            if not os.path.isabs(m.group(1)) or os.path.realpath(m.group(1)) != os.path.realpath(proj):
+                other.append(m.group(1))
+    if other:
+        return 'uv cache prefill refused: uv used the workspace root ' + other[0] + ', not the plan base project (an ancestor pyproject.toml)'
+    if not seen:
+        return 'uv cache prefill refused: uv --verbose did not log that it used the plan base project as its root'
+    return None
+if uv_route:
+    why = uv_refusal()
+    if why:
+        emit('not_run', 'uv tier refused: ' + why)
 # the added lines of the changed production .py files (added, modified, type-changed); other
 # changed source files are listed as not measured
 want, other = {}, []
@@ -256,10 +399,18 @@ try:
     for k in [k for k in env if k.startswith('COVERAGE_')]:
         del env[k]
     env['PATH'] = guard + ':' + path
+    if uv_tier and head[0] == 'uv':
+        env['UV_NO_CONFIG'] = '1'
     cov = ['--rcfile=' + rc, '--data-file=' + data]
+    if uv_route:
+        why = prefill(env)
+        if why:
+            emit('not_run', why)
     keep = dbsnap(env)
     try:
         code, tail = run(head + ['--version'], tmp, env, log)
+        if code != 0 and uv_route:
+            emit('not_run', 'no coverage tool in the venv prefilled from the base lock (' + shown + ' --version exit %d): %s' % (code, tail.strip()[-300:]))
         if code != 0:
             emit('not_run', 'no coverage tool: ' + shown + ' --version exit %d' % code)
         code, tail = run(argv, tmp, env, log)
@@ -280,6 +431,8 @@ try:
             emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
         code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log, [dirs[1]], [dirs[0]])
         if code != 0:
+            if uv_route:
+                emit('not_run', "uv coverage run exit %d with a green plain baseline: the judged uv.lock needs packages the base lock does not provide, or the uv venv does not match the host test_cmd's environment: %s" % (code, tail.strip()[-300:]))
             sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
         code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log, [dirs[2]], [dirs[0], dirs[1]])
         if code != 0:

@@ -140,10 +140,11 @@ const SCENARIOS = {
 // 8.9.0 (#108 step 6, the engine once-only guard): the parked program's typed keys gain marked, blocked and marker (the run-lock schemas); same call counts: the three plan/build pins move, probe unchanged. Checked: with those three PROGRAM_OUT keys dropped every pin is 8.9.0's earlier one
 // 8.9.3 (#117 d): + infra:state:ready (the run-state after ready, before the CI watch) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with the ready save dropped every pin is 8.9.2's
 // 8.9.5 (yaadgaar #112, review of #121): plan-audit's caller_check gains auto_unlisted (the doc and lock hit count per symbol checked by code hash; {} in these scenarios) and the plan-audit role sha moves (masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with auto_unlisted dropped from caller_check every pin is 8.9.4's
+// 8.9.7 (yaadgaar #110): the infra:gates:r<n> prompt passes cover_diff.py a 7th arg, the census python coverage tier ("unsupported" here; mutants keeps 6), and the cover_diff program pin moves; same call counts: the three plan/build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "b01f190f03e8ed4cd5e361b73e1e323cf60830fa748e802eea67e685c6dbcfa4" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "9398aca9fd80429fe486e0ab02203326b3c6617682638a7bb9820ba529b5b1b1" },
-  "short path (one test writer)": { calls: 89, sha256: "e12bd9568f5d7a921dc3d02b3d10d630ecf498650e9866f625767b6e73818560" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "2e217f809dbf8b1d0398d4ed07d5386e4546778161e97718a45e2a77acf40637" },
+  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "519307ccdcdcc1255bb403ecf48d7058faa4f5c7352cf5c15ad5afb8417342de" },
+  "short path (one test writer)": { calls: 89, sha256: "be9cbe37922fca43494e6041ddda37c0061b2f9ee09f9b87e19dbc181106f9ff" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 
