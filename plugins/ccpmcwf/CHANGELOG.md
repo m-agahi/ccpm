@@ -1,5 +1,65 @@
 # Changelog
 
+## [8.9.2] - 2026-11-24
+
+ccpmcwf 8.9.2 (yaadgaar `#116`, follow-ups of `#108` and `#115`; ADR-1409, ADR-1406, ADR-1411): the relaxed re-plan list is sealed in the plan ref, attended `auto_decisions` survive a resume, a resume at the review re-reads the PR head, and the engine re-run marker runs while the run lock is held. The dist grows from 479,110 B to 481,790 B (+2,680 B; cap 520,000 B, ADR-1353).
+
+### Added
+
+- The plan ref seals `relaxed` (top level, next to `held_out`): the items by which a re-plan
+  relaxed round 0, `[]` when it relaxed nothing. A ref sealed before 8.9.2 has no key.
+  `planRefProblem` refuses a `relaxed` that is not a list of non-empty strings.
+- The build-mode `:rerun` auto gates pass the sealed list to the intent judge, so each relaxed
+  item needs its approved, backed, fail-closed deviation again (ADR-1239). An attended
+  `confirm: "auto"` build of a ref with a sealed non-empty list stops before the intent judge
+  (`failed_check: intent`, "re-plan relaxed: ..."), as plan mode does. For that stop (plan or
+  build mode) `needs_max_section` says to build without confirm auto (the interactive Build
+  confirmation) or to run unattended (`--auto`); the re-run-with-confirm-auto advice would loop. The
+  list comes from the sealed ref only, never from `recover.args` or the launch args.
+- A resume at the review reads the PR on the forge first (`infra:pr-view:resume-review`,
+  `pr_state.py view`). A PR that is not open, a head that is not the run-state's `approved_sha`, or
+  a failed read stops with `needs_human` "resume at review refused: ..." (`stop_gate: resume`,
+  class safety), before the PR-body check or the review writes anything. A failed read says to
+  relaunch with the same `plan_ref`; a closed PR or a moved head says to check it, then re-plan. A
+  `pr_open` run-state with no PR number is a run-state mismatch (the check is never skipped).
+
+### Changed
+
+- `recover`: a relaxed plan built in the run (an unattended plan launch, or an in-run re-plan)
+  re-runs with `confirm: "auto"` when the built ref carries the same sealed list. A ref sealed
+  before 8.9.2 keeps `none` ("a relaxed re-plan whose plan ref was sealed before 8.9.2"); a sealed
+  list that differs from the run's gives `none` ("a re-plan changed the relaxed list").
+- The run-state holds `auto_decisions` in an attended run too (it held them only in an unattended
+  run), so a resume keeps the decisions of the stopped run. A run-state whose `auto_decisions`
+  is not a list of `{gate, decision, reason}` strings is a run-state mismatch. A run-state without
+  the key (before 8.9.2) resumes as before.
+- The engine re-run marker (`infra:run-lock:rerun`) runs in main's cleanup after the teardowns and
+  before the run lock release (it ran after the release). The held lock now serializes the
+  marker's read-then-replace, so two runs of one task cannot both pass it in the few seconds
+  between. A stop result's `agents` count includes the marker agent. The teardowns run inside the
+  same try, so the lock release runs whatever they throw. A Stop that escapes main's cleanup never
+  passed the marker, so its `rerun` becomes `none` ("the stop never passed the engine marker step").
+- README "Recover": the marker is not tamper-proof (a role with Bash can delete or backdate it and
+  win back one re-run); the "can only take a re-run away" wording is gone.
+
+### Not in this release (need Max's ruling)
+
+- (d) the duplicate stats block and CI write-back of a CI-timeout re-run: open, see yaadgaar
+  `#116`. (e) a run-state right after `adoptUpdate`: dropped by Max; a stop after update-branch
+  keeps `recover` `none`, and the D4 check is not relaxed.
+
+### Tests
+
+- `v892_batch_a`: the sealed list, the `:rerun` deviation check (pass, missing, not fail-closed),
+  the pre-8.9.2 ref (`none`), the attended stop, a malformed list; attended `auto_decisions` in
+  every run-state and across a resume, a malformed list; the PR-head read at a review resume (same
+  head, moved, failed read, closed PR) and none past the review; the README text.
+- `v890_recover`: the B1 tests re-run now; the marker runs before the lock release; the cleanup
+  halt tests inject into a teardown (the lock release runs after the result); a stop that escapes
+  the cleanup gets `none` and the lock is still released.
+- `v820_hardening`: a fake clock of 50 ms per call over 3,000 entries trips the 120 s wall-clock
+  backstop (`^socket walk over its wall-clock backstop`); red with the backstop removed.
+
 ## [8.9.1] - 2026-11-24
 
 ccpmcwf 8.9.1 (yaadgaar `#115`): a busy host no longer degrades the sandboxed gate runs (coverage, mutation, the scratch-copy runs) to `not_run`. The dist stays at 479,110 B (cap 520,000 B, ADR-1353).

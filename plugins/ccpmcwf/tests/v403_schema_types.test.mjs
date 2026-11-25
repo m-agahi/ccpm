@@ -796,8 +796,10 @@ const READS = {
     "c.ci_watch_minutes integer": PARSED_REF,
     "c.unattended boolean": PARSED_REF,
   },
+  // 8.9.2 (#118 review): the script flag of the attended relaxed refusal
+  autoFailResult: { "g.relaxedAsk boolean": PARSED_LOCAL },
   stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF, "s.ci_watch_minutes integer": PARSED_REF },
-  makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)" },
+  makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)", "f.relaxed array": "parsed: the plan run's own relaxed list (relaxedReasons, script-built)" },
   preflightRecordProblem: {
     "p object": PARSED_REF,
     "p array": PARSED_REF,
@@ -885,6 +887,9 @@ const READS = {
     "r.criteria array": PARSED_REF,
     "r.history object": PARSED_REF,
     "r.project string": PARSED_REF,
+    // 8.9.2 (#116 a): the sealed relaxed list
+    "r.relaxed array": PARSED_REF,
+    "x string": "parsed: an entry of the sealed ref's relaxed list (checked as an array first)",
   },
   // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
   buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
@@ -929,6 +934,15 @@ const READS = {
     "f string": "parsed: an entry of the run-state's aug_files (checked as an array first)",
     // 8.0.0 (G7 step 0): exactly one entry
     "af.length number-literal": "parsed: the run-state's aug_files (checked as an array first)",
+    // 8.9.2 (#116 a): the relaxed list of the sealed plan ref (planRefProblem checked its shape)
+    "loaded.relaxed array": PARSED_REF,
+    // 8.9.2 (#118 review): the resumed PR record (from the run-state) a review resume needs
+    "pr.pr_url string": "parsed: JSON.parse of the run-state message (digest-checked read_state), pr_url",
+    // 8.9.2 (#116 b): the run-state's auto_decisions
+    "ad array": "parsed: JSON.parse of the run-state message (digest-checked read_state), auto_decisions",
+    "d object": "parsed: an entry of the run-state's auto_decisions (checked as an array first)",
+    "d array": "parsed: an entry of the run-state's auto_decisions (checked as an array first)",
+    "d[k] string": "parsed: a field of an auto_decisions entry of the run-state",
     // 6.0.1 (ledger 2050)
     "c.parents array": "prog:verify_since:commits_since[].parents",
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",
@@ -1310,7 +1324,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.1\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.2\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

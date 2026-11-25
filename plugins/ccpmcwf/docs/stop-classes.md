@@ -1,4 +1,4 @@
-# Stop classes of build-engine.js (ccpmcwf 8.9.1)
+# Stop classes of build-engine.js (ccpmcwf 8.9.2)
 
 yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in
 script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or
@@ -32,7 +32,7 @@ Rules:
 - 8.8.0 changes no behaviour except the hook_surface text above: no stop becomes a repair. Step 6
   (8.9.0: `recover` on every stop result and the skill re-run) keys on this class only.
 
-Counts of the call sites (a two-class site counts in both): safety 311, judgment 29, transient 5, mechanical 0, per caller 2; 342 sites. The
+Counts of the call sites (a two-class site counts in both): safety 313, judgment 29, transient 5, mechanical 0, per caller 2; 344 sites. The
 three stops that return without `halt` are listed after the table.
 
 <!-- prettier-ignore -->
@@ -306,80 +306,82 @@ three stops that return without `halt` are listed after the table.
 | 266 | `buildFromRef` | stats | safety | label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the b | PR body block or unattended disclosure check |
 | 267 | `buildFromRef` | stats | safety | label + bad | PR body block or unattended disclosure check |
 | 268 | `buildFromRef` | resume | safety | "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSh | run-state or resume trust |
-| 269 | `buildFromRef` | shipFix.gate === review ? review : resume | safety | "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot st | a resumed run cannot start a coder round (run-state trust) |
-| 270 | `buildFromRef` | - | safety | "test writer short r" + n + " returned no result" | a write step returned no result; its attempt may have written |
-| 271 | `buildFromRef` | ownership | safety | "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ")  | a role touched a path it does not own (ownership rule) |
-| 272 | `buildFromRef` | ownership | safety | "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n  | a role touched a path it does not own (ownership rule) |
-| 273 | `buildFromRef` | - | safety | "test writer " + cid + " r" + n + " returned no result" | a write step returned no result; its attempt may have written |
-| 274 | `buildFromRef` | sg | safety | msg | per caller gate: ownership or hash (ownership rule) |
-| 275 | `buildFromRef` | sg | safety | msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " an | per caller gate: ownership or hash (ownership rule) |
-| 276 | `buildFromRef` | policy | safety | "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.no | policy file error |
-| 277 | `buildFromRef` | ownership | safety | "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round | a role touched a path it does not own (ownership rule) |
-| 278 | `buildFromRef` | ownership | safety | logPath(violationName(k)) + " in test round " + n | a role touched a path it does not own (ownership rule) |
-| 279 | `buildFromRef` | role | safety | "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must na | a test writer broke the augmentation contract (role contract) |
-| 280 | `buildFromRef` | rounds | judgment | "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + lis | the writers' tests still fail the policy's format hooks after the test rounds |
-| 281 | `buildFromRef` | ownership | safety | "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns" | a role touched a path it does not own (ownership rule) |
-| 282 | `buildFromRef` | - | safety | "test-judge returned no verdict" | relay contract: a required field is missing or malformed |
-| 283 | `buildFromRef` | - | safety | w | the test judge broke its routing contract after one scripted retry |
-| 284 | `buildFromRef` | rounds | judgment | "test rounds exhausted (" + maxTestRounds + ") without test-judge approval" | the test rounds are spent without test-judge approval |
-| 285 | `buildFromRef` | fingerprint | safety | "worktree changed between test approval and freeze" | the worktree changed under a step (fingerprint rule) |
-| 286 | `buildFromRef` | hash | safety | "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " | a hash, freeze or refs check (hash rule) |
-| 287 | `buildFromRef` | hash | safety | "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)" | a hash, freeze or refs check (hash rule) |
-| 288 | `buildFromRef` | hash | safety | "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded \|\| k.unavailable) ? keyNames | a hash, freeze or refs check (hash rule) |
-| 289 | `buildFromRef` | - | safety | "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_targe | a ref or head is not the expected one |
-| 290 | `buildFromRef` | updRound ? review : rounds | judgment | "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" + (updRound ? " in the code roun | the code rounds are spent without code-judge approval |
-| 291 | `buildFromRef` | - | safety | "agent " + rl + " returned no result" | a write step returned no result; its attempt may have written |
-| 292 | `buildFromRef` | ownership | safety | "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + ";  | a role touched a path it does not own (ownership rule) |
-| 293 | `buildFromRef` | hash | safety | "code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze t | a hash, freeze or refs check (hash rule) |
-| 294 | `buildFromRef` | coder.status !== ok && !coder.role_file ? role : contract | safety | "code round " + m + ": " + coderFile | the coder's result breaks its role contract |
-| 295 | `buildFromRef` | gates | judgment | "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its ne | the augmentation round's new tests fail on the approved tree |
-| 296 | `buildFromRef` | review | judgment | "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-p | the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge |
-| 297 | `buildFromRef` | - | safety | "code-judge returned no verdict" | relay contract: a required field is missing or malformed |
-| 298 | `buildFromRef` | updRound ? review : gates | judgment | "code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") +  | the code judge ruled surviving mutants target tests after the one round a run may take |
-| 299 | `buildFromRef` | gates | safety | "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file" | a gate result is missing or refused |
-| 300 | `buildFromRef` | commit | safety | "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed" | the commit or its tree is not the checked one |
-| 301 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree | the commit or its tree is not the checked one |
-| 302 | `buildFromRef` | - | safety | "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result \|\| null) + " and head " + | not clearly mechanical, judgment or transient (conservative default) |
-| 303 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree +  | the commit or its tree is not the checked one |
-| 304 | `buildFromRef` | commit | safety | "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the | the commit or its tree is not the checked one |
-| 305 | `reviewStep` | review | safety | "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")" | the review state does not match the pushed head, or a review role broke its contract |
-| 306 | `reviewStep` | - | safety | "infra:review-paths:v" + k + " returned no changed_paths" | relay contract: a required field is missing or malformed |
-| 307 | `reviewStep` | - | safety | "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or cha | relay digest or args mismatch: the copy may be altered |
-| 308 | `reviewStep` | review | safety | "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha | the review state does not match the pushed head, or a review role broke its contract |
-| 309 | `reviewStep` | review | safety | "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um. | the review state does not match the pushed head, or a review role broke its contract |
-| 310 | `replan` | - | safety | who + " verdict plan_wrong without a plan finding" | a judge broke its verdict contract |
-| 311 | `replan` | - | safety | "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit | a ref or head is not the expected one |
-| 312 | `replan` | - | safety | "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base | a ref or head is not the expected one |
-| 313 | `replan` | - | safety | "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead | a ref or head is not the expected one |
-| 314 | `dbDsn` | db | safety | "internal: no test database " + db + " in " + state.db.name | test database or DSN rule |
-| 315 | `dbDispatch` | db | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | test database or DSN rule |
-| 316 | `testDbStep` | db | safety | label + ": no test_db relay (the " + DB_DECL_FILE + " read)" | test database or DSN rule |
-| 317 | `testDbStep` | db | safety | label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments" | relay digest or args mismatch: the copy may be altered |
-| 318 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error | test database or DSN rule |
-| 319 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database" | test database or DSN rule |
-| 320 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp | test database or DSN rule |
-| 321 | `testDbStep` | db | safety | DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IM | test database or DSN rule |
-| 322 | `testDbStep` | db | safety | DB_DECL_FILE + " changed during the run" | test database or DSN rule |
-| 323 | `testDbStep` | db | safety | al + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 324 | `testDbStep` | db | safety | "internal: test database name " + JSON.stringify(name) + " refused" | test database or DSN rule |
-| 325 | `testDbStep` | db | safety | "infra:db-up" + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 326 | `testDbStep` | db | safety | "infra:db-up: the program did not return one user per database" | test database or DSN rule |
-| 327 | `testDbStep` | db | safety | "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name | test database or DSN rule |
-| 328 | `testDbStep` | db | safety | "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port) | test database or DSN rule |
-| 329 | `testDbStep` | db | safety | "infra:db-up: no self-expiry recorded" | test database or DSN rule |
-| 330 | `probeMode` | (stop) | safety | "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)" | an argument check (run-state, plan-ref or checkpoint trust) |
-| 331 | `probeMode` | contract | safety | "probe: the role-read agent (" + label + ") " + rp | a role, program or agent identity or contract mismatch |
-| 332 | `main` | (stop) | safety | "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode)  | an argument check (run-state, plan-ref or checkpoint trust) |
-| 333 | `main` | (stop) | safety | "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 334 | `main` | (stop) | safety | "args.unattended must be true or absent, got " + JSON.stringify(input.unattended) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 335 | `main` | (stop) | safety | "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 336 | `main` | (stop) | safety | "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 337 | `main` | (stop) | safety | "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 338 | `main` | (stop) | safety | "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)" | an argument check (run-state, plan-ref or checkpoint trust) |
-| 339 | `main` | (stop) | safety | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust) |
-| 340 | `main` | (stop) | safety | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust) |
-| 341 | `main` | (stop) | safety | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust) |
-| 342 | `main` | (stop) | safety | "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON | an argument check (run-state, plan-ref or checkpoint trust) |
+| 269 | `buildFromRef` | resume | safety | "run-state mismatch: pr_number at " + resume.last_gate + " (" + stateRef + ")" | run-state or resume trust |
+| 270 | `buildFromRef` | resume | safety | "resume at review refused: " + no | run-state or resume trust |
+| 271 | `buildFromRef` | shipFix.gate === review ? review : resume | safety | "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot st | a resumed run cannot start a coder round (run-state trust) |
+| 272 | `buildFromRef` | - | safety | "test writer short r" + n + " returned no result" | a write step returned no result; its attempt may have written |
+| 273 | `buildFromRef` | ownership | safety | "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ")  | a role touched a path it does not own (ownership rule) |
+| 274 | `buildFromRef` | ownership | safety | "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n  | a role touched a path it does not own (ownership rule) |
+| 275 | `buildFromRef` | - | safety | "test writer " + cid + " r" + n + " returned no result" | a write step returned no result; its attempt may have written |
+| 276 | `buildFromRef` | sg | safety | msg | per caller gate: ownership or hash (ownership rule) |
+| 277 | `buildFromRef` | sg | safety | msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " an | per caller gate: ownership or hash (ownership rule) |
+| 278 | `buildFromRef` | policy | safety | "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.no | policy file error |
+| 279 | `buildFromRef` | ownership | safety | "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round | a role touched a path it does not own (ownership rule) |
+| 280 | `buildFromRef` | ownership | safety | logPath(violationName(k)) + " in test round " + n | a role touched a path it does not own (ownership rule) |
+| 281 | `buildFromRef` | role | safety | "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must na | a test writer broke the augmentation contract (role contract) |
+| 282 | `buildFromRef` | rounds | judgment | "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + lis | the writers' tests still fail the policy's format hooks after the test rounds |
+| 283 | `buildFromRef` | ownership | safety | "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns" | a role touched a path it does not own (ownership rule) |
+| 284 | `buildFromRef` | - | safety | "test-judge returned no verdict" | relay contract: a required field is missing or malformed |
+| 285 | `buildFromRef` | - | safety | w | the test judge broke its routing contract after one scripted retry |
+| 286 | `buildFromRef` | rounds | judgment | "test rounds exhausted (" + maxTestRounds + ") without test-judge approval" | the test rounds are spent without test-judge approval |
+| 287 | `buildFromRef` | fingerprint | safety | "worktree changed between test approval and freeze" | the worktree changed under a step (fingerprint rule) |
+| 288 | `buildFromRef` | hash | safety | "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " | a hash, freeze or refs check (hash rule) |
+| 289 | `buildFromRef` | hash | safety | "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)" | a hash, freeze or refs check (hash rule) |
+| 290 | `buildFromRef` | hash | safety | "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded \|\| k.unavailable) ? keyNames | a hash, freeze or refs check (hash rule) |
+| 291 | `buildFromRef` | - | safety | "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_targe | a ref or head is not the expected one |
+| 292 | `buildFromRef` | updRound ? review : rounds | judgment | "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" + (updRound ? " in the code roun | the code rounds are spent without code-judge approval |
+| 293 | `buildFromRef` | - | safety | "agent " + rl + " returned no result" | a write step returned no result; its attempt may have written |
+| 294 | `buildFromRef` | ownership | safety | "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + ";  | a role touched a path it does not own (ownership rule) |
+| 295 | `buildFromRef` | hash | safety | "code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze t | a hash, freeze or refs check (hash rule) |
+| 296 | `buildFromRef` | coder.status !== ok && !coder.role_file ? role : contract | safety | "code round " + m + ": " + coderFile | the coder's result breaks its role contract |
+| 297 | `buildFromRef` | gates | judgment | "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its ne | the augmentation round's new tests fail on the approved tree |
+| 298 | `buildFromRef` | review | judgment | "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-p | the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge |
+| 299 | `buildFromRef` | - | safety | "code-judge returned no verdict" | relay contract: a required field is missing or malformed |
+| 300 | `buildFromRef` | updRound ? review : gates | judgment | "code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") +  | the code judge ruled surviving mutants target tests after the one round a run may take |
+| 301 | `buildFromRef` | gates | safety | "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file" | a gate result is missing or refused |
+| 302 | `buildFromRef` | commit | safety | "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed" | the commit or its tree is not the checked one |
+| 303 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree | the commit or its tree is not the checked one |
+| 304 | `buildFromRef` | - | safety | "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result \|\| null) + " and head " + | not clearly mechanical, judgment or transient (conservative default) |
+| 305 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree +  | the commit or its tree is not the checked one |
+| 306 | `buildFromRef` | commit | safety | "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the | the commit or its tree is not the checked one |
+| 307 | `reviewStep` | review | safety | "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")" | the review state does not match the pushed head, or a review role broke its contract |
+| 308 | `reviewStep` | - | safety | "infra:review-paths:v" + k + " returned no changed_paths" | relay contract: a required field is missing or malformed |
+| 309 | `reviewStep` | - | safety | "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or cha | relay digest or args mismatch: the copy may be altered |
+| 310 | `reviewStep` | review | safety | "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha | the review state does not match the pushed head, or a review role broke its contract |
+| 311 | `reviewStep` | review | safety | "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um. | the review state does not match the pushed head, or a review role broke its contract |
+| 312 | `replan` | - | safety | who + " verdict plan_wrong without a plan finding" | a judge broke its verdict contract |
+| 313 | `replan` | - | safety | "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit | a ref or head is not the expected one |
+| 314 | `replan` | - | safety | "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base | a ref or head is not the expected one |
+| 315 | `replan` | - | safety | "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead | a ref or head is not the expected one |
+| 316 | `dbDsn` | db | safety | "internal: no test database " + db + " in " + state.db.name | test database or DSN rule |
+| 317 | `dbDispatch` | db | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | test database or DSN rule |
+| 318 | `testDbStep` | db | safety | label + ": no test_db relay (the " + DB_DECL_FILE + " read)" | test database or DSN rule |
+| 319 | `testDbStep` | db | safety | label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments" | relay digest or args mismatch: the copy may be altered |
+| 320 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error | test database or DSN rule |
+| 321 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database" | test database or DSN rule |
+| 322 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp | test database or DSN rule |
+| 323 | `testDbStep` | db | safety | DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IM | test database or DSN rule |
+| 324 | `testDbStep` | db | safety | DB_DECL_FILE + " changed during the run" | test database or DSN rule |
+| 325 | `testDbStep` | db | safety | al + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 326 | `testDbStep` | db | safety | "internal: test database name " + JSON.stringify(name) + " refused" | test database or DSN rule |
+| 327 | `testDbStep` | db | safety | "infra:db-up" + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 328 | `testDbStep` | db | safety | "infra:db-up: the program did not return one user per database" | test database or DSN rule |
+| 329 | `testDbStep` | db | safety | "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name | test database or DSN rule |
+| 330 | `testDbStep` | db | safety | "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port) | test database or DSN rule |
+| 331 | `testDbStep` | db | safety | "infra:db-up: no self-expiry recorded" | test database or DSN rule |
+| 332 | `probeMode` | (stop) | safety | "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)" | an argument check (run-state, plan-ref or checkpoint trust) |
+| 333 | `probeMode` | contract | safety | "probe: the role-read agent (" + label + ") " + rp | a role, program or agent identity or contract mismatch |
+| 334 | `main` | (stop) | safety | "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode)  | an argument check (run-state, plan-ref or checkpoint trust) |
+| 335 | `main` | (stop) | safety | "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 336 | `main` | (stop) | safety | "args.unattended must be true or absent, got " + JSON.stringify(input.unattended) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 337 | `main` | (stop) | safety | "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 338 | `main` | (stop) | safety | "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 339 | `main` | (stop) | safety | "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 340 | `main` | (stop) | safety | "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)" | an argument check (run-state, plan-ref or checkpoint trust) |
+| 341 | `main` | (stop) | safety | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust) |
+| 342 | `main` | (stop) | safety | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust) |
+| 343 | `main` | (stop) | safety | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust) |
+| 344 | `main` | (stop) | safety | "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON | an argument check (run-state, plan-ref or checkpoint trust) |
 
 ## Stops that return without halt
 

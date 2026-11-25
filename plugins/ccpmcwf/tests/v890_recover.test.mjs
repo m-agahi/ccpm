@@ -303,9 +303,11 @@ test("8.9.0: a plan launch that built in the same run re-runs as a build with co
 
 test("8.9.0: a swallowed cleanup halt after a transient stop never relabels its gate; the most severe class wins", async () => {
   // the transient ruleset stop in plan; main's cleanup halts safety (another gate) and swallows it
+  // (8.9.2 #116 f0: the teardowns run before the result is made; the lock release runs after it)
   const s = happy();
   s["infra:ruleset-surface:plan"] = (p) => rsErr(p, "rules of o/r branch master not readable (HTTP None)");
-  const at = "async function lockRelease(){";
+  const at = "async function dbTeardown(){";
+  assert.equal(DIST.split(at).length, 2, "the dist holds " + at + " once");
   s.__source = DIST.replace(at, at + 'try{halt("s","failed","cleanup y","ci")}catch(e){}');
   assert.notEqual(s.__source, DIST);
   const out = await runOne(s, ARGS);
@@ -318,8 +320,8 @@ test("8.9.0: a swallowed cleanup halt after a transient stop never relabels its 
 
 test("8.9.0: a swallowed transient halt in main's cleanup never relabels a safety stop", async () => {
   const s = happy({ script: { "infra:fleet-scan:push": { status: "ok", reason: "scanned", diff: [".fleet/x"], commits: [] } } });
-  // fault injection: lockRelease halts transient (with another gate) and swallows it
-  const at = "async function lockRelease(){";
+  // fault injection: a teardown halts transient (with another gate) and swallows it
+  const at = "async function dbTeardown(){";
   assert.ok(DIST.includes(at), "the dist holds " + at);
   s.__source = DIST.replace(at, at + 'try{halt("t","failed","cleanup x","ci")}catch(e){}');
   assert.notEqual(s.__source, DIST);
@@ -328,6 +330,33 @@ test("8.9.0: a swallowed transient halt in main's cleanup never relabels a safet
   assert.equal(out.result.stop_gate, "scope", out.result.reason);
   assert.equal(out.result.stop_class, "safety");
   assert.deepEqual(out.result.recover, { class: "safety", action: "none" });
+});
+
+test("8.9.2 #116 (f0): the lock release runs after the result and the marker: a halt swallowed in it never changes the result", async () => {
+  const s = happy();
+  s["infra:branch-scan"] = [null, null];
+  const at = "async function lockRelease(){";
+  assert.equal(DIST.split(at).length, 2, "the dist holds " + at + " once");
+  s.__source = DIST.replace(at, at + 'try{halt("s","failed","cleanup z","ci")}catch(e){}');
+  assert.notEqual(s.__source, DIST);
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.equal(out.result.recover.action, "rerun");
+  assert.ok(out.labels.indexOf("infra:run-lock:rerun") < out.labels.indexOf("infra:run-lock:release"), out.labels.join(", "));
+});
+
+test("8.9.2 #116 (f0): a stop that escapes main's cleanup never passed the marker, so it never re-runs; the lock is still released", async () => {
+  const s = happy();
+  s["infra:branch-scan"] = [null, null];
+  const at = "async function dbTeardown(){";
+  assert.equal(DIST.split(at).length, 2, "the dist holds " + at + " once");
+  s.__source = DIST.replace(at, at + 'halt("t","failed","cleanup escaped","ci");');
+  assert.notEqual(s.__source, DIST);
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.stop_class, "transient", out.result.reason);
+  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: "the stop never passed the engine marker step" });
+  assert.ok(!has(out, "infra:run-lock:rerun"), out.labels.join(", "));
+  assert.equal(out.labels[out.labels.length - 1], "infra:run-lock:release", out.labels.join(", "));
 });
 
 test("8.9.0: a swallowed halt before the real stop does not count (only stops raised after it compete)", async () => {
@@ -395,12 +424,12 @@ test("8.9.0 review: a stop after update-branch moved the worktree, before its ru
   assert.match(out.result.recover.why, /after the run-state written_back/);
 });
 
-// review B1 of #116: the relaxed list is not sealed in the plan ref, and the build-mode :rerun gates pass none;
-// a relaxed plan built in the run therefore never re-runs (none), and recover.args never carries relaxed
+// review B1 of #116: in 8.9.0 the relaxed list was not sealed in the plan ref, so a relaxed plan built in the run never
+// re-ran. 8.9.2 (#116 a) seals it and the build-mode :rerun gates re-check it, so these re-run (a ref sealed before
+// 8.9.2 keeps none: v892_batch_a); recover.args never carries relaxed
 const RELAXED = "criterion AC2 dropped";
 const DEV = { item: RELAXED, allowed_by: "task body: 'AC2 is out of scope'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "the task drops it" };
-const B1_WHY = "a relaxed re-plan: build mode cannot re-check its deviations";
-test("8.9.0 review B1: an unattended plan launch with a relaxed plan that stops in the build answers none", async () => {
+test("8.9.0 review B1 (8.9.2: sealed): an unattended plan launch with a relaxed plan that stops in the build re-runs with confirm auto", async () => {
   const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
   s["role:fleet-intent-judge"] = Object.assign({}, s["role:fleet-intent-judge"], { deviations: [DEV] });
   s["role:fleet-code-judge:r1"] = [null];
@@ -414,11 +443,13 @@ test("8.9.0 review B1: an unattended plan launch with a relaxed plan that stops 
   assert.deepEqual(inputsOf(out.calls.find((c) => c.label === "role:fleet-intent-judge").prompt).relaxed, [RELAXED]);
   assert.ok(out.labels.includes("role:fleet-code-judge:r1"), out.labels.join(", "));
   assert.equal(out.result.stop_class, "transient", out.result.reason);
-  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
-  assert.ok(!has(out, "infra:run-lock:rerun"), "the B1 guard wins before the engine marker");
+  assert.equal(out.result.recover.action, "rerun", JSON.stringify(out.result.recover));
+  assert.equal(out.result.recover.args.confirm, "auto");
+  assert.ok(!("relaxed" in out.result.recover.args));
+  assert.ok(has(out, "infra:run-lock:rerun"), "the engine marker still bounds it");
 });
 
-test("8.9.0 review B1: an in-run re-plan with a relaxed list that stops in its build answers none", async () => {
+test("8.9.0 review B1 (8.9.2: sealed): an in-run re-plan with a relaxed list that stops in its build re-runs with confirm auto", async () => {
   const s = Object.assign(happy(), INTENT_OK, { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" } });
   const plan = await runOne(s, ARGS);
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
@@ -444,8 +475,10 @@ test("8.9.0 review B1: an in-run re-plan with a relaxed list that stops in its b
   const out = await runOne(s, bargs);
   assert.deepEqual(inputsOf(out.calls.find((c) => c.label === "role:fleet-intent-judge:replan").prompt).relaxed, [RELAXED]);
   assert.equal(out.result.stop_class, "transient", out.result.reason);
-  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: B1_WHY });
-  assert.ok(!has(out, "infra:run-lock:rerun"), "the B1 guard wins before the engine marker");
+  assert.equal(out.result.recover.action, "rerun", JSON.stringify(out.result.recover));
+  assert.equal(out.result.recover.args.confirm, "auto");
+  assert.ok(!("relaxed" in out.result.recover.args));
+  assert.ok(has(out, "infra:run-lock:rerun"), "the engine marker still bounds it");
 });
 
 test("8.9.0 review B1: recover.args never carries relaxed", () => {
@@ -496,7 +529,10 @@ test("8.9.0 marker: a re-run checks and sets the marker keyed by the task id, an
   const out = await runOne(transientRun(), ARGS);
   assert.equal(out.result.recover.action, "rerun", JSON.stringify(out.result.recover));
   assert.equal(out.labels.filter((l) => l === MARK).length, 1);
-  assert.equal(out.labels[out.labels.length - 1], MARK, "after main's finally (the lock release)");
+  // 8.9.2 #116 (f0): inside main's finally, after the teardowns and before the lock release, so the held run
+  // lock serializes the marker's read-then-replace
+  assert.equal(out.labels[out.labels.length - 1], "infra:run-lock:release", out.labels.join(", "));
+  assert.equal(out.labels[out.labels.length - 2], MARK, out.labels.join(", "));
   assert.match(out.calls.find((c) => c.label === MARK).prompt, /parked\.py' 'rerun' '\/r' 'y42' 'n1-0000001'/);
 });
 
@@ -544,7 +580,9 @@ test("8.9.0 marker: a stop before the run lock (no task id) gets none; the marke
   assert.equal(again.result.recover.action, "none");
   assert.ok(!has(again, MARK));
   assert.match(SOURCE, /async function rerunGuard\(out\) \{\n  const rc = out && out\.recover;\n  if \(!rc \|\| rc\.action !== "rerun"\) return out;/);
-  assert.match(SOURCE, /\nreturn await rerunGuard\(out\);\n?$/);
+  // 8.9.2 #116 (f0): the guard runs in main's finally, before lockRelease; the top level only finishes a Stop raised before main's try
+  assert.match(SOURCE, /out = await rerunGuard\(stopped \? finishStop\(stopped\) : out\);\n    \} finally \{\n      await lockRelease\(\);/);
+  assert.match(SOURCE, /\n  out = finishStop\(e\);\n  if \(out\.recover && out\.recover\.action === "rerun"\) out\.recover = \{ class: out\.recover\.class, action: "none", why: "the stop never passed the engine marker step" \};\n\}\nreturn out;\n?$/);
 });
 
 test("8.9.0 marker: a judgment stop asks; the marker step does not run", async () => {

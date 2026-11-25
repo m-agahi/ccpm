@@ -913,7 +913,9 @@ annotated tag object made with `git mktag` (no tag name, no hook, index untouche
 Its target is HEAD (the approved commit). Its message is JSON: `plan_commit`, `ref_sha256`,
 `seal`, `last_gate`, `approved_sha`, `code_tree`, `maps_digest` (sha256 of every hasher map at the
 approving code-judge run), PR number and URL, review, rounds, `suite_result`, `gates_not_run`,
-the intent result and, at the end, the write-back result. The milestones, in order:
+the intent result, `auto_decisions` (8.9.2: an attended run's too, so a resume keeps them; a
+malformed list is a run-state mismatch) and, at the end, the write-back result. The milestones, in
+order:
 
 | `last_gate`    | recorded after      | a re-run resumes at                  |
 | -------------- | ------------------- | ------------------------------------ |
@@ -938,7 +940,13 @@ state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target an
 `approved_sha`, `HEAD^{tree}` equals `code_tree`, the worktree is clean, and a fresh hasher run
 (`hasher:resume`) gives the same `maps_digest`. It logs `resuming at <step>` and runs no writer,
 coder or judge. Any failed check stops with `needs_human` "run-state mismatch: <which>"
-(`stop_gate: resume`). A resumed step that needs a coder round (a pre-push hook rejection, a
+(`stop_gate: resume`). A resume at the review (8.9.2) first reads the PR on the forge
+(`infra:pr-view:resume-review`, `pr_state.py view`): when the PR is not open, its head is not the
+run-state's `approved_sha` (moved by hand or by another run), or the read fails, it stops with
+`needs_human` "resume at review refused: ..." (`stop_gate: resume`), before the PR-body check or
+the review writes anything. The reason names the remedy: a failed read (for example HTTP 502) needs
+only a relaunch with the same `plan_ref`; a PR that is not open or a moved head needs a check by
+hand, then a re-plan. A `pr_open` run-state with no PR number is a run-state mismatch. A resumed step that needs a coder round (a pre-push hook rejection, a
 blocking review) runs one (6.0.0): the frozen maps are the `hasher:resume` maps, the freeze tree
 is `refs/fleet/<task>/freeze`, and the round count comes from the run-state. Without that freeze
 ref it stops with `needs_human`.
@@ -1091,7 +1099,7 @@ safety check runs on the repaired attempt again.
   shipped program and a relay whose digest or args do not match (after the digest or args retry
   of the test block); also a missing `### Unattended run` section (stats block) and a truncated
   claims list (test block). An entry recorded after the pr-opener wrote the body is in the result
-  (and, in an unattended run, the run-state), not in the body's `### Unattended run` section.
+  and the run-state (8.9.2: attended runs too), not in the body's `### Unattended run` section.
 - Relay size (`relay-size`, `page`): one changed symbol whose caller-check output is over the
   65536-byte relay cap goes on the on-disk caller path (summary plus paged reads) instead of
   stopping. Still stops: one symbol whose on-disk summary is over its cap, and a hasher output
@@ -1174,9 +1182,17 @@ re-run enters at or before the failed check:
 - A build that re-planned and built the new plan in the same run (unattended `plan_wrong`) also
   adds `confirm: "auto"`: no human confirmed that plan ref.
 - A relaxed plan built in the run (an unattended plan launch, or that in-run re-plan, whose gates
-  checked one approved, backed, fail-closed deviation per relaxed item) answers `none`: the relaxed
-  list is not sealed in the plan ref, and the build-mode gates of a re-run get no list, so they would
-  check less. `recover.args` never carries the list (the skill would relay it).
+  checked one approved, backed, fail-closed deviation per relaxed item) re-runs with
+  `confirm: "auto"` (8.9.2). The plan ref seals the relaxed list (`relaxed`, `[]` when the plan
+  relaxed nothing), and the build-mode `:rerun` gates pass the sealed list to the intent judge, so
+  each item needs its approved deviation again. A ref sealed before 8.9.2 holds no list: its relaxed
+  plan answers `none` ("a relaxed re-plan whose plan ref was sealed before 8.9.2"). A sealed list
+  that is not this run's relaxed list answers `none` ("a re-plan changed the relaxed list"). An
+  attended `confirm: "auto"` build of a ref with a sealed non-empty list stops before the intent
+  judge (`failed_check: intent`, "re-plan relaxed: ..."), as plan mode does; its
+  `needs_max_section` says to build without confirm auto (the interactive Build confirmation) or to
+  run unattended (`--auto`), never to repeat the same confirm auto build. The list comes from the sealed
+  ref only: `recover.args` never carries it (the skill would relay it).
 
 The five transient sites and their re-entry: a read-only step's null result (`dispatch`,
 `callRole`, `retryOnDrift`: the step runs again in the re-run, before or after the freeze, from
@@ -1196,7 +1212,9 @@ CI write-back once more).
 - The engine does not rely on the skill to copy `rerun_of` forward. Before a result leaves with
   `action: "rerun"`, the engine checks and sets a marker,
   `<git-common-dir>/fleet/reruns/<task_id>.json` (`{nonce, time}`), with `parked.py rerun`
-  (`infra:run-lock:rerun`, after the run lock release). The key is the task id of the run lock this run claimed, in plan and build mode alike:
+  (`infra:run-lock:rerun`). 8.9.2: it runs in main's cleanup after the teardowns and before the run
+  lock release, so the held lock serializes the marker's read and write (two runs of one task
+  cannot both pass it). A stop that escapes the cleanup never passed the marker: `none`. The key is the task id of the run lock this run claimed, in plan and build mode alike:
   each in-run re-plan seals a new `ref_sha256`, so a ref key would never bound a loop of re-plan and
   transient stop. The marker sits beside the run locks, not in the worktree's scratch dir: that path
   holds the branch slug and goes with the worktree after a merge.
@@ -1208,8 +1226,10 @@ CI write-back once more).
   - A malformed, unreadable or symlinked marker, one over 300 s in the future, a failed or
     off-digest relay, or a stop before the run lock is claimed (no task id; for example a null
     intake result): `none`. The marker fails closed.
-  - The marker can only take a re-run away. The engine reads it for no other stop class and for no
-    check.
+  - The engine uses the marker only to take a re-run away: it reads it for no other stop class and
+    for no check, and it never adds a re-run. The marker is not tamper-proof: a role with Bash can
+    delete or backdate `<task_id>.json` and win back one re-run. A loop still needs the skill to
+    drop `rerun_of` too (ADR-1409).
   - A human launch within 24 h of an automatic re-run of the same task answers `none` to its own
     transient stop. Launch it again by hand. After 24 h it re-runs as usual.
 

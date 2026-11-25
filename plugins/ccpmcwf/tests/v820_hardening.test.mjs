@@ -422,6 +422,36 @@ test("8.9.1 #115: a busy host never refuses the socket walk: the time cap counts
   }
 });
 
+test("8.9.2 #116 (f2): a hung file system hits the wall-clock backstop: the walk refuses and names it", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  // 3,000 entries: under the entry cap, a few ms of CPU; the fake clock below spans 150 s over them
+  for (let i = 0; i < 30; i++) {
+    const dd = join(R, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 99; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  const f = join(x.d, "spec.json");
+  writeFileSync(f, JSON.stringify({ result: join(x.d, "res.json"), worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }));
+  try {
+    // a hung file system, made exact: time.monotonic advances 50 ms per call (one call per walked entry), so the
+    // walk passes the 120 s backstop near entry 2,400 while its CPU time stays far under the CPU cap
+    const pre =
+      "import sys, time\n" +
+      "_t = [0.0]\n" +
+      "def _mono():\n    _t[0] += 0.05\n    return _t[0]\n" +
+      "time.monotonic = _mono\n" +
+      "sys.argv = [sys.argv[1], 'plan', sys.argv[2]]\n" +
+      "exec(compile(open(sys.argv[0]).read(), sys.argv[0], 'exec'), {'__name__': '__main__', '__file__': sys.argv[0]})\n";
+    const r = spawnSync(PY, ["-I", "-c", pre, SBX, f], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    const reason = JSON.parse(r.stdout).reason;
+    assert.match(reason, /^socket walk over its wall-clock backstop \(120 s, [0-9]+ entries; a hung file system\?\)$/, r.stderr);
+    assert.ok(Number(/, ([0-9]+) entries/.exec(reason)[1]) < 3000, "the backstop tripped before the walk ended: " + reason);
+  } finally {
+    x.done();
+  }
+});
+
 test("8.9.1 #115: a cap hit names the cap and what it measured", { skip: !HAVE_PY }, () => {
   const x = plainFixture();
   const R = join(x.d, "R");

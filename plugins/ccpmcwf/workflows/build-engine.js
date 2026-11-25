@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.1";
+const FLEET_VERSION="8.9.2";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -3406,6 +3406,7 @@ parkDirty:false,
 rerunOf:null,
 rerunKey:null,
 relaxed:null,
+sealedRelaxed:null,
 review:null,
 repo:null,
 pathChecks:0,
@@ -3949,7 +3950,10 @@ a.mode="build";
 a.plan_ref=state.buildRef;
 if(state.launch==="plan"||state.buildRef!==state.launchRef){
 a.confirm="auto";
-if(state.relaxed&&state.relaxed.length)return no("a relaxed re-plan: build mode cannot re-check its deviations");
+if(state.relaxed&&state.relaxed.length&&!state.sealedRelaxed)
+return no("a relaxed re-plan whose plan ref was sealed before 8.9.2 (no sealed relaxed list): build mode cannot re-check its deviations");
+if(state.relaxed&&state.relaxed.length&&canonical(state.sealedRelaxed)!==canonical(state.relaxed))
+return no("a re-plan changed the relaxed list; build mode cannot re-check it");
 }
 if(state.milestone){
 if(state.dirty)return no("a coder or test writer ran after the run-state "+state.milestone);
@@ -5680,6 +5684,7 @@ plan_facts:f.planFacts,
 history:f.history,
 project:typeof f.project==="string"&&f.project?f.project:null,
 held_out:f.heldOut||null,
+relaxed:Array.isArray(f.relaxed)?f.relaxed.slice():[],
 });
 if(f.policy&&typeof f.policy==="object")ref.policy=stripHeldOut(f.policy);
 ref.seal=sealOf(ref);
@@ -5885,7 +5890,7 @@ if(typeof cl.quote!=="string"||!cl.quote.trim())out.push("classification quote i
 }
 return out;
 }
-function needsMaxSection(check,reasons,intent,planPath,tiny){
+function needsMaxSection(check,reasons,intent,planPath,tiny,relaxedAsk){
 const lines=["## Needs Max: auto-confirm stopped at the "+check+" check","","Failed check: `"+check+"`","","Reasons:"];
 for(const r of reasons)lines.push("- "+r);
 if(intent){
@@ -5898,7 +5903,9 @@ lines.push(
 "",
 "Plan: `"+planPath+"` on `"+tiny.branch+"` at `"+tiny.plan_commit+"` (committed locally, not pushed).",
 "",
-"Rule on it in the task, then re-run with the same plan_ref after a ruling (build mode, confirm auto).",
+relaxedAsk
+?"A relaxed re-plan never passes the auto gates in an attended run. Build the same plan_ref without confirm auto (the interactive Build confirmation), or run it unattended (--auto) so the intent judge rules on each relaxed item."
+:"Rule on it in the task, then re-run with the same plan_ref after a ruling (build mode, confirm auto).",
 );
 return lines.join("\n");
 }
@@ -5996,7 +6003,7 @@ failed_check:g.failedCheck,
 intent:g.intent,
 plan_ref:tiny,
 plan_path:planPath,
-needs_max_section:needsMaxSection(g.failedCheck,g.reasons,g.intent,planPath,tiny),
+needs_max_section:needsMaxSection(g.failedCheck,g.reasons,g.intent,planPath,tiny,g.relaxedAsk===true),
 });
 }
 function defaultBlockers(p,input,raw){
@@ -6258,6 +6265,7 @@ slug:names.slug,
 tldr:p.tldr,
 planDiff:p.planDiff,
 planFacts:sealedFacts(p),
+relaxed:p.relaxed,
 history:{runs:1,replans:0,agents:0,preflight:state.preflightRecord},
 project:input.project||null,
 policy:planPolicy,
@@ -6274,7 +6282,7 @@ gate("unattended: asking Max ("+blockers.join("; ")+")");
 return awaiting("plan ready: confirm, then run mode build with plan_ref"+ledgerSourceText(ls),p,pc.tiny,pc.full,{ledger_source:ls,confirm_reason:blockers.concat(p.relaxed.length&&!blockers.some((b)=>/^re-plan relaxed/.test(b))?["re-plan relaxed: "+p.relaxed.join("; ")]:[]).join("; ")});
 }
 if(auto&&!ua&&p.relaxed.length)
-return autoFailResult({failedCheck:"intent",reasons:["re-plan relaxed: "+p.relaxed.join("; ")],intent:null},p.planPath,pc.tiny);
+return autoFailResult({failedCheck:"intent",reasons:["re-plan relaxed: "+p.relaxed.join("; ")],intent:null,relaxedAsk:true},p.planPath,pc.tiny);
 if(auto&&!ua&&parkedBad)
 return autoFailResult({failedCheck:"intent",reasons:[PARKED_UNREADABLE+": "+parked.unreadable],intent:null},p.planPath,pc.tiny);
 if(!runGates){
@@ -6347,6 +6355,7 @@ if(pre)return pre;
 if("held_out"in r&&r.held_out!==null&&heldOutProblem(r.held_out))return"held_out is malformed";
 if("policy"in r&&sealedPolicyProblem(r.policy))return"policy is malformed ("+sealedPolicyProblem(r.policy)+")";
 if("project"in r&&r.project!==null&&(typeof r.project!=="string"||!r.project))return"project is not a non-empty string or null";
+if("relaxed"in r&&(!Array.isArray(r.relaxed)||r.relaxed.some((x)=>typeof x!=="string"||!x)))return"relaxed is malformed";
 return null;
 }
 function fenceChanged(where,changed){
@@ -6632,6 +6641,7 @@ return{joined,partOk,countOf,readParts};
 async function buildFromRef(input,date,tiny,lay,ws,opt){
 state.mode="build";
 state.buildRef=tiny;
+state.sealedRelaxed=null;
 const repo=cleanRepo(tiny.repo);
 phase("Verify");
 const refTask=PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
@@ -6709,6 +6719,7 @@ gate("project "+sealedProject+" from the sealed plan ref");
 const pf=loaded.plan_facts;
 if(!pf||typeof pf!=="object"||!("test_cmd"in pf)||!("repo_obligations"in pf)||!Array.isArray(pf.commands))
 halt("s","needs_human",LEGACY_REF);
+if(Array.isArray(loaded.relaxed))state.sealedRelaxed=loaded.relaxed.slice();
 const refFacts=planFactsProblem(pf.test_cmd,pf.repo_obligations);
 if(refFacts)halt("s","needs_human","plan ref "+tiny.plan_ref+": "+refFacts.msg,refFacts.gate);
 const refTc=testCmdProblem(pf.test_cmd);
@@ -6842,6 +6853,8 @@ if(rs.clean!==true)mis("worktree not clean");
 const af=st.aug_files;
 if(af!==undefined&&(!Array.isArray(af)||af.length!==1||af.some((f)=>typeof f!=="string"||normPath(f)!==f||f[0]==="/"||f.split("/").indexOf("..")>=0||frozenFiles.indexOf(f)>=0||!Array.from({length:MAX_CODE_ROUNDS},(_,r)=>testable.length&&augName(testable,r+1)).includes(f))))mis("aug_files");
 if(af)frozenFiles.push(...(state.augFiles=af));
+const ad=st.auto_decisions;
+if(ad!==undefined&&(!Array.isArray(ad)||ad.some((d)=>!d||typeof d!=="object"||Array.isArray(d)||["gate","decision","reason"].some((k)=>typeof d[k]!=="string"))))mis("auto_decisions");
 const hr=await hasher("hasher:resume",mainWt,hashedFiles,"Verify");
 if(mapsDigest(hr.hashes)!==st.maps_digest)mis("frozen maps changed since "+st.last_gate);
 resume=st;
@@ -6886,6 +6899,9 @@ return autoFailResult(
 ref.plan_path,
 tiny,
 );
+const rx=state.sealedRelaxed||[];
+if(rx.length&&!state.unattended)return autoFailResult({failedCheck:"intent",reasons:["re-plan relaxed: "+rx.join("; ")],intent:null,relaxedAsk:true},ref.plan_path,tiny);
+if(rx.length)state.relaxed=rx;
 const fresh=await rereadBrief(brief,input.project,repo);
 const g=await autoGates({
 sfx:":rerun",
@@ -6901,6 +6917,7 @@ planPath:ref.plan_path,
 planDiff:ref.plan_diff,
 planFacts:ref.plan_facts,
 files:hashedFiles,
+relaxed:rx,
 });
 if(!g.ok)return autoFailResult(g,ref.plan_path,tiny);
 intent=g.intent;
@@ -7088,7 +7105,8 @@ held_out_seen:!!(state.gates.held_out||{}).seen,
 gates_seen:Object.fromEntries(GATES3.map((g)=>[g,(state.gates[g]||{}).seen|0])),
 ...(state.augFiles?{aug_files:state.augFiles}:{}),
 auto_confirmed:autoConfirmed,
-...(state.unattended?{unattended:state.unattended,auto_decisions:state.autoDecisions}:{}),
+...(state.unattended?{unattended:state.unattended}:{}),
+auto_decisions:state.autoDecisions,
 intent:intentForPr,
 policy,
 tests_written:state.testsWritten||0,
@@ -7667,6 +7685,19 @@ gate("resuming at done: run-state shipped at "+approvedSha+"; returning the reco
 return finishOk("done");
 }
 gate("resuming at "+next+" (run-state "+resume.last_gate+" at "+approvedSha+")");
+if(next==="review"){
+if(!pr||pr.pr_number==null||typeof pr.pr_url!=="string")halt("s","needs_human","run-state mismatch: pr_number at "+resume.last_gate+" ("+stateRef+")","resume");
+const rl="infra:pr-view:resume-review";
+const v=await prState(rl,["view",ghCmd("resume at review","resume"),remoteSlug,String(pr.pr_number),approvedSha],"read the head of the fleet's own PR (read only)","resume");
+const at="; the run-state "+resume.last_gate+" is at "+approvedSha;
+const no=
+v.error!==null?"the head of "+pr.pr_url+" could not be read ("+v.error+")"+at+". Relaunch the build with the same plan_ref"
+:v.state!=="OPEN"?pr.pr_url+" is "+v.state+at+". Check the PR by hand, then re-plan"
+:v.head!==approvedSha?"the head of "+pr.pr_url+" moved to "+v.head+at+". Check the PR by hand, then re-plan"
+:null;
+if(no)halt("s","needs_human","resume at review refused: "+no,"resume");
+gate(rl+": "+pr.pr_url+" is open at the run-state's "+approvedSha);
+}
 if(next==="stats"&&pr&&pr.pr_number!=null&&ghFor(remoteSlug)&&ghFor(remoteSlug).gh_cmd){
 const v=await prState("infra:pr-view:resume",["view",ghFor(remoteSlug).gh_cmd,remoteSlug,String(pr.pr_number),approvedSha],"read the state of the fleet's own PR (read only)","resume");
 if(v.error===null&&v.state==="MERGED"&&v.head===approvedSha&&typeof v.merge_sha==="string"&&/^[0-9a-f]{40}$/.test(v.merge_sha)){
@@ -8575,6 +8606,7 @@ slug:names.slug,
 tldr:p.tldr,
 planDiff:p.planDiff,
 planFacts:sealedFacts(p),
+relaxed:p.relaxed,
 history:{runs:history.runs,replans:n,agents:history.agents,audits:history.audits},
 project:ctx.project,
 policy:state.policy,
@@ -9045,13 +9077,27 @@ if(ro!==undefined){
 state.rerunOf=ro;
 autoDecide("rerun","rerun","the automatic re-run of run "+ro+" after a transient stop");
 }
+let out=null;
+let stopped=null;
+let done=false;
 try{
-return await(mode==="plan"?planMode(input,input.date):mode==="probe"?probeMode(input):buildMode(input,input.date));
+out=await(mode==="plan"?planMode(input,input.date):mode==="probe"?probeMode(input):buildMode(input,input.date));
+done=true;
+}catch(e){
+if(!(e instanceof Stop))throw e;
+stopped=e;
+done=true;
 }finally{
+try{
 await buildTeardown();
 await dbTeardown();
+if(done)out=await rerunGuard(stopped?finishStop(stopped):out);
+}finally{
 await lockRelease();
 }
+if(stopped&&out)out.agents=state.agents;
+}
+return out;
 }
 let input=args;
 let badArgs=false;
@@ -9078,5 +9124,6 @@ out=await main(input);
 }catch(e){
 if(!(e instanceof Stop))throw e;
 out=finishStop(e);
+if(out.recover&&out.recover.action==="rerun")out.recover={class:out.recover.class,action:"none",why:"the stop never passed the engine marker step"};
 }
-return await rerunGuard(out);
+return out;
