@@ -796,6 +796,8 @@ const READS = {
     "c.ci_watch_minutes integer": PARSED_REF,
     "c.unattended boolean": PARSED_REF,
   },
+  // 8.9.2 (#118 review): the script flag of the attended relaxed refusal
+  autoFailResult: { "g.relaxedAsk boolean": PARSED_LOCAL },
   stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF, "s.ci_watch_minutes integer": PARSED_REF },
   makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)", "f.relaxed array": "parsed: the plan run's own relaxed list (relaxedReasons, script-built)" },
   preflightRecordProblem: {
@@ -934,6 +936,8 @@ const READS = {
     "af.length number-literal": "parsed: the run-state's aug_files (checked as an array first)",
     // 8.9.2 (#116 a): the relaxed list of the sealed plan ref (planRefProblem checked its shape)
     "loaded.relaxed array": PARSED_REF,
+    // 8.9.2 (#118 review): the resumed PR record (from the run-state) a review resume needs
+    "pr.pr_url string": "parsed: JSON.parse of the run-state message (digest-checked read_state), pr_url",
     // 8.9.2 (#116 b): the run-state's auto_decisions
     "ad array": "parsed: JSON.parse of the run-state message (digest-checked read_state), auto_decisions",
     "d object": "parsed: an entry of the run-state's auto_decisions (checked as an array first)",

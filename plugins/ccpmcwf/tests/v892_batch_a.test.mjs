@@ -138,6 +138,37 @@ test("8.9.2 (c): a PR head that moved since the run-state, or a read that fails,
   }
 });
 
+test("8.9.2 (c) review: the refusal names its remedy: a failed read is a relaunch, a closed PR or moved head a re-plan", async () => {
+  for (const [over, tail] of [
+    [{ head: null, state: null, error: "gh pr view: HTTP 502" }, /\. Relaunch the build with the same plan_ref$/],
+    [{ state: "CLOSED" }, /\. Check the PR by hand, then re-plan$/],
+    [{ head: "e".repeat(40) }, /\. Check the PR by hand, then re-plan$/],
+  ]) {
+    const s = happy();
+    const { bargs, resume } = await built(s);
+    resume("pr_open");
+    s[VIEW] = viewOut(over);
+    const r = await runOne(s, Object.assign({}, bargs, { run_nonce: RUN2 }));
+    assert.match(r.result.reason, tail, r.result.reason);
+    if (over.error) assert.doesNotMatch(r.result.reason, /re-plan/);
+    assert.equal(r.result.stop_class, "safety");
+  }
+});
+
+test("8.9.2 (c) review: a pr_open run-state with no pr_number is a run-state mismatch, never a skipped head check", async () => {
+  for (const edit of [(x) => (x.pr_number = null), (x) => ((x.pr_number = null), (x.pr_url = null))]) {
+    const s = happy();
+    const { bargs, resume } = await built(s);
+    resume("pr_open", edit);
+    const r = await runOne(s, Object.assign({}, bargs, { run_nonce: RUN2 }));
+    assert.equal(r.result.status, "needs_human", r.result.reason);
+    assert.match(r.result.reason, /^run-state mismatch: pr_number at pr_open \(refs\/fleet\/y42\/state\)$/);
+    assert.equal(r.result.stop_gate, "resume");
+    assert.equal(r.result.stop_class, "safety");
+    assert.ok(!r.labels.some((l) => /^(infra:pr-view|infra:pr-tests|role:)/.test(l)), r.labels.join(", "));
+  }
+});
+
 test("8.9.2 (c): a resume past the review (writeback) does not read the head again here", async () => {
   const s = happy();
   const { bargs, resume } = await built(s);
@@ -183,7 +214,10 @@ function reseal(s, tiny, edit) {
   s.__store[tiny.plan_commit] = next;
   return Object.assign({}, tiny, { ref_sha256: sha256(next) });
 }
-const LEGACY_WHY = "a relaxed re-plan whose plan ref holds no sealed relaxed list (sealed before 8.9.2): build mode cannot re-check its deviations";
+const LEGACY_WHY = "a relaxed re-plan whose plan ref was sealed before 8.9.2 (no sealed relaxed list): build mode cannot re-check its deviations";
+const CHANGED_WHY = "a re-plan changed the relaxed list; build mode cannot re-check it";
+const RELAXED_ADVICE = "A relaxed re-plan never passes the auto gates in an attended run. Build the same plan_ref without confirm auto (the interactive Build confirmation), or run it unattended (--auto) so the intent judge rules on each relaxed item.";
+const LOOP_ADVICE = "re-run with the same plan_ref after a ruling (build mode, confirm auto)";
 
 test("8.9.2 (a): the plan ref seals the relaxed list: [] for a plan that relaxed nothing, the items when it did", async () => {
   const s = happy();
@@ -253,11 +287,43 @@ test("8.9.2 (a): an attended confirm auto build of a ref with a sealed relaxed l
   assert.equal(o.result.failed_check, "intent");
   assert.match(o.result.reason, /^auto-confirm: intent check failed: re-plan relaxed: criterion AC2 dropped/);
   assert.ok(!has(o, "role:fleet-intent-judge:rerun"), o.labels.join(", "));
+  // review of #118: the advice never sends it back to the same confirm auto build (it would stop again)
+  assert.ok(o.result.needs_max_section.includes(RELAXED_ADVICE), o.result.needs_max_section);
+  assert.ok(!o.result.needs_max_section.includes(LOOP_ADVICE), o.result.needs_max_section);
   // a ref sealed with an empty list builds as before
   const t2 = reseal(s, plan.result.plan_ref, (ref) => (ref.relaxed = []));
   const o2 = await runOne(Object.assign(s, intentOk(":rerun")), Object.assign({}, a, { plan_ref: t2 }));
   assert.equal(o2.result.status, "ok", o2.result.reason);
   assert.equal(inputsOf(o2.calls.find((c) => c.label === "role:fleet-intent-judge:rerun").prompt).relaxed, undefined);
+});
+
+test("8.9.2 (a) review: an attended confirm auto plan launch of a relaxed plan gets the same advice; other auto-gate stops keep theirs", async () => {
+  const s = Object.assign(happy(), PRECOMMIT);
+  s.__source = relaxedSrc(DIST);
+  const o = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
+  assert.equal(o.result.failed_check, "intent", o.result.reason);
+  assert.match(o.result.reason, /re-plan relaxed: criterion AC2 dropped/);
+  assert.ok(o.result.needs_max_section.includes(RELAXED_ADVICE), o.result.needs_max_section);
+  assert.ok(!o.result.needs_max_section.includes(LOOP_ADVICE));
+  // an intent refusal (not the relaxed stop) keeps the re-run advice
+  const r = Object.assign(happy(), intentOk(""), PRECOMMIT);
+  r["role:fleet-intent-judge"] = Object.assign({}, r["role:fleet-intent-judge"], { verdict: "refuse", reason: "not the task" });
+  const o2 = await runOne(r, Object.assign({}, ARGS, { confirm: "auto" }));
+  assert.equal(o2.result.failed_check, "intent", o2.result.reason);
+  assert.ok(o2.result.needs_max_section.includes(LOOP_ADVICE), o2.result.needs_max_section);
+  assert.ok(!o2.result.needs_max_section.includes(RELAXED_ADVICE));
+});
+
+test("8.9.2 (a) review: a sealed list that differs from the run's relaxed list names the change, not the version", async () => {
+  const s = Object.assign(happy(), intentOk("", [DEV]), PRECOMMIT);
+  const src = relaxedSrc(DIST);
+  // fault injection: the ref seals another list than the run built
+  s.__source = src.replace(/relaxed:Array\.isArray\(f\.relaxed\)\?f\.relaxed\.slice\(\):\[\]/, 'relaxed:["criterion AC1 dropped"]');
+  assert.notEqual(s.__source, src);
+  s["infra:verify-plan"] = [null, null];
+  const out = await runOne(s, Object.assign({}, ARGS, { unattended: true }));
+  assert.deepEqual(storeRef(s).relaxed, ["criterion AC1 dropped"]);
+  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: CHANGED_WHY });
 });
 
 test("8.9.2 (a): a sealed relaxed list that is not a list of non-empty strings refuses the ref", async () => {

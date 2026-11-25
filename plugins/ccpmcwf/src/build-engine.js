@@ -4453,8 +4453,10 @@ function recoverOf(status) {
       a.confirm = "auto";
       // review B1 of #116, 8.9.2 (#116 a): the build-mode :rerun gates re-check the list sealed in the ref; a ref
       // sealed before 8.9.2 (no list), or one whose list is not this run's, gives them none to check
+      if (state.relaxed && state.relaxed.length && !state.sealedRelaxed)
+        return no("a relaxed re-plan whose plan ref was sealed before 8.9.2 (no sealed relaxed list): build mode cannot re-check its deviations");
       if (state.relaxed && state.relaxed.length && canonical(state.sealedRelaxed) !== canonical(state.relaxed))
-        return no("a relaxed re-plan whose plan ref holds no sealed relaxed list (sealed before 8.9.2): build mode cannot re-check its deviations");
+        return no("a re-plan changed the relaxed list; build mode cannot re-check it");
     }
     if (state.milestone) {
       if (state.dirty) return no("a coder or test writer ran after the run-state " + state.milestone);
@@ -6637,7 +6639,7 @@ function intentProblems(r, planDiff) {
   return out;
 }
 
-function needsMaxSection(check, reasons, intent, planPath, tiny) {
+function needsMaxSection(check, reasons, intent, planPath, tiny, relaxedAsk) {
   const lines = ["## Needs Max: auto-confirm stopped at the " + check + " check", "", "Failed check: `" + check + "`", "", "Reasons:"];
   for (const r of reasons) lines.push("- " + r);
   if (intent) {
@@ -6650,7 +6652,10 @@ function needsMaxSection(check, reasons, intent, planPath, tiny) {
     "",
     "Plan: `" + planPath + "` on `" + tiny.branch + "` at `" + tiny.plan_commit + "` (committed locally, not pushed).",
     "",
-    "Rule on it in the task, then re-run with the same plan_ref after a ruling (build mode, confirm auto).",
+    // 8.9.2 (#116 review): a confirm auto build of a relaxed plan stops here again, attended; the advice must not loop
+    relaxedAsk
+      ? "A relaxed re-plan never passes the auto gates in an attended run. Build the same plan_ref without confirm auto (the interactive Build confirmation), or run it unattended (--auto) so the intent judge rules on each relaxed item."
+      : "Rule on it in the task, then re-run with the same plan_ref after a ruling (build mode, confirm auto).",
   );
   return lines.join("\n");
 }
@@ -6758,7 +6763,7 @@ function autoFailResult(g, planPath, tiny) {
     intent: g.intent,
     plan_ref: tiny,
     plan_path: planPath,
-    needs_max_section: needsMaxSection(g.failedCheck, g.reasons, g.intent, planPath, tiny),
+    needs_max_section: needsMaxSection(g.failedCheck, g.reasons, g.intent, planPath, tiny, g.relaxedAsk === true),
   });
 }
 
@@ -7068,7 +7073,7 @@ async function planMode(input, date) {
   }
   // a relaxed re-plan never reaches the auto gates (unattended: the intent judge rules on it)
   if (auto && !ua && p.relaxed.length)
-    return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
+    return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null, relaxedAsk: true }, p.planPath, pc.tiny);
   if (auto && !ua && parkedBad)
     return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
   if (!runGates) {
@@ -7783,7 +7788,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       );
     // 8.9.2 (#116 a): the sealed relaxed list (never a relayed one); attended, it never reaches the auto gates (as plan mode)
     const rx = state.sealedRelaxed || [];
-    if (rx.length && !state.unattended) return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + rx.join("; ")], intent: null }, ref.plan_path, tiny);
+    if (rx.length && !state.unattended) return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + rx.join("; ")], intent: null, relaxedAsk: true }, ref.plan_path, tiny);
     if (rx.length) state.relaxed = rx;
     const fresh = await rereadBrief(brief, input.project, repo);
     const g = await autoGates({
@@ -8668,11 +8673,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("resuming at " + next + " (run-state " + resume.last_gate + " at " + approvedSha + ")");
     // 8.9.2 (#116 c): the review reads the local approved sha; a PR head moved on the forge since the run-state
     // (a push by hand, another run) refuses, before the PR-body check and the review write anything
-    if (next === "review" && pr && pr.pr_number != null) {
+    if (next === "review") {
+      // the pr_open run-state names its PR (a null number has nothing to re-read)
+      if (!pr || pr.pr_number == null || typeof pr.pr_url !== "string") halt("s", "needs_human", "run-state mismatch: pr_number at " + resume.last_gate + " (" + stateRef + ")", "resume");
       const rl = "infra:pr-view:resume-review";
       const v = await prState(rl, ["view", ghCmd("resume at review", "resume"), remoteSlug, String(pr.pr_number), approvedSha], "read the head of the fleet's own PR (read only)", "resume");
-      const no = v.error !== null ? "the head of " + pr.pr_url + " could not be read (" + v.error + ")" : v.state !== "OPEN" ? pr.pr_url + " is " + v.state : v.head !== approvedSha ? "the head of " + pr.pr_url + " moved to " + v.head : null;
-      if (no) halt("s", "needs_human", "resume at review refused: " + no + "; the run-state " + resume.last_gate + " is at " + approvedSha + ". Check the PR by hand, then re-plan", "resume");
+      const at = "; the run-state " + resume.last_gate + " is at " + approvedSha;
+      const no =
+        v.error !== null ? "the head of " + pr.pr_url + " could not be read (" + v.error + ")" + at + ". Relaunch the build with the same plan_ref"
+        : v.state !== "OPEN" ? pr.pr_url + " is " + v.state + at + ". Check the PR by hand, then re-plan"
+        : v.head !== approvedSha ? "the head of " + pr.pr_url + " moved to " + v.head + at + ". Check the PR by hand, then re-plan"
+        : null;
+      if (no) halt("s", "needs_human", "resume at review refused: " + no, "resume");
       gate(rl + ": " + pr.pr_url + " is open at the run-state's " + approvedSha);
     }
     // review NIT: a merge that landed before the shipped run-state: record it, clean up, done
@@ -10259,6 +10271,6 @@ try {
   // a Stop before main's try (an argument check) or out of main's cleanup: it never passed the engine marker,
   // so it never re-runs (fail closed)
   out = finishStop(e);
-  if (out.recover && out.recover.action === "rerun") out.recover = { class: out.recover.class, action: "none", why: "the stop came after the engine marker step" };
+  if (out.recover && out.recover.action === "rerun") out.recover = { class: out.recover.class, action: "none", why: "the stop never passed the engine marker step" };
 }
 return out;

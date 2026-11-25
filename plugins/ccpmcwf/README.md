@@ -944,7 +944,9 @@ coder or judge. Any failed check stops with `needs_human` "run-state mismatch: <
 (`infra:pr-view:resume-review`, `pr_state.py view`): when the PR is not open, its head is not the
 run-state's `approved_sha` (moved by hand or by another run), or the read fails, it stops with
 `needs_human` "resume at review refused: ..." (`stop_gate: resume`), before the PR-body check or
-the review writes anything. A resumed step that needs a coder round (a pre-push hook rejection, a
+the review writes anything. The reason names the remedy: a failed read (for example HTTP 502) needs
+only a relaunch with the same `plan_ref`; a PR that is not open or a moved head needs a check by
+hand, then a re-plan. A `pr_open` run-state with no PR number is a run-state mismatch. A resumed step that needs a coder round (a pre-push hook rejection, a
 blocking review) runs one (6.0.0): the frozen maps are the `hasher:resume` maps, the freeze tree
 is `refs/fleet/<task>/freeze`, and the round count comes from the run-state. Without that freeze
 ref it stops with `needs_human`.
@@ -1184,9 +1186,12 @@ re-run enters at or before the failed check:
   `confirm: "auto"` (8.9.2). The plan ref seals the relaxed list (`relaxed`, `[]` when the plan
   relaxed nothing), and the build-mode `:rerun` gates pass the sealed list to the intent judge, so
   each item needs its approved deviation again. A ref sealed before 8.9.2 holds no list: its relaxed
-  plan answers `none` ("a relaxed re-plan whose plan ref holds no sealed relaxed list"). An attended
-  `confirm: "auto"` build of a ref with a sealed non-empty list stops before the intent judge
-  (`failed_check: intent`, "re-plan relaxed: ..."), as plan mode does. The list comes from the sealed
+  plan answers `none` ("a relaxed re-plan whose plan ref was sealed before 8.9.2"). A sealed list
+  that is not this run's relaxed list answers `none` ("a re-plan changed the relaxed list"). An
+  attended `confirm: "auto"` build of a ref with a sealed non-empty list stops before the intent
+  judge (`failed_check: intent`, "re-plan relaxed: ..."), as plan mode does; its
+  `needs_max_section` says to build without confirm auto (the interactive Build confirmation) or to
+  run unattended (`--auto`), never to repeat the same confirm auto build. The list comes from the sealed
   ref only: `recover.args` never carries it (the skill would relay it).
 
 The five transient sites and their re-entry: a read-only step's null result (`dispatch`,

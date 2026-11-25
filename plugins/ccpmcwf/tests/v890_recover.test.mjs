@@ -354,7 +354,7 @@ test("8.9.2 #116 (f0): a stop that escapes main's cleanup never passed the marke
   assert.notEqual(s.__source, DIST);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.stop_class, "transient", out.result.reason);
-  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: "the stop came after the engine marker step" });
+  assert.deepEqual(out.result.recover, { class: "transient", action: "none", why: "the stop never passed the engine marker step" });
   assert.ok(!has(out, "infra:run-lock:rerun"), out.labels.join(", "));
   assert.equal(out.labels[out.labels.length - 1], "infra:run-lock:release", out.labels.join(", "));
 });
@@ -582,7 +582,7 @@ test("8.9.0 marker: a stop before the run lock (no task id) gets none; the marke
   assert.match(SOURCE, /async function rerunGuard\(out\) \{\n  const rc = out && out\.recover;\n  if \(!rc \|\| rc\.action !== "rerun"\) return out;/);
   // 8.9.2 #116 (f0): the guard runs in main's finally, before lockRelease; the top level only finishes a Stop raised before main's try
   assert.match(SOURCE, /out = await rerunGuard\(stopped \? finishStop\(stopped\) : out\);\n    \} finally \{\n      await lockRelease\(\);/);
-  assert.match(SOURCE, /\n  out = finishStop\(e\);\n  if \(out\.recover && out\.recover\.action === "rerun"\) out\.recover = \{ class: out\.recover\.class, action: "none", why: "the stop came after the engine marker step" \};\n\}\nreturn out;\n?$/);
+  assert.match(SOURCE, /\n  out = finishStop\(e\);\n  if \(out\.recover && out\.recover\.action === "rerun"\) out\.recover = \{ class: out\.recover\.class, action: "none", why: "the stop never passed the engine marker step" \};\n\}\nreturn out;\n?$/);
 });
 
 test("8.9.0 marker: a judgment stop asks; the marker step does not run", async () => {
