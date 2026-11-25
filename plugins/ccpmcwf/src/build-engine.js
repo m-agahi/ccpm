@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.4";
+const FLEET_VERSION = "8.9.5";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -203,17 +203,14 @@ const CALLER_BATCH_SYMBOLS = 30;
 const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
 // 7.2.0 (L2178, ADR-1195): an output over callers.py's 8192-byte inline cap is handed off on disk: file mode
 // writes it to the run scratch and relays a summary (at most 4096 bytes); read mode relays 50-entry pages,
-// at most CALLER_READ_BUDGET pages of the all and paths parts per caller check (8.5.3, #111: auto pages are outside it)
+// at most CALLER_READ_BUDGET pages of the all and paths parts per caller check (8.9.5, yaadgaar #112: no auto part; doc and
+// lock hits are checked by the summary's code hashes, with no read)
 const CALLERS_DISK_MARK = "FLEET_CALLERS_ON_DISK:";
 const CALLER_INLINE_CAP = 8192;
 // 7.4.0 (#68): callers.py's SUMMARY_CAP_ONE, the cap for a one-symbol summary (more symbols: 4096)
 const CALLER_SUMMARY_CAP_ONE = 16384;
 const CALLER_PAGE = 50;
 const CALLER_READ_BUDGET = 4;
-// 8.5.3 (#111, PR #108 review): the auto (doc and lock) pages of one caller check, outside the budget above
-// and outside the agent cap (AUTO_READ_RE); over this bound the run stops at the callers gate
-const CALLER_AUTO_PAGES_MAX = 20;
-const AUTO_READ_RE = /^infra:callers(:[a-z0-9-]+)*:read:auto:[0-9]+(:(digest|args)-retry)?$/;
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -1721,7 +1718,7 @@ function relayDigestOk(r, keys, name) {
 const PROGRAM_SHA256 = {
   "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
   "build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
-  "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
+  "callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
   "changed_defs": "b104493bc23e3f342cd6a32db469ca14b00424b690a26138b8a2c67955970723",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "cover_diff": "1863425a52a6802613800a5bb04a77c32c79f5a5fd591ecacc83c9c8ce49e2db",
@@ -1787,7 +1784,7 @@ const ROLE_SHA256 = {
   "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
-  "plan-audit": "e487cc5dd1e6805f5b2259eecc7052c6802ac0066b5fac93a2c22aadc76e1ac7",
+  "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
   "pr-review": "e21205c77290c082cada562ac8a3c63b47a4d2866614d18f9f20d617c2c5e9f1",
   "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
@@ -2125,7 +2122,7 @@ const PROGRAM_OUT = {
     doctest_md: STRS,
     digest: STR,
     // 7.2.0 (L2178): file mode
-    symbols: { type: "object", additionalProperties: { type: "object", properties: { count: INT, sha256: STR, auto_count: INT, path_count: INT, paths_sha256: STR } } },
+    symbols: { type: "object", additionalProperties: { type: "object", properties: { count: INT, sha256: STR, auto_count: INT, code_count: INT, code_sha256: STR, code_path_count: INT, code_paths_sha256: STR } } },
     file: STR,
     args: STRS,
     // read mode
@@ -3824,8 +3821,6 @@ const state = {
   // the repo the PATH re-checks name, and their count
   repo: null,
   pathChecks: 0,
-  // 8.5.3 (#111): caller-check auto reads, outside the cap like path checks
-  autoReads: 0,
   // build-dir resets, outside the cap like path checks
   buildResets: 0,
   buildScratch: null,
@@ -3902,7 +3897,7 @@ const J_BASE = J("run plan again on the new base", "fix the PR by hand", O_DROP)
 const J_CI = J("fix the failing checks on the PR by hand", "run plan again with the CI failure in the task text", O_DROP);
 function capped() {
   // 8.0.1 (#76): the run lock claim sits outside the cap too
-  return state.agents - state.pathChecks - state.autoReads - state.buildResets - state.tail - !!state.lock;
+  return state.agents - state.pathChecks - state.buildResets - state.tail - !!state.lock;
 }
 // 2044, 2045, 2034: the PR tail sits outside the cap like path checks; CI-fix coder rounds still count
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
@@ -3979,7 +3974,6 @@ async function dispatch(label, prompt, opts) {
   const model = relayModel(label);
   const ic = infraCall(label, prompt, opts);
   if (TAIL_RE.test(label) || tailWriter(label)) state.tail++;
-  else if (AUTO_READ_RE.test(label)) state.autoReads++;
   reserve(1, label);
   state.agents++;
   let r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
@@ -3988,7 +3982,6 @@ async function dispatch(label, prompt, opts) {
   if (r == null && ic.opts.agentType === JUDGE_AGENT && capped() + 1 <= MAX_AGENTS) {
     autoDecide("transient", "retry", label + " returned no result; once more on " + model);
     if (TAIL_RE.test(label)) state.tail++;
-    else if (AUTO_READ_RE.test(label)) state.autoReads++;
     state.agents++;
     r = await agentT(ic.prompt + "\nA first dispatch of this step returned no result: run it again.", agentOpts(ic.opts, label, model));
   }
@@ -5335,6 +5328,8 @@ function changedSymbolFindings(raw, criteria) {
       if (!crit && !dc) return badSym(sym + ": " + k + " is mapped to neither a criterion nor dont_care with a reason");
       if (crit && dc) return badSym(sym + ": " + k + " is mapped to both a criterion and dont_care; pick one");
       if (crit && ids.indexOf(crit) < 0) return badSym(sym + ": " + k + " criterion " + crit + " does not exist");
+      // 8.9.5 (review of #121): the auto reason is the script's; R5 trusts it to mark a hit the script mapped
+      if (dc === AUTO_DONT_CARE) return badSym(sym + ": " + k + " dont_care " + JSON.stringify(AUTO_DONT_CARE) + " is reserved for the script; leave the hit unmapped or give your own reason");
       occ.push({ at: o.at, criterion: crit, dont_care: dc });
     });
     clean.push({ symbol: sym, occurrences: occ });
@@ -5357,8 +5352,8 @@ const isStrList = (x) => Array.isArray(x) && x.every((v) => typeof v === "string
 // expected: {symbol: [path:line ...]} (level "line") or {symbol: [path ...]} (level "path"); it is
 // compared by hash with the on-disk summary, so a symbol that matches needs no read
 async function callerGrep(label, names, worktree, planPath, phaseName, expected, level) {
-  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [], unread: {}, paths: {} };
-  const disk = { expected: expected && typeof expected === "object" ? expected : {}, pathLevel: level === "path", left: CALLER_READ_BUDGET, autoLeft: CALLER_AUTO_PAGES_MAX, worktree, planPath, phaseName };
+  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [], unread: {}, paths: {}, auto_unlisted: {} };
+  const disk = { expected: expected && typeof expected === "object" ? expected : {}, pathLevel: level === "path", left: CALLER_READ_BUDGET, worktree, planPath, phaseName };
   const per = CALLER_BATCH_SYMBOLS;
   const queue = [];
   for (let i = 0; i < names.length; i += per) queue.push({ part: names.slice(i, i + per), disk: false });
@@ -5439,7 +5434,8 @@ async function callerDisk(lb, part, disk, all) {
   const hex = (x) => typeof x === "string" && SHA256_RE.test(x);
   for (const s of part) {
     const e = Object.prototype.hasOwnProperty.call(sm, s) ? sm[s] : null;
-    if (!e || typeof e !== "object" || !cnt(e.count) || !hex(e.sha256) || !cnt(e.auto_count) || e.auto_count > e.count || !cnt(e.path_count) || e.path_count > e.count || !hex(e.paths_sha256))
+    // 8.9.5 (yaadgaar #112): the code hits are the hits that are not auto
+    if (!e || typeof e !== "object" || !cnt(e.count) || !hex(e.sha256) || !cnt(e.auto_count) || e.auto_count > e.count || !cnt(e.code_count) || e.code_count !== e.count - e.auto_count || !hex(e.code_sha256) || !cnt(e.code_path_count) || e.code_path_count > e.code_count || !hex(e.code_paths_sha256))
       halt("s", "failed", fl + ": the summary has no valid entry for " + s);
   }
   if (!isStrList(r.capped) || !isStrList(r.doctest_md)) halt("s", "failed", fl + ": the summary has no capped or doctest_md string list");
@@ -5448,23 +5444,25 @@ async function callerDisk(lb, part, disk, all) {
   const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
   const sumOf = (xs, k) => xs.reduce((a, s) => a + sm[s][k], 0);
   const unread = (xs, p) => {
-    for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, path_count: sm[s].path_count };
+    for (const s of xs) all.unread[s] = { part: p, count: sm[s].count };
   };
   if (disk.pathLevel) {
-    // the update merge: R5 reads only paths, so a line shift with the same files needs no read
+    // the update merge: R5 reads only code paths, so a line shift with the same files needs no read; 8.9.5 (yaadgaar #112):
+    // a doc or lock path (by the script's list, not a doctest) is left out of the compare, so doc paths never take a read
+    const doctest = r.doctest_md.map(normPath);
     const P = {};
     const differ = [];
     for (const s of live) {
-      P[s] = uniqSorted(want(s).map((x) => normPath(String(x))).filter(Boolean));
-      if (P[s].length === sm[s].path_count && sha256Hex(canonical(P[s])) === sm[s].paths_sha256) all.paths[s] = P[s];
+      P[s] = uniqSorted(want(s).map((x) => normPath(String(x))).filter((p) => p && !(docOrLockFile(p) && doctest.indexOf(p) < 0)));
+      if (P[s].length === sm[s].code_path_count && sha256Hex(canonical(P[s])) === sm[s].code_paths_sha256) all.paths[s] = P[s];
       else differ.push(s);
     }
     if (!differ.length) return [];
-    const got = await callerReadParts(lb, r.file, "paths", differ, sumOf(differ, "path_count"), disk);
+    const got = await callerReadParts(lb, r.file, "paths", differ, sumOf(differ, "code_path_count"), disk);
     if (!got) return unread(differ, "paths"), [];
     for (const s of differ) {
       const Q = got[s] || [];
-      if (Q.length !== sm[s].path_count || sha256Hex(canonical(Q)) !== sm[s].paths_sha256)
+      if (Q.length !== sm[s].code_path_count || sha256Hex(canonical(Q)) !== sm[s].code_paths_sha256)
         halt("s", "failed", lb + ":read:paths: the read occurrences of " + s + " do not match the summary count or sha256");
       all.paths[s] = Q;
     }
@@ -5475,7 +5473,6 @@ async function callerDisk(lb, part, disk, all) {
     all.auto_dont_care[s] = [];
   }
   const E = {};
-  const autoSet = [];
   let allSet = [];
   for (const s of live) {
     E[s] = uniqSorted(want(s).map(occurrenceKey).filter(Boolean));
@@ -5483,20 +5480,13 @@ async function callerDisk(lb, part, disk, all) {
       // every hit is mapped by the planner: the sealed map adds nothing
       all.occurrences[s] = E[s];
       all.auto_dont_care[s] = [];
-    } else (sm[s].auto_count > 0 ? autoSet : allSet).push(s);
-  }
-  // AUTO first: the planner mapped every code hit and left the doc or lock hits to auto
-  if (autoSet.length) {
-    const got = await callerReadParts(lb, r.file, "auto", autoSet, sumOf(autoSet, "auto_count"), disk);
-    for (const s of autoSet) {
-      const A = got[s] || [];
-      if (A.length !== sm[s].auto_count) halt("s", "failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
-      const U = uniqSorted(E[s].concat(A));
-      if (U.length === sm[s].count && sha256Hex(canonical(U)) === sm[s].sha256) {
-        all.occurrences[s] = U;
-        all.auto_dont_care[s] = A;
-      } else allSet.push(s);
-    }
+    } else if (E[s].length === sm[s].code_count && sha256Hex(canonical(E[s])) === sm[s].code_sha256) {
+      // 8.9.5 (yaadgaar #112): the planner mapped exactly the code hits (the program's hash proves it) and left every doc or
+      // lock hit to auto dont_care; those hits are not read and not listed (their count is in the gate line)
+      all.occurrences[s] = E[s];
+      all.auto_dont_care[s] = [];
+      all.auto_unlisted[s] = sm[s].auto_count;
+    } else allSet.push(s);
   }
   allSet = allSet.sort(codePointCompare);
   if (allSet.length) {
@@ -5521,19 +5511,11 @@ async function callerDisk(lb, part, disk, all) {
   }
   return [];
 }
-// the pages of one part for the listed symbols, or null when they do not fit the read budget left.
-// 8.5.3 (#111): the auto part (doc and lock hits by the script's own list) is always read and never
-// draws on the budget, so doc and lock hits never take reads from code hits; its own bound is
-// CALLER_AUTO_PAGES_MAX pages per caller check
+// the pages of one part for the listed symbols, or null when they do not fit the read budget left
 async function callerReadParts(lb, file, part, syms, total, disk) {
   const sorted = syms.slice().sort(codePointCompare);
   const pages = Math.max(1, Math.ceil(total / CALLER_PAGE));
-  if (part === "auto") {
-    if (pages > disk.autoLeft)
-      halt(J_SYMS(sorted), "needs_human", lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) need " + pages + " read(s); over the " + CALLER_AUTO_PAGES_MAX + " auto reads a caller check may take (" + disk.autoLeft + " left); map those hits in changed_symbols (dont_care with a reason; a full map needs no read) or split the change", "callers");
-    disk.autoLeft -= pages;
-    gate(lb + ": the auto lists of " + sorted.join(", ") + " (" + total + " doc or lock hit(s)) take " + pages + " read(s) outside the caller read budget and the agent cap");
-  } else if (pages > disk.left) {
+  if (pages > disk.left) {
     gate(lb + ": the " + part + " lists of " + sorted.join(", ") + " need " + pages + " read(s); " + disk.left + " of the caller read budget (" + CALLER_READ_BUDGET + ") left; not read");
     return null;
   } else disk.left -= pages;
@@ -5597,7 +5579,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
       findings.push({
         criterion: null,
         symbol: s.symbol,
-        finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
+        finding: s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map exactly the code hits (doc and lock hits are auto dont_care), or every hit",
       });
       continue;
     }
@@ -5610,7 +5592,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
       if (hits.indexOf(k) < 0)
         findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
   }
-  return { findings, occurrences: occ, auto };
+  return { findings, occurrences: occ, auto, unlisted: r.auto_unlisted };
 }
 
 // The build-time caller check
@@ -6103,19 +6085,23 @@ async function planAndAudit(ctx0) {
   planGot.end();
   let callerOcc = null;
   let autoDontCare = null;
+  let autoUnlisted = null;
   let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
     if (cc.findings.length) return planFindingsStop("j", ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
     callerOcc = cc.occurrences;
     autoDontCare = cc.auto;
+    autoUnlisted = Object.assign({}, cc.unlisted);
     symbolMap = cs.clean.map((s) => {
       const have = s.occurrences.map((o) => occurrenceKey(o.at));
       const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
       return add.length ? { symbol: s.symbol, occurrences: s.occurrences.concat(add) } : s;
     });
     const nAuto = symbolMap.reduce((a, s, i) => a + s.occurrences.length - cs.clean[i].occurrences.length, 0);
-    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : ""));
+    // 8.9.5 (yaadgaar #112): doc and lock hits checked by the code hash only (disk path) are not in the sealed map
+    const nUnl = Object.keys(cc.unlisted).reduce((a, k) => a + cc.unlisted[k], 0);
+    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : "") + (nUnl ? "; " + nUnl + " doc or lock hit(s) left to auto dont_care by count and hash (not listed)" : ""));
   }
   planFacts.changed_symbols = symbolMap;
   // the scope of commit subjects and the PR title; the repo name when the planner gave none
@@ -6166,7 +6152,8 @@ async function planAndAudit(ctx0) {
         plan_diff: plan.plan_diff.slice(),
         base_ref: ctx.baseRef,
         mode: "writeback=false",
-        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
+        // 8.9.5 (review of #121): auto_unlisted, the doc and lock hits per symbol checked by count and hash only (disk path)
+        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare, auto_unlisted: autoUnlisted },
         // every refused round before this one, or null
         prior_round: priorRoundView(prior),
       }, planRs.checks.length ? { required_checks: planRs.checks } : {}, aEnv),
@@ -8500,16 +8487,25 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const syms = planFacts.changed_symbols || [];
     if (syms.length) {
       const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
-      // 7.2.0 (L2178): the sealed paths per symbol; on the disk path only a symbol whose path set differs is read
+      // 7.2.0 (L2178): the sealed paths per symbol; on the disk path only a symbol whose path set differs is read.
+      // 8.9.5 (yaadgaar #112): R5 compares code paths only. A sealed auto entry (a doc or lock hit the script mapped,
+      // in a plan ref of any version) is dont_care by definition and left out; a doc the planner mapped itself stays.
+      // Review of #121: an auto entry is left out only when it is a doc or lock file and not a doctest at the merge (the
+      // grep's doctest list; with no list it stays), so the filter runs after the grep; the disk compare filters the same way
       const sealedPaths = {};
       for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).map((o) => at(occurrenceKey(o.at) || o.at));
       const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", sealedPaths, "path");
+      const dt = Array.isArray(g.doctest_md) ? g.doctest_md.map(normPath) : null;
+      const docHit = (p) => !!dt && docOrLockFile(p) && dt.indexOf(p) < 0;
+      for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).filter((o) => !(o && o.dont_care === AUTO_DONT_CARE && docHit(at(o.at)))).map((o) => at(occurrenceKey(o.at) || o.at));
       if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " call-shaped occurrences)";
       const unread = Object.keys(g.unread).sort(codePointCompare);
       if (unread.length) return "the occurrences of " + unread.join(", ") + " at the update merge differ from the sealed map and are over the caller read budget";
       const occ = [];
       for (const x of syms) for (const p of sealedPaths[x.symbol]) occ.push(p);
-      for (const n of Object.keys(g.occurrences)) for (const k of g.occurrences[n]) occ.push(at(k));
+      // an inline grep's auto hit is left out only when the script's own doc and lock list agrees (no doctest list: kept)
+      const autoHit = (n, k) => Array.isArray(g.auto_dont_care[n]) && g.auto_dont_care[n].indexOf(k) >= 0 && docHit(at(k));
+      for (const n of Object.keys(g.occurrences)) for (const k of g.occurrences[n]) if (!autoHit(n, k)) occ.push(at(k));
       for (const n of Object.keys(g.paths)) for (const p of g.paths[n]) occ.push(normPath(p));
       const oc = mv.filter((p) => occ.indexOf(p) >= 0);
       if (oc.length) return "the base change touches files with occurrences of the changed symbols" + list(oc);

@@ -35,7 +35,8 @@ const read = (F, part, syms, page) => {
 };
 const MAIN = { "src/a.py": "foo()\n\nfoo()\n", "README.md": "x\nfoo\n", "src/b.py": "x\nbaz()\n" };
 
-test("7.2.0 AC3: parts all, auto and paths of one page over two symbols; no auto key", () => {
+// 8.9.5 (yaadgaar #112): no part auto; part paths lists code paths only (README.md is a doc)
+test("7.2.0 AC3: parts all and paths of one page over two symbols; no auto key", () => {
   withRepo(MAIN, ["baz", "foo"], (F) => {
     const a = read(F, "all", '["baz","foo"]', 0);
     assert.equal(a.part, "all");
@@ -44,13 +45,10 @@ test("7.2.0 AC3: parts all, auto and paths of one page over two symbols; no auto
     assert.ok(!("auto" in a));
     assert.deepEqual(a.args, [F, "all", '["baz","foo"]', "0"]);
     assert.match(a.digest, /^[0-9a-f]{64}$/);
-    const u = read(F, "auto", '["baz","foo"]', 0);
-    assert.deepEqual(u.page, { index: 0, count: 1 });
-    assert.deepEqual(u.hits, { foo: ["README.md:2"] });
     const p = read(F, "paths", '["baz","foo"]', 0);
     assert.equal(p.part, "paths");
     assert.deepEqual(p.page, { index: 0, count: 1 });
-    assert.deepEqual(p.hits, { baz: ["src/b.py"], foo: ["README.md", "src/a.py"] });
+    assert.deepEqual(p.hits, { baz: ["src/b.py"], foo: ["src/a.py"] });
   });
 });
 

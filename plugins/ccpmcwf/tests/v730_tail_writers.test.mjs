@@ -57,8 +57,8 @@ test("7.3.0 A31: a post-PR infra:state step is a tail writer; infra:state:shippe
 });
 
 test("7.3.0 A31: dispatch counts a tail writer once before reserve; saveState sets the flag before the inline writer", () => {
-  // 8.5.3 (#111): an auto read is counted (state.autoReads) in the else branch, also before reserve
-  assert.match(body("dispatch", "async function "), /if \(TAIL_RE\.test\(label\) \|\| tailWriter\(label\)\) state\.tail\+\+;\n\s*else if \(AUTO_READ_RE\.test\(label\)\) state\.autoReads\+\+;\n\s*reserve\(1, label\);/);
+  // 8.9.5 (yaadgaar #112): no auto reads any more (8.5.3 counted them in an else branch here)
+  assert.match(body("dispatch", "async function "), /if \(TAIL_RE\.test\(label\) \|\| tailWriter\(label\)\) state\.tail\+\+;\n\s*reserve\(1, label\);/);
   const ss = body("saveState", "async function ");
   assert.ok(ss.indexOf("state.tailWriters = !!") >= 0 && ss.indexOf("state.tailWriters = !!") < ss.indexOf("r = await infra(label"), "set before the inline writer");
 });

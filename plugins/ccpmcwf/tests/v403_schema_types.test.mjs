@@ -628,7 +628,8 @@ const READS = {
     "e object": "prog:callers:symbols.*",
     "x integer": "prog:callers:symbols.*.count",
     "x string": "prog:callers:symbols.*.sha256",
-    "x string-re": "prog:callers:symbols.*.paths_sha256",
+    // 8.9.5 (yaadgaar #112): the code hashes
+    "x string-re": "prog:callers:symbols.*.code_paths_sha256",
     "disk.expected[s] array": PARSED_LOCAL,
   },
   callerReadParts: { "pg object": "prog:callers:page", "hits object": "prog:callers:hits", "hits array": "!prog:callers:hits" },
@@ -912,9 +913,8 @@ const READS = {
     "counts array": "parsed: state.ciCounts, bucket counts the script computed",
     "x integer": "parsed: a count or fix_rounds the script computed",
   },
-  // 8.5.3 (#111): + AUTO_READ_RE (caller-check auto reads sit outside the agent cap)
-  // 8.7.0: and the null retry's TAIL_RE and AUTO_READ_RE counts
-  dispatch: { "label string-re": ["parsed: the script's own step label", 4] },
+  // 8.7.0: and the null retry's TAIL_RE count; 8.9.5 (yaadgaar #112): AUTO_READ_RE is gone (no auto reads)
+  dispatch: { "label string-re": ["parsed: the script's own step label", 2] },
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
@@ -927,6 +927,9 @@ const READS = {
     // 8.9.3 (#117 i): + the body_decided default of a run-state before 8.9.3
     "resume.auto_decisions array": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
+    // 8.9.5 (yaadgaar #112): R5 leaves out an inline grep's auto hit only with a doctest list
+    "g.doctest_md array": "prog:callers:doctest_md",
+    "g.auto_dont_care[n] array": "prog:callers:auto_dont_care.*",
     // 6.0.0 (ledger 2044)
     "ref.history.audits number": PARSED_REF,
     // 6.0.0 (ledger 2045)
@@ -1338,7 +1341,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.4\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.4\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.5\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.5\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

@@ -69,7 +69,8 @@ const SAMPLES = [
   "infra:callers",
   // 7.2.0 (L2178): the on-disk handoff
   "infra:callers:file",
-  "infra:callers:read:auto:0",
+  // 8.9.5 (yaadgaar #112): part auto is gone; part all is a live read label
+  "infra:callers:read:all:0",
   "infra:push",
   "infra:push:p2",
   "infra:push-probe",

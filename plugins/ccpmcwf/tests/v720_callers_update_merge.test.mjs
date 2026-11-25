@@ -1,5 +1,6 @@
 // fleet 7.2.0 (L2178, yaadgaar #44) AC9: the update-merge grep infra:callers:u1 takes the disk path
-// at path level: the sealed path set per symbol against the summary paths_sha256; a line shift
+// at path level: the sealed path set per symbol against the summary paths_sha256 (8.9.5, yaadgaar #112:
+// the code paths against code_paths_sha256); a line shift
 // needs no read; a changed path set reads part paths only; over the budget R5 refuses.
 
 import { test } from "node:test";
