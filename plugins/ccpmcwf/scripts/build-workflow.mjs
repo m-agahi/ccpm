@@ -79,7 +79,10 @@ export function stripLines(source) {
 }
 
 // 8.6.0 (ADR-1403): the tokens after which a `/` starts a regex literal, not a division
-const REGEX_AFTER = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+// (8.9.4: `of` only inside a for head; a word after a single `.` is a property name, never one of these)
+const REGEX_AFTER = new Set(["return", "typeof", "instanceof", "in", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+// 8.9.4 (yaadgaar #114): the words before a `(` whose `)` ends a statement head, so a `/` after that `)` starts a regex
+const HEADS = new Set(["if", "while", "with", "for"]);
 // an identifier, keyword or number character (any non-ASCII character counts)
 const isWord = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$" || c === "\\" || c === "#" || c >= "\x80";
 const JOINS = new Set(["++", "--", "//", "/*", "->", "<!"]);
@@ -92,8 +95,10 @@ export function collapse(text) {
   const tpl = []; // open `${` per template level: the depth of { inside it
   const n = text.length;
   let i = 0;
-  let last = ""; // the last token: "w" word, "r" regex, "v" other value, "p" punctuator
-  let word = "";
+  let last = ""; // the last token: "w" word, "r" regex, "v" other value, "p" punctuator, "d" a single `.`
+  let word = ""; // the last word ("" for a property name after a single `.`)
+  let prev = ""; // the word before `word` when the two are adjacent tokens
+  const parens = []; // per open `(`: "f" a for head, "c" an if, while or with head, "" any other
   const tplText = () => {
     const s = i;
     for (;;) {
@@ -120,7 +125,7 @@ export function collapse(text) {
       while (text[j] === " " || text[j] === "\t") j++;
       const a = out.length ? out[out.length - 1].slice(-1) : "";
       const b = j < n ? text[j] : "";
-      if (a !== "" && a !== "\n" && b !== "" && b !== "\n" && ((isWord(a) && isWord(b)) || JOINS.has(a + b) || (a >= "0" && a <= "9" && b === ".") || (a === "?" && b === ".") || (last === "r" && a === "/" && isWord(b)))) out.push(" ");
+      if (a !== "" && a !== "\n" && b !== "" && b !== "\n" && ((isWord(a) && isWord(b)) || JOINS.has(a + b) || (a >= "0" && a <= "9" && b === ".") || (a === "?" && b === ".") || (last === "r" && a === "/" && isWord(b)) || (last === "w" && a === "." && isWord(b)))) out.push(" ");
       i = j;
     } else if (c === "\n") {
       out.push(c);
@@ -147,7 +152,7 @@ export function collapse(text) {
       if (j < 0) throw new Error("a block comment does not close");
       out.push(text.slice(i, j + 2));
       i = j + 2;
-    } else if (c === "/" && (last === "w" ? REGEX_AFTER.has(word) : last !== "v" && last !== "r")) {
+    } else if (c === "/" && (last === "w" ? REGEX_AFTER.has(word) || (word === "of" && parens[parens.length - 1] === "f") : last !== "v" && last !== "r")) {
       let j = i + 1;
       let cls = false;
       while (j < n && text[j] !== "\n" && (cls || text[j] !== "/")) {
@@ -165,10 +170,18 @@ export function collapse(text) {
     } else if (isWord(c)) {
       let j = i;
       while (j < n && isWord(text[j])) j++;
-      word = text.slice(i, j);
-      out.push(word);
+      // 8.9.4: a number takes one trailing `.` and the word chars after it (`1.`, `1.5e3`)
+      if (c >= "0" && c <= "9" && text[j] === ".") for (j++; j < n && isWord(text[j]); ) j++;
+      prev = last === "w" ? word : "";
+      word = last === "d" ? "" : text.slice(i, j);
+      out.push(text.slice(i, j));
       i = j;
       last = "w";
+    } else if ((c === "+" || c === "-") && text[i + 1] === c) {
+      // 8.9.4: `++` and `--` are one token; a `/` after one is a division
+      out.push(c + c);
+      i += 2;
+      last = "v";
     } else {
       i++;
       if (c === "}" && tpl.length && tpl[tpl.length - 1] === 0) {
@@ -180,7 +193,9 @@ export function collapse(text) {
       if (c === "{" && tpl.length) tpl[tpl.length - 1]++;
       if (c === "}" && tpl.length) tpl[tpl.length - 1]--;
       out.push(c);
-      last = c === ")" || c === "]" || c === "}" ? "v" : "p";
+      const head = c === ")" ? parens.pop() : "";
+      if (c === "(") parens.push(last !== "w" ? "" : word === "for" || (word === "await" && prev === "for") ? "f" : HEADS.has(word) ? "c" : "");
+      last = c === "." && last !== "d" && out[out.length - 2] !== "." ? "d" : c === ")" ? (head ? "p" : "v") : c === "]" || c === "}" ? "v" : "p";
     }
   }
   if (tpl.length) throw new Error("a template expression does not close");

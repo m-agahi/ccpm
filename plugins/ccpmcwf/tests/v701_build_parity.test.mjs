@@ -114,6 +114,14 @@ test("AC6: triangulation, equality holds across marker, whitespace and meta vari
     "a later `};` line in the body is not the meta end": head + "const o = {\n  k: 1,\n};\n" + tail,
     "meta end is the first line that is exactly `};`, not a line that only starts with it": 'export const meta = {\n  a: 1,\n};x\n};\n' + tail,
     "no final newline in the body": head + "function f() {\n  return a;\n}",
+    // 8.9.4 (yaadgaar #114): the tokenizer shapes, built the same in both ports
+    "a number with a trailing dot before a division or a keyword": head + "x = 1. / y / 2;\ny = 1. in x || 1. instanceof x;\nz = 2.5 / x / 3 + 1..toString();\n" + tail,
+    "a division after a postfix ++ or --; a regex after a single +": head + "x = a++ / 2 / b + (b-- / y / 2);\nz = a+++/x  y/.source + (a + +/x  y/.source);\n" + tail,
+    "a keyword after a dot is a property name": head + "y = a.of / 2 / b + a.in / 2 / b + a?.yield / 2 / b + x.return / 2 / x.typeof;\nw = a.\nof / 2 / b;\n" + tail,
+    "of is a keyword only in a for head": head + "const of = 4; y = of / 2 / b + [...of] / 2 / b;\nfor ( const q of /a  b/.exec(s) ) f(q);\n" + tail,
+    "a regex after the ) of a control head": head + "if ( x ) /a  b/.test(s);\nwhile ( f(x) ) /a  b/.test(s);\nfor ( ;; ) /a  b/.test(s);\nfor await ( const q of a ) /a  b/.test(q);\n" + tail,
+    "a division after any other )": head + "x = f(a) / 2 / c + a.if(b) / 2 / c;\ny = (a)) / 2 / c;\n" + tail,
+    "a regex after } is lexed as a division": head + "{ a }\n/x  y/.test(s);\n" + tail,
   };
   for (const [name, src] of Object.entries(sources)) {
     const out = runPair(src);

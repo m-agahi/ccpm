@@ -1,5 +1,28 @@
 # Changelog
 
+## [8.9.4] - 2026-11-25
+
+ccpmcwf 8.9.4 (yaadgaar `#114`, ADR-1403): the dist collapse tokenizer (`collapse` in
+`scripts/build-workflow.mjs` and its port `gen_collapse` in `changed_defs.py`) lexes four more
+shapes right. Each one failed the build loudly before (the esbuild equivalence check, v631); none
+occurs in the source, so the dist bytes of the source do not change.
+
+### Fixed
+
+- A number takes one trailing `.` and the word chars after it: `1. / x` is a division (the build
+  threw "regex does not close"), and `1. in x` and `1. instanceof x` keep their space (the collapse
+  wrote invalid JS).
+- `++` and `--` are one token, so a `/` after them is a division: `a++ / 2`, `x-- / y`. A single
+  `+` or `-` before a `/` still starts a regex (`a+++/x/`, `a + +/x/`).
+- A word after a single `.` (also `?.`, not `...`) is a property name, never a keyword: `a.of / 2`,
+  `a.in / 2`, `a?.yield / 2`, `x.return / 2`. `of` starts a regex after it only inside a `for` head,
+  so a bare `of` identifier before `/` divides.
+- A `)` that closes an `if`, `while`, `with`, `for` or `for await` head is followed by a regex, not
+  a division: `if (x) /a  b/.test(s)` keeps the regex text. A stack of open parens records the kind.
+- A regex after `}` is still lexed as a division and fails the esbuild check: block or object
+  literal needs statement context (labels, `case`, declarations versus expressions, arrow bodies),
+  which the collapse does not track.
+
 ## [8.9.3] - 2026-11-25
 
 ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406, ADR-1387): a CI-timeout re-run resumes at the CI watch and posts neither the stats block nor a recorded CI write-back again; a plan stop after the plan ref commit re-runs as a build of that ref; late automatic decisions reach the CI write-back. The dist grows from 481,790 B to 484,236 B (+2,446 B; cap 520,000 B, ADR-1353).

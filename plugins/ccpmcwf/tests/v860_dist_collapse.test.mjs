@@ -73,6 +73,49 @@ test("8.6.0 ADR-1403: lines from a BEGIN marker to the next END marker stay as t
   assert.equal(body("const  a = 1;\n// FOO_END\nconst  b = 2;\n"), "const a=1;\n// FOO_END\nconst b=2;\n");
 });
 
+test("8.9.4 yaadgaar #114: a number takes a trailing dot, so a division or a keyword after it lexes right", () => {
+  assert.equal(body("x = 1. / y / 2;\n"), "x=1./y/2;\n");
+  assert.equal(body("y = 1. in x;\n"), "y=1. in x;\n");
+  assert.equal(body("y = 1. instanceof x;\n"), "y=1. instanceof x;\n");
+  assert.equal(body("y = 2.5 / x / 3 + 1..toString();\n"), "y=2.5/x/3+1..toString();\n");
+  assert.equal(body("x = 1 .toString() + 1.5 .toFixed();\n"), "x=1 .toString()+1.5 .toFixed();\n");
+});
+
+test("8.9.4 yaadgaar #114: a slash after a postfix ++ or -- is a division", () => {
+  assert.equal(body("x = a++ / 2 / b;\n"), "x=a++/2/b;\n");
+  assert.equal(body("x = b-- / y / 2;\n"), "x=b--/y/2;\n");
+  // guards: a single + before a slash still starts a regex
+  assert.equal(body("x = a+++/x  y/.source.length;\n"), "x=a+++/x  y/.source.length;\n");
+  assert.equal(body("x = a + +/x  y/.source.length;\n"), "x=a+ +/x  y/.source.length;\n");
+});
+
+test("8.9.4 yaadgaar #114: a keyword after a dot is a property name; of is a keyword only in a for head", () => {
+  assert.equal(body("y = a.of / 2 / b;\n"), "y=a.of/2/b;\n");
+  assert.equal(body("y = a.in / 2 / b;\n"), "y=a.in/2/b;\n");
+  assert.equal(body("y = a?.yield / 2 / b;\n"), "y=a?.yield/2/b;\n");
+  assert.equal(body("y = x.return / 2 / x.typeof;\n"), "y=x.return/2/x.typeof;\n");
+  assert.equal(body("y = a.\nof / 2 / b;\n"), "y=a.\nof/2/b;\n");
+  assert.equal(body("const of = 4; y = of / 2 / b;\n"), "const of=4;y=of/2/b;\n");
+  assert.equal(body("for ( const q of /a  b/.exec(s) ) f(q);\n"), "for(const q of/a  b/.exec(s))f(q);\n");
+  assert.equal(body("y = [...of] / 2 / b;\n"), "y=[...of]/2/b;\n");
+});
+
+test("8.9.4 yaadgaar #114: a regex after the ) of an if, while, with or for head keeps its text", () => {
+  assert.equal(body("if ( x ) /a  b/.test(s);\n"), "if(x)/a  b/.test(s);\n");
+  assert.equal(body("while ( f(x) ) /a  b/.test(s);\n"), "while(f(x))/a  b/.test(s);\n");
+  assert.equal(body("for ( ;; ) /a  b/.test(s);\n"), "for(;;)/a  b/.test(s);\n");
+  assert.equal(body("for await ( const q of a ) /a  b/.test(q);\n"), "for await(const q of a)/a  b/.test(q);\n");
+  // any other ) is a value: a division follows
+  assert.equal(body("x = f(a) / 2 / c;\n"), "x=f(a)/2/c;\n");
+  assert.equal(body("x = a.if(b) / 2 / c;\n"), "x=a.if(b)/2/c;\n");
+  assert.equal(body("x = (a)) / 2 / c;\n"), "x=(a))/2/c;\n");
+});
+
+test("8.9.4 yaadgaar #114: a regex after } stays lexed as a division, and the esbuild check fails it", () => {
+  // block or object literal needs statement context; the collapse does not track it
+  assert.equal(body("{ a }\n/x  y/.test(s);\n"), "{a}\n/x y/.test(s);\n");
+});
+
 test("8.6.0 ADR-1403: the build fails on a string, template or regex that does not close", () => {
   for (const bad of ['const s = "abc;\n', "const s = 'abc;\n", "const s = `abc;\n", "const s = `a ${ b;\n", "x = /abc;\n"]) {
     assert.throws(() => body(bad), undefined, JSON.stringify(bad));
