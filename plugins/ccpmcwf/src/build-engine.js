@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.2";
+const FLEET_VERSION = "8.9.3";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -229,7 +229,7 @@ const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates", "audit", "rounds", "relay-size", "plan", "push", "refs", "budget"];
 // 8.5.4 (#108): the one refusal for a plan_ref from fleet 2.1.3 or earlier (no 2.0.3 plan facts, no plan_diff, a ref_path)
 const LEGACY_REF = "plan_ref from an unsupported fleet version; re-run plan";
-const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
+const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", ready: "ci", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const BRIEF_MARKER = "<!-- fleet-brief:v1 -->";
 const MAX_REVIEWS = 2;
@@ -3808,6 +3808,8 @@ const state = {
   launch: null,
   launchRef: null,
   buildRef: null,
+  // 8.9.3 (review of #119): the plan ref an in-run re-plan committed, until buildFromRef adopts it
+  pendingReplanRef: null,
   milestone: null,
   dirty: null,
   parkDirty: false,
@@ -3907,7 +3909,7 @@ const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fl
 // 7.3.0 (Max: "Exempt writers"): so are the (soft) chunk writers of a run-state saveState writes after the PR is open;
 // car 3 (Max: "never halted for the cap after its PR is open"): and its infra:state:<label> program steps
 function tailWriter(l) {
-  return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l));
+  return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|ready|committed|pushed)(:|$)/.test(l));
 }
 
 // 8.5.6 (#108 item 8, ADR-1397): the output tokens (budget.spent() growth, TOK) a run may spend; checked between steps only
@@ -4440,13 +4442,17 @@ function recoverOf(status) {
   if (c !== "transient") return { class: c === "mechanical" ? c : "safety", action: "none" };
   const no = (why) => ({ class: c, action: "none", why });
   if (state.rerunOf) return no("this run is already the automatic re-run of run " + state.rerunOf);
+  // 8.9.3 (review of #119): two states no run-state resumes from; script state only, fail closed
+  if (state.prUpdated) return no("the PR branch was updated in this run; a re-run cannot resume after update-branch");
+  if (state.pendingReplanRef) return no("an in-run re-plan committed a new plan ref that this run did not adopt");
   const a = { mode: state.launch };
-  if (state.launch === "plan" && !state.buildRef) {
+  if (state.launch === "plan" && !state.buildRef && !state.planRef) {
     if (state.parkDirty) return no("the draft plan is still in the worktree (the park failed)");
     if (state.checkpoint) a.checkpoint = state.checkpoint;
   } else if (state.launch !== "probe") {
     a.mode = "build";
-    a.plan_ref = state.buildRef;
+    // 8.9.3 (#117 f): a plan stop after the plan ref commit (the auto gates) builds that ref; the :rerun gates run them again
+    a.plan_ref = state.buildRef || state.planRef;
     // a plan launch that built in the same run: build mode runs the intent, command and scope gates again
     // (a build that re-planned in this run builds a ref no human confirmed: the same)
     if (state.launch === "plan" || state.buildRef !== state.launchRef) {
@@ -6944,7 +6950,8 @@ async function planMode(input, date) {
   const src = sha256Hex(canonical([raw, brief.sources.map((x) => [x.kind, x.ref, String(x.body).replace(/\s+/g, " ").trim()])]));
   const ck = parkedBad ? null : resumeOf(parked, input.checkpoint, scan.head, src);
   // P3: the parked round count and fingerprint go on only for the same task source
-  const carry = ck || (parked && parked.src === src ? parked : null);
+  // 8.9.3 (#117 g, option A): a park with a checkpoint carries its round and fingerprint only through that checkpoint
+  const carry = ck || (parked && parked.src === src && !parked.ckpt ? parked : null);
   if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
   // the throwaway test database, up through plan-audit
   await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
@@ -7061,6 +7068,9 @@ async function planMode(input, date) {
         policy: planPolicy,
       },
     });
+    // 8.9.3 (#117 f): the ref this run sealed (and its relaxed list): a stop before the build re-runs as a build of it
+    state.planRef = pc.tiny;
+    state.sealedRelaxed = p.relaxed.slice();
   } catch (e) {
     await parkOnStop(e);
   }
@@ -7487,6 +7497,7 @@ function partReader(o) {
 async function buildFromRef(input, date, tiny, lay, ws, opt) {
   state.mode = "build";
   state.buildRef = tiny;
+  state.pendingReplanRef = null;
   // 8.9.2 (#116 a): the relaxed list sealed in this ref (null until it loads, and for a ref sealed before 8.9.2)
   state.sealedRelaxed = null;
   const repo = cleanRepo(tiny.repo);
@@ -7736,6 +7747,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 8.9.2 (#116 b): {gate, decision, reason} strings (absent in a run-state of an attended run before 8.9.2)
       const ad = st.auto_decisions;
       if (ad !== undefined && (!Array.isArray(ad) || ad.some((d) => !d || typeof d !== "object" || Array.isArray(d) || ["gate", "decision", "reason"].some((k) => typeof d[k] !== "string")))) mis("auto_decisions");
+      // 8.9.3 (#117 d): a boolean (required at ready; absent before 8.9.3); the CI write-back record, {ledger_status, comment_status}
+      if (st.last_gate === "ready" ? typeof st.pr_ready !== "boolean" : st.pr_ready !== undefined && typeof st.pr_ready !== "boolean") mis("pr_ready " + JSON.stringify(st.pr_ready === undefined ? null : st.pr_ready));
+      const cw = st.ci_write_back;
+      // review of #119: the two statuses are the write-back's enums (writeBack, and the failed record of ciWriteBack)
+      if (cw !== undefined && (!cw || typeof cw !== "object" || Array.isArray(cw) || !["ok", "failed", "unavailable", "none"].includes(cw.ledger_status) || !["posted", "skipped", "failed", "none"].includes(cw.comment_status))) mis("ci_write_back");
+      // 8.9.3 (#117 i): a count of the run-state's auto_decisions (absent before 8.9.3)
+      const bd = st.body_decided;
+      if (bd !== undefined && (!Number.isInteger(bd) || bd < 0 || bd > (Array.isArray(ad) ? ad.length : 0))) mis("body_decided");
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
       resume = st;
@@ -7910,6 +7929,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       halt("s", "needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "push");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
     const opener = async (lb, more) => {
+      // 8.9.3 (#117 i): the decisions this body's Unattended section holds; later ones go to the CI write-back
+      state.bodyDecided = state.autoDecisions.length;
       const x = requireOk(
         "fleet-pr-opener",
         await callRole(
@@ -8014,11 +8035,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           ...(state.unattended ? { unattended: state.unattended } : {}),
           // 8.9.2 (#116 b): an attended run's automatic decisions too, so a resume keeps them
           auto_decisions: state.autoDecisions,
+          // 8.9.3 (#117 i): how many of them the PR body's Unattended section holds
+          ...(Number.isInteger(state.bodyDecided) ? { body_decided: state.bodyDecided } : {}),
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
           iac_touched: iacTouched,
           ci: state.ci || null,
+          // 8.9.3 (#117 d): the ready milestone resumes at the CI watch, which reads it; the CI write-back a run posted
+          pr_ready: state.prReady === true,
+          ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
           pr_updated: state.prUpdated === true,
           update: state.update || null,
           // 7.3.0 (#32 leftover): the orch_scan warning stays in the PR test block across a resume
@@ -8069,7 +8095,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   async function shipSteps(from) {
     const steps = ["push", "pr", "review", "writeback", "stats", "ready", "ci"];
     // 7.1.0 (L2145, ruling AC5 (a)): a resume at the review or later checks the PR body once more, before that step, with no rewrite
-    if (resume && state.testsResumed !== true && ["review", "writeback", "stats"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
+    if (resume && state.testsResumed !== true && ["review", "writeback", "stats", "ci"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
       state.testsResumed = true;
       const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
       const targs = [ghCmd("test block", "push"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
@@ -8223,8 +8249,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
         await saveState("written_back", "infra:state:written_back" + (pushes > 1 ? ":p" + pushes : ""));
       } else if (step === "stats") await statsStep();
-      else if (step === "ready") await readyStep();
-      else {
+      else if (step === "ready") {
+        await readyStep();
+        // 8.9.3 (#117 d): stats and ready done; never after update-branch (Max: no resume point there)
+        if (!state.prUpdated) await saveState("ready", "infra:state:ready" + (pushes > 1 ? ":p" + pushes : ""));
+      } else {
         const f = await ciGuard(async () => {
           const r = await ciStep();
           if (r && r.gate === "update") await adoptUpdate(r);
@@ -8493,7 +8522,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (ciWbDone || !state.ci || !pr || !pr.pr_url) return;
     ciWbDone = true;
     const c = state.ci;
-    const line = ciLine(c, state.ciCounts, stopReason);
+    const line = ciLine(c, state.ciCounts, stopReason) + lateDecided();
     const sg = state.stopGate;
     const sc = state.stopClass;
     try {
@@ -8512,7 +8541,20 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return await fn();
     } catch (e) {
       if (e instanceof Stop) await ciWriteBack(ciStopCode(e.gate, e.reason));
+      if (e instanceof Stop) await ciWbRecord(e);
       throw e;
+    }
+  }
+  // 8.9.3 (#117 d): a transient CI stop records its CI write-back in the ready run-state, so the re-run skips it.
+  // Never halts the stop: a failed write fails closed (its swallowed stop, or safety, makes the class worse: no re-run)
+  async function ciWbRecord(e) {
+    const w = state.ciWriteBack;
+    if (e.cls !== "transient" || state.prUpdated || state.milestone !== "ready" || !w || w.ledger_status === "failed" || w.comment_status === "failed") return;
+    try {
+      await saveState("ready", "infra:state:ready:ci-wb");
+    } catch (x) {
+      if (!(x instanceof Stop)) state.stopLog.push("safety");
+      gate("warning: the CI write-back is not recorded in the run-state");
     }
   }
   // ADR-1215: the stats block again at run end (CI-fix rounds, CI wait), only on a PR still open
@@ -8653,6 +8695,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;
       prOpens = 1;
+      // 8.9.3 (#117 i): a run-state before 8.9.3 counts every resumed decision as in the body
+      state.bodyDecided = resume.body_decided !== undefined ? resume.body_decided : Array.isArray(resume.auto_decisions) ? resume.auto_decisions.length : 0;
     }
     if (resume.write_back)
       wb = {
@@ -8664,6 +8708,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         comment_status: resume.comment_status,
         comment_text: resume.comment_text,
       };
+    // 8.9.3 (#117 d): a resume at the CI watch skips ready; the recorded CI write-back is not posted again
+    if (resume.last_gate === "ready") state.prReady = resume.pr_ready;
+    if (resume.ci_write_back) {
+      state.ciWriteBack = resume.ci_write_back;
+      ciWbDone = true;
+    }
     const next = RESUME_NEXT[resume.last_gate];
     state.milestone = resume.last_gate;
     if (next === "done") {
@@ -8688,7 +8738,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       gate(rl + ": " + pr.pr_url + " is open at the run-state's " + approvedSha);
     }
     // review NIT: a merge that landed before the shipped run-state: record it, clean up, done
-    if (next === "stats" && pr && pr.pr_number != null && ghFor(remoteSlug) && ghFor(remoteSlug).gh_cmd) {
+    if ((next === "stats" || next === "ci") && pr && pr.pr_number != null && ghFor(remoteSlug) && ghFor(remoteSlug).gh_cmd) {
       const v = await prState("infra:pr-view:resume", ["view", ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number), approvedSha], "read the state of the fleet's own PR (read only)", "resume");
       if (v.error === null && v.state === "MERGED" && v.head === approvedSha && typeof v.merge_sha === "string" && /^[0-9a-f]{40}$/.test(v.merge_sha)) {
         state.ci = Object.assign({ verdict: "green", checks: [], fix_rounds: state.rounds.ci || 0, auto_merge_enabled: false }, state.ci || {}, { merged: true, merge_sha: v.merge_sha });
@@ -9695,6 +9745,8 @@ async function replan(ctx) {
       policy: state.policy,
     },
   });
+  // 8.9.3 (review of #119): from here to buildFromRef the run's build ref is the old one; a re-run of it is doomed
+  state.pendingReplanRef = pc.tiny;
   const newHead = pc.tiny.plan_commit;
   const rs = await infra(
     "infra:replan-reset",
@@ -9775,6 +9827,13 @@ function ciLine(c, counts, stopCode) {
     "; checks " + n(k[0]) + " passed, " + n(k[1]) + " failed, " + n(k[2]) + " pending" +
     (stopCode ? "; stopped: " + (CI_STOP_CODES.indexOf(stopCode) >= 0 ? stopCode : "other") : "")
   );
+}
+// 8.9.3 (#117 i): an unattended run's decisions made after its PR body was written (gate and decision only, script tokens)
+function lateDecided() {
+  const b = state.bodyDecided;
+  const l = state.unattended && Number.isInteger(b) ? state.autoDecisions.slice(b) : [];
+  const t = (x) => String(x).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 40);
+  return l.length ? "; automatic decisions after the PR body: " + l.slice(0, 10).map((d) => t(d.gate) + " " + t(d.decision)).join(", ") + (l.length > 10 ? ", and " + (l.length - 10) + " more" : "") : "";
 }
 // 2034.5: ctx.ci (a CI outcome line) writes the follow-up: its own marker fleet:<task>:ci, heading and labels (:ci)
 async function writeBack(ctx) {

@@ -418,3 +418,17 @@ test("8.5.6 P1: a resumed seal records the audit and the run it resumed from", a
   assert.equal(h.audits, 1, JSON.stringify(h));
   assert.equal(h.resumed_from, NONCE);
 });
+
+// 8.9.3 (yaadgaar #117 (g), option A): a park that holds a checkpoint carries its round and fingerprint only
+// through an accepted checkpoint; a refused checkpoint starts the plan audit at round 0 with no fingerprint
+test("8.9.3 (g): a refused checkpoint carries no parked round and no fingerprint: the audit starts at round 0", async () => {
+  const { findings } = await stopAfterAudit();
+  const j = JSON.parse(findings);
+  assert.equal(typeof j.ckpt, "string");
+  j.round = 1;
+  j.fp = "0123456789abcdef";
+  const r = await resume(JSON.stringify(j), {}, (s) => (s["role:plan-audit"] = DEFECT));
+  assert.ok(r.result.gate_log.some((g) => g.startsWith("checkpoint of run " + NONCE + " not used (args.checkpoint does not name it")), r.result.gate_log.filter((g) => /checkpoint/.test(g)).join("\n"));
+  assert.ok(!r.result.gate_log.some((g) => /^parked round /.test(g)), r.result.gate_log.filter((g) => /parked/.test(g)).join("\n"));
+  assert.ok(r.result.gate_log.some((g) => /^plan findings fingerprint round 0: /.test(g)), r.result.gate_log.filter((g) => /fingerprint/.test(g)).join("\n"));
+});

@@ -289,14 +289,15 @@ test("8.9.0: a plan launch that built in the same run re-runs as a build with co
   assert.equal(out.result.recover.args.confirm, "auto");
   assert.deepEqual(out.result.recover.args.plan_ref, out.result.plan_ref);
   assert.equal(out.result.recover.args.freeze_digest, out.result.freeze_digest);
-  // and a stop in the auto gates (before the build) re-runs the plan
+  // and a stop in the auto gates (after the plan ref commit, before the build): 8.9.3 (#117 f) re-runs a build of that ref
   const g = Object.assign(happy(), INTENT_OK, { "role:fleet-intent-judge": [null] });
   const og = await runOne(g, Object.assign({}, ARGS, { confirm: "auto" }));
   assert.equal(og.result.stop_class, "transient", og.result.reason);
-  assert.deepEqual(og.result.recover.args, { mode: "plan", rerun_of: NONCE });
-  const r = await runOne(Object.assign(happy(), INTENT_OK), relaunch(Object.assign({}, ARGS, { confirm: "auto" }), og.result.recover));
+  assert.deepEqual([og.result.recover.args.mode, og.result.recover.args.confirm, og.result.recover.args.rerun_of], ["build", "auto", NONCE]);
+  Object.assign(g, { "hasher:pre-intent:rerun": INTENT_OK["hasher:pre-intent"], "hasher:fp-post:intent:rerun": INTENT_OK["hasher:fp-post:intent"], "role:fleet-intent-judge:rerun": INTENT_OK["role:fleet-intent-judge"] });
+  const r = await runOne(g, relaunch(Object.assign({}, ARGS, { confirm: "auto" }), og.result.recover));
   assert.equal(r.result.status, "ok", r.result.reason);
-  assert.ok(has(r, "role:fleet-intent-judge"));
+  assert.ok(has(r, "role:fleet-intent-judge:rerun"));
 });
 
 // ---------------------------------------------------------------- 4: the class on the Stop
@@ -421,7 +422,8 @@ test("8.9.0 review: a stop after update-branch moved the worktree, before its ru
   assert.ok(out.build.labels.includes("infra:pr-fetch:u1"), out.build.labels.join(", "));
   assert.equal(out.result.stop_class, "transient", out.result.reason);
   assert.equal(out.result.recover.action, "none");
-  assert.match(out.result.recover.why, /after the run-state written_back/);
+  // 8.9.3 (review of #119): an update-branch in this run is checked before the coder flag
+  assert.equal(out.result.recover.why, "the PR branch was updated in this run; a re-run cannot resume after update-branch");
 });
 
 // review B1 of #116: in 8.9.0 the relaxed list was not sealed in the plan ref, so a relaxed plan built in the run never
