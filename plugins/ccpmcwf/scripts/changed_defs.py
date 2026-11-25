@@ -144,9 +144,11 @@ GEN_DIST = 'plugins/ccpmcwf/workflows/build-engine.js'
 GEN_SRC = 'plugins/ccpmcwf/src/build-engine.js'
 GEN_MARK = re.compile(r'// [A-Z0-9_]+_(BEGIN|END)\Z')
 generated = set()
-# 8.6.0 (ADR-1403): port of collapse (scripts/build-workflow.mjs), char for char
-GEN_RX_AFTER = {'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'}
-GEN_JOINS = {'++', '--', '//', '/*', '->', '<!'}
+# 8.6.0 (ADR-1403): port of collapse (scripts/build-workflow.mjs), char for char (8.9.4, yaadgaar #114: trailing-dot numbers, ++ and --, property names, statement heads)
+GEN_RX_AFTER = {'return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'}
+GEN_HEADS = {'if', 'while', 'with', 'for'}
+GEN_DECLS = {'const', 'let', 'var'}
+GEN_JOINS = {'++', '--', '//', '/*', '*/', '->', '<!'}
 GEN_WORD = re.compile('[A-Za-z0-9_$\\\\#\x80-\U0010ffff]+')
 GEN_SPACE = re.compile('[ \t]+')
 def gen_isword(c):
@@ -154,8 +156,8 @@ def gen_isword(c):
 def gen_collapse(t):
     # each space or tab run outside string, template, regex and comment text dropped, or cut to one
     # space where the chars on both sides could join; ValueError on a literal that does not close
-    out, tpl, n = [], [], len(t)
-    i, last, word = 0, '', ''
+    out, tpl, n, parens = [], [], len(t), []
+    i, last, word, prev = 0, '', '', ''
     def tpl_text():
         nonlocal i, last
         s = i
@@ -185,7 +187,8 @@ def gen_collapse(t):
             a = out[-1][-1] if out else ''
             b = t[j] if j < n else ''
             if a not in ('', '\n') and b not in ('', '\n') and ((gen_isword(a) and gen_isword(b)) or a + b in GEN_JOINS or ('0' <= a <= '9' and b == '.')
-                                                              or (a == '?' and b == '.') or (last == 'r' and a == '/' and gen_isword(b))):
+                                                              or (a == '?' and b == '.') or (last == 'r' and a == '/' and gen_isword(b))
+                                                              or (last == 'w' and a == '.' and gen_isword(b))):
                 out.append(' ')
             i = j
         elif c == '\n':
@@ -215,7 +218,7 @@ def gen_collapse(t):
                 raise ValueError('comment')
             out.append(t[i:j + 2])
             i = j + 2
-        elif c == '/' and (word in GEN_RX_AFTER if last == 'w' else last not in ('v', 'r')):
+        elif c == '/' and ((word in GEN_RX_AFTER or word == 'of') if last == 'w' else last not in ('v', 'r')):
             j, cls = i + 1, False
             while j < n and t[j] != '\n' and (cls or t[j] != '/'):
                 if t[j] == '\\':
@@ -233,9 +236,21 @@ def gen_collapse(t):
             i, last = j, 'r'
         elif gen_isword(c):
             j = GEN_WORD.match(t, i).end()
-            word = t[i:j]
-            out.append(word)
+            if '0' <= c <= '9' and t[j:j + 1] == '.':
+                m = GEN_WORD.match(t, j + 1)
+                j = m.end() if m else j + 1
+            w = t[i:j]
+            kw = w == 'of' and parens[-1:] == ['f'] and (last == 'v' or (last == 'w' and word not in GEN_RX_AFTER and word not in GEN_DECLS))
+            if kw:
+                parens[-1] = 'F'
+            plain = last == 'd' or (w == 'of' and not kw)
+            prev = word if last == 'w' else ''
+            word = '' if plain else w
+            out.append(w)
             i, last = j, 'w'
+        elif c in '+-' and t[i + 1:i + 2] == c:
+            out.append(c + c)
+            i, last = i + 2, 'v'
         else:
             i += 1
             if c == '}' and tpl and tpl[-1] == 0:
@@ -248,7 +263,15 @@ def gen_collapse(t):
             if c == '}' and tpl:
                 tpl[-1] -= 1
             out.append(c)
-            last = 'v' if c in ')]}' else 'p'
+            head = (parens.pop() if parens else '') if c == ')' else ''
+            if c == '(':
+                parens.append('' if last != 'w' else 'f' if word == 'for' or (word == 'await' and prev == 'for') else 'c' if word in GEN_HEADS else '')
+            if c == '.' and last != 'd' and (len(out) < 2 or out[-2] != '.'):
+                last = 'd'
+            elif c == ')':
+                last = 'p' if head else 'v'
+            else:
+                last = 'v' if c in ']}' else 'p'
     if tpl:
         raise ValueError('template')
     return ''.join(out)

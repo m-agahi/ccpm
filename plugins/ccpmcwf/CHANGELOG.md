@@ -1,5 +1,38 @@
 # Changelog
 
+## [8.9.4] - 2026-11-25
+
+ccpmcwf 8.9.4 (yaadgaar `#114`, ADR-1403): the dist collapse tokenizer (`collapse` in
+`scripts/build-workflow.mjs` and its port `gen_collapse` in `changed_defs.py`) lexes four more
+shapes right. Each one failed the build loudly before (the esbuild equivalence check, v631); none
+occurs in the source, so the dist bytes of the source do not change.
+
+### Fixed
+
+- A number takes one trailing `.` and the word chars after it: `1. / x` is a division (the build
+  threw "regex does not close"), and `1. in x` and `1. instanceof x` keep their space (the collapse
+  wrote invalid JS).
+- `++` and `--` are one token, so a `/` after them is a division: `a++ / 2`, `x-- / y`. A single
+  `+` or `-` before a `/` still starts a regex (`a+++/x/`, `a + +/x/`).
+- A word after a single `.` (also `?.`, not `...`) is a property name, never a keyword: `a.of / 2`,
+  `a.in / 2`, `a?.yield / 2`, `x.return / 2`. Only the first `of` after the binding of a `for` head
+  starts a regex after it: `for (const q of /re/...)` and `for (const of of /re/...)` keep the
+  regex, while an `of` identifier before `/` divides: `of / 2`, `for (const q of !of / 2)` and
+  `for (const q of of / 2)`.
+- A `)` that closes an `if`, `while`, `with`, `for` or `for await` head is followed by a regex, not
+  a division: `if (x) /a  b/.test(s)` keeps the regex text. A stack of open parens records the kind.
+- A regex after `}` is still lexed as a division and fails the build: block or object literal needs
+  statement context (labels, `case`, declarations versus expressions, arrow bodies), which the
+  collapse does not track.
+- Review of `#120`: `*/` joins the pairs the collapse never forms, in both ports, so `* /` keeps
+  one space. A misread regex after `}` could otherwise close a block comment early
+  (`{}\n/'/ /* ' * / evil();` gave `/* '*/ evil();`), and `gen_fresh` in `changed_defs.py` runs the
+  Python port with no esbuild check.
+- Review of `#120`: the build compiles the dist body once (`vm.Script`, not run) and fails when it
+  does not compile. esbuild folds a regex in a truthy position (`/re/ && f()` gives `f()`), so
+  `{ }\n/( ?)/ && f();`, collapsed to `/(?)/&&f();`, minified to the same bytes, but V8 rejects it.
+  The v631 test and `--check` call the same `equivalence`.
+
 ## [8.9.3] - 2026-11-25
 
 ccpmcwf 8.9.3 (yaadgaar `#117`, follow-ups of `#108` batch B; ADR-1415, ADR-1406, ADR-1387): a CI-timeout re-run resumes at the CI watch and posts neither the stats block nor a recorded CI write-back again; a plan stop after the plan ref commit re-runs as a build of that ref; late automatic decisions reach the CI write-back. The dist grows from 481,790 B to 484,236 B (+2,446 B; cap 520,000 B, ADR-1353).

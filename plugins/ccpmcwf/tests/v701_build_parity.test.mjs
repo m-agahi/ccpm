@@ -114,6 +114,15 @@ test("AC6: triangulation, equality holds across marker, whitespace and meta vari
     "a later `};` line in the body is not the meta end": head + "const o = {\n  k: 1,\n};\n" + tail,
     "meta end is the first line that is exactly `};`, not a line that only starts with it": 'export const meta = {\n  a: 1,\n};x\n};\n' + tail,
     "no final newline in the body": head + "function f() {\n  return a;\n}",
+    // 8.9.4 (yaadgaar #114): the tokenizer shapes, built the same in both ports
+    "a number with a trailing dot before a division or a keyword": head + "x = 1. / y / 2;\ny = 1. in x || 1. instanceof x;\nz = 2.5 / x / 3 + 1..toString();\n" + tail,
+    "a division after a postfix ++ or --; a regex after a single +": head + "x = a++ / 2 / b + (b-- / y / 2);\nz = a+++/x  y/.source + (a + +/x  y/.source);\n" + tail,
+    "a keyword after a dot is a property name": head + "y = a.of / 2 / b + a.in / 2 / b + a?.yield / 2 / b + x.return / 2 / x.typeof;\nw = a.\nof / 2 / b;\n" + tail,
+    "of is a keyword only in a for head": head + "const of = 4; y = of / 2 / b + [...of] / 2 / b;\nfor ( const q of /a  b/.exec(s) ) f(q);\nfor (const q of !of / 2 / b) f(q);\nfor (const q of of / 2 / b) f(q);\nfor (const of of /a  b/.exec(s)) f(of);\nfor (const [a] of /a  b/.exec(s)) f(a);\n" + tail,
+    "a regex after the ) of a control head": head + "if ( x ) /a  b/.test(s);\nwhile ( f(x) ) /a  b/.test(s);\nfor ( ;; ) /a  b/.test(s);\nfor await ( const q of a ) /a  b/.test(q);\n" + tail,
+    "a division after any other )": head + "x = f(a) / 2 / c + a.if(b) / 2 / c;\ny = (a)) / 2 / c;\n" + tail,
+    "a regex after } is lexed as a division": head + "{ a }\n/x  y/.test(s);\n" + tail,
+    "a * before / keeps one space, so no */ forms": head + "x = a * /re/.source + a * /* c */ b;\n" + tail,
   };
   for (const [name, src] of Object.entries(sources)) {
     const out = runPair(src);
@@ -179,6 +188,31 @@ test("AC6: triangulation, meta head without a closing `};` line gives no build",
   const next = 'export const meta = {\n  name: "x",\nconst a = 2;\n';
   const out = scan({ [S]: base, [D]: base }, { [S]: next, [D]: next });
   assert.deepEqual(out.generated, []);
+});
+
+// 8.9.4 (review of #120): gen_collapse alone (changed_defs gen_fresh trusts it with no esbuild check)
+function pyCollapse(text) {
+  const py = [
+    "import re, sys, json",
+    "src = open(sys.argv[1]).read()",
+    "a, b = src.index('\\nGEN_DIST = '), src.index('\\ndef gen_build(')",
+    "g = {'re': re}",
+    "exec(src[a:b], g)",
+    "print(json.dumps(g['gen_collapse'](sys.stdin.read())))",
+  ].join("\n");
+  const r = spawnSync("python3", ["-I", "-c", py, PROGRAM], { input: text, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+test("8.9.4 review of #120: gen_collapse never forms a `*/` from `* /`, even after a misread regex", () => {
+  const closes = (t) => t.split("*/").length - 1;
+  const head = 'export const meta = {\n  name: "x",\n};\n';
+  const repro = "{}\n/'/ /* ' * / evil(); x = y *// 1;\n2;\n";
+  const out = pyCollapse(repro);
+  assert.equal(closes(out), closes(repro), out);
+  assert.equal(out, build(head + repro).slice(head.length));
+  assert.equal(pyCollapse("x = a * /* c */ b;\n"), "x=a* /* c */b;\n");
 });
 
 test("8.6.0 ADR-1403: a literal that does not close gives no build in either port, so the dist is scanned", () => {
