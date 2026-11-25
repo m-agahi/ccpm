@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.5";
+const FLEET_VERSION="8.9.6";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -6078,11 +6078,12 @@ schema:INTAKE_SCHEMA,
 agentType:JUDGE_AGENT,
 phase:"Intake",
 });
-if(it.status==="needs_human"&&typeof it.reason==="string"&&it.reason.indexOf(RELAUNCH_REASON+":")===0){
+if(typeof it.reason==="string"&&it.reason.indexOf(RELAUNCH_REASON+":")===0){
 state.relaunch="intake";
 halt("s","needs_human","intake: "+cutText(it.reason).slice(0,300)+"; re-launch the workflow once in a turn whose latest human message is the build request","relaunch");
 }
 relayDecision(it,"intake",input,"valid");
+if(it.relay.kind==="request")relayDecision(it,"intake",input,"kind");
 const nl=TASK_ID_INPUT_RE.test(raw)?noLedgerStop(it,input.project):null;
 if(nl)halt("s","needs_human","intake: task id "+JSON.stringify(raw)+": "+nl);
 if(it.status!=="ok")halt("s",it.status==="failed"?"failed":"needs_human","intake "+it.status+": "+intakeHaltReason(it,raw));
