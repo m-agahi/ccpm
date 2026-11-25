@@ -121,6 +121,28 @@ test("8.9.4 yaadgaar #114: a regex after } stays lexed as a division, and the es
   assert.equal(body("{ a }\n/x  y/.test(s);\n"), "{a}\n/x y/.test(s);\n");
 });
 
+// the number of `*/` in a text
+const closes = (t) => t.split("*/").length - 1;
+
+test("8.9.4 review of #120: the collapse never forms a `*/` from `* /`, even after a misread regex", () => {
+  // a regex after } is misread, so `' * /` is collapsed; a `*/` there would close the comment the input opens
+  const repro = "{}\n/'/ /* ' * / evil(); x = y *// 1;\n2;\n";
+  const out = body(repro);
+  assert.equal(closes(out), closes(repro), out);
+  assert.equal(body("x = a * /re/.source.length;\n"), "x=a* /re/.source.length;\n");
+  assert.equal(body("x = a * /* c */ b;\n"), "x=a* /* c */b;\n");
+});
+
+test("8.9.4 review of #120: the build fails when the dist does not compile, even where esbuild sees equal bytes", () => {
+  // esbuild folds a regex in a truthy position (`/re/ && f()` gives `f()`), so the misread `/( ?)/` passes it
+  const src = HEAD + "{ }\n/( ?)/ && f();\n";
+  const dist = B.buildWorkflow(src);
+  assert.ok(dist.includes("/(?)/&&f();"), dist);
+  assert.match(String(B.equivalence(src, dist)), /does not compile/);
+  // a dist that compiles and minifies the same passes
+  assert.equal(B.equivalence(HEAD + "const  a = /( ?)/;\n", B.buildWorkflow(HEAD + "const  a = /( ?)/;\n")), null);
+});
+
 test("8.6.0 ADR-1403: the build fails on a string, template or regex that does not close", () => {
   for (const bad of ['const s = "abc;\n', "const s = 'abc;\n", "const s = `abc;\n", "const s = `a ${ b;\n", "x = /abc;\n"]) {
     assert.throws(() => body(bad), undefined, JSON.stringify(bad));

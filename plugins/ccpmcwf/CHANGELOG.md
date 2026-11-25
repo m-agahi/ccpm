@@ -21,9 +21,17 @@ occurs in the source, so the dist bytes of the source do not change.
   `for (const q of of / 2)`.
 - A `)` that closes an `if`, `while`, `with`, `for` or `for await` head is followed by a regex, not
   a division: `if (x) /a  b/.test(s)` keeps the regex text. A stack of open parens records the kind.
-- A regex after `}` is still lexed as a division and fails the esbuild check: block or object
-  literal needs statement context (labels, `case`, declarations versus expressions, arrow bodies),
-  which the collapse does not track.
+- A regex after `}` is still lexed as a division and fails the build: block or object literal needs
+  statement context (labels, `case`, declarations versus expressions, arrow bodies), which the
+  collapse does not track.
+- Review of `#120`: `*/` joins the pairs the collapse never forms, in both ports, so `* /` keeps
+  one space. A misread regex after `}` could otherwise close a block comment early
+  (`{}\n/'/ /* ' * / evil();` gave `/* '*/ evil();`), and `gen_fresh` in `changed_defs.py` runs the
+  Python port with no esbuild check.
+- Review of `#120`: the build compiles the dist body once (`vm.Script`, not run) and fails when it
+  does not compile. esbuild folds a regex in a truthy position (`/re/ && f()` gives `f()`), so
+  `{ }\n/( ?)/ && f();`, collapsed to `/(?)/&&f();`, minified to the same bytes, but V8 rejects it.
+  The v631 test and `--check` call the same `equivalence`.
 
 ## [8.9.3] - 2026-11-25
 

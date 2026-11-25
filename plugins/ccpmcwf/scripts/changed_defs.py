@@ -148,7 +148,7 @@ generated = set()
 GEN_RX_AFTER = {'return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'}
 GEN_HEADS = {'if', 'while', 'with', 'for'}
 GEN_DECLS = {'const', 'let', 'var'}
-GEN_JOINS = {'++', '--', '//', '/*', '->', '<!'}
+GEN_JOINS = {'++', '--', '//', '/*', '*/', '->', '<!'}
 GEN_WORD = re.compile('[A-Za-z0-9_$\\\\#\x80-\U0010ffff]+')
 GEN_SPACE = re.compile('[ \t]+')
 def gen_isword(c):

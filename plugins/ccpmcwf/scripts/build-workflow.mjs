@@ -39,6 +39,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { Script } from "node:vm";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,7 +87,8 @@ const HEADS = new Set(["if", "while", "with", "for"]);
 const DECLS = new Set(["const", "let", "var"]);
 // an identifier, keyword or number character (any non-ASCII character counts)
 const isWord = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$" || c === "\\" || c === "#" || c >= "\x80";
-const JOINS = new Set(["++", "--", "//", "/*", "->", "<!"]);
+// (8.9.4, review of #120: `*/` too, so a misread regex never closes a block comment early)
+const JOINS = new Set(["++", "--", "//", "/*", "*/", "->", "<!"]);
 
 // 8.6.0 (ADR-1403): `text` with each space or tab run outside string, template,
 // regex and comment text dropped, or cut to one space where the chars on both
@@ -254,6 +256,13 @@ const wrapped = (text) => minifyWhitespace(WRAP_HEAD + "\n" + splitMeta(text).bo
 // null when the source and the dist minify to the same bytes, else the first difference
 export function equivalence(source, dist) {
   if (splitMeta(source).meta !== splitMeta(dist).meta) return "the meta blocks differ";
+  // 8.9.4 (review of #120): the dist body must compile; esbuild folds a regex in a truthy position
+  // (`/re/ && f()` gives `f()`), so a regex the collapse broke can minify to the same bytes
+  try {
+    new Script(WRAP_HEAD + "\n" + splitMeta(dist).body + "\n}\n", { filename: "dist" });
+  } catch (e) {
+    return "the dist does not compile: " + e.message;
+  }
   const a = wrapped(source);
   const b = wrapped(dist);
   if (a === b) return null;

@@ -122,6 +122,7 @@ test("AC6: triangulation, equality holds across marker, whitespace and meta vari
     "a regex after the ) of a control head": head + "if ( x ) /a  b/.test(s);\nwhile ( f(x) ) /a  b/.test(s);\nfor ( ;; ) /a  b/.test(s);\nfor await ( const q of a ) /a  b/.test(q);\n" + tail,
     "a division after any other )": head + "x = f(a) / 2 / c + a.if(b) / 2 / c;\ny = (a)) / 2 / c;\n" + tail,
     "a regex after } is lexed as a division": head + "{ a }\n/x  y/.test(s);\n" + tail,
+    "a * before / keeps one space, so no */ forms": head + "x = a * /re/.source + a * /* c */ b;\n" + tail,
   };
   for (const [name, src] of Object.entries(sources)) {
     const out = runPair(src);
@@ -187,6 +188,31 @@ test("AC6: triangulation, meta head without a closing `};` line gives no build",
   const next = 'export const meta = {\n  name: "x",\nconst a = 2;\n';
   const out = scan({ [S]: base, [D]: base }, { [S]: next, [D]: next });
   assert.deepEqual(out.generated, []);
+});
+
+// 8.9.4 (review of #120): gen_collapse alone (changed_defs gen_fresh trusts it with no esbuild check)
+function pyCollapse(text) {
+  const py = [
+    "import re, sys, json",
+    "src = open(sys.argv[1]).read()",
+    "a, b = src.index('\\nGEN_DIST = '), src.index('\\ndef gen_build(')",
+    "g = {'re': re}",
+    "exec(src[a:b], g)",
+    "print(json.dumps(g['gen_collapse'](sys.stdin.read())))",
+  ].join("\n");
+  const r = spawnSync("python3", ["-I", "-c", py, PROGRAM], { input: text, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+test("8.9.4 review of #120: gen_collapse never forms a `*/` from `* /`, even after a misread regex", () => {
+  const closes = (t) => t.split("*/").length - 1;
+  const head = 'export const meta = {\n  name: "x",\n};\n';
+  const repro = "{}\n/'/ /* ' * / evil(); x = y *// 1;\n2;\n";
+  const out = pyCollapse(repro);
+  assert.equal(closes(out), closes(repro), out);
+  assert.equal(out, build(head + repro).slice(head.length));
+  assert.equal(pyCollapse("x = a * /* c */ b;\n"), "x=a* /* c */b;\n");
 });
 
 test("8.6.0 ADR-1403: a literal that does not close gives no build in either port, so the dist is scanned", () => {
