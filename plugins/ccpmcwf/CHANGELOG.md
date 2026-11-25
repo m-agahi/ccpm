@@ -1,5 +1,22 @@
 # Changelog
 
+## [8.9.6] - 2026-11-25
+
+ccpmcwf 8.9.6 (yaadgaar `#109`): plan-mode intake relaunches on a relayed request at any status,
+as the `intake:rulings` re-read does since PR #105 review R1.
+
+### Fixed
+
+- Plan mode: an intake answer with `relay.kind` "request" now halts with stop gate `relaunch` and
+  `relaunch: "intake"` at any status. Before, a `needs_human` or `failed` answer whose reason was
+  not `RELAUNCH_REASON`-prefixed halted through the generic status path with no stop gate, so the
+  /build-task relaunch path never fired.
+- Plan mode: the `RELAUNCH_REASON` answer halts with relaunch at any status, not only at
+  `needs_human` (as the re-read does). An `ok` answer with that reason and relay "none" used to
+  pass intake. This adds halts only.
+- A general delegation still passes a delegated launch (unattended, confirm auto or default) and
+  an unattended run still records the relaunch pass in `auto_decisions`.
+
 ## [8.9.5] - 2026-11-25
 
 ccpmcwf 8.9.5 (yaadgaar `#112` item 1): the caller check compares code hits only, with no doc or

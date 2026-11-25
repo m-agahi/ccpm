@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.5";
+const FLEET_VERSION = "8.9.6";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -6773,7 +6773,7 @@ function defaultBlockers(p, input, raw) {
 }
 
 // 8.5.0 (#105): the relay check of an intake answer (plan mode: input = the args; the rulings re-read: input null, always delegated).
-// phase "valid": every answer; phase "kind": an ok answer. Returns the sanitised text of a delegation that passed, else null.
+// phase "valid": every answer; phase "kind": an ok answer, or a request relay at any status (8.9.6). Returns the sanitised text of a delegation that passed, else null.
 function relayDecision(it, tag, input, phase) {
   const r = it.relay;
   const again = "; re-launch the workflow once in a turn whose latest human message is the build request";
@@ -6853,11 +6853,13 @@ async function planMode(input, date) {
     agentType: JUDGE_AGENT,
     phase: "Intake",
   });
-  if (it.status === "needs_human" && typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
+  // 8.9.6 (yaadgaar #109): as in the intake:rulings re-read, the RELAUNCH_REASON answer halts at any status, and a request relay halts on any status
+  if (typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
     state.relaunch = "intake";
     halt("s", "needs_human", "intake: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
   }
   relayDecision(it, "intake", input, "valid");
+  if (it.relay.kind === "request") relayDecision(it, "intake", input, "kind");
   const nl = TASK_ID_INPUT_RE.test(raw) ? noLedgerStop(it, input.project) : null;
   if (nl) halt("s", "needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
   if (it.status !== "ok") halt("s", it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
