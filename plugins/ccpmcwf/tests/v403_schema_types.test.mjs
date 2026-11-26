@@ -613,7 +613,8 @@ const READS = {
     "g string-re": "parsed: the repo's runtime-doc file (runtime_docs docs[])",
   },
   rdSeg: { "parts.length number-literal": PARSED_LOCAL },
-  runtimeDocsStep: { "t object": "infra:runtime_docs", "cfg array": "prog:runtime_docs:docs" },
+  // review of 3d945e5 (4): and the config cap
+  runtimeDocsStep: { "t object": "infra:runtime_docs", "cfg array": ["prog:runtime_docs:docs", 2] },
   // 6.1.0 review: an npm:<name> entry of hookSurface's make_paths (the script maps a missing one to null)
   testCmdRuns: {
     "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",

@@ -239,6 +239,13 @@ const TEXT_REASON = [
   [/refFacts\.msg|unsafe commit subject|lpb \+/, "plan-ref trust: the sealed ref facts are refused"],
   [/^halt\("s", "needs_human", oh\)$/, "repo or branch identity"],
   [/the callers file /, "relay contract: a required field is missing or malformed"],
+  // 8.9.14 review of 3d945e5 (5): the runtime-doc read (yaadgaar #119), one reason per site
+  [/no runtime_docs relay/, "relay contract: the runtime-doc read (runtime_docs.py) is missing from the relay"],
+  [/^halt\("s", "needs_human", at \+ " refused: " \+ t\.error/, "the repo's .fleet-runtime-docs.json at origin is malformed or git cannot read it (the program's error): a human fixes the file or the repo"],
+  [/" globs; at most " \+ room/, "the repo's .fleet-runtime-docs.json lists more globs than callers.py takes with the default: a human trims the file"],
+  [/^halt\("s", "needs_human", at \+ " refused: " \+ p,/, "a glob in the repo's .fleet-runtime-docs.json breaks the glob rules: a human fixes the file"],
+  [/the sealed runtime-doc list is refused/, "plan-ref trust: the runtime-doc list sealed in the plan ref is not a valid list"],
+  [/no longer lists the sealed runtime-doc/, "the default branch dropped a runtime-doc glob the plan sealed: the build would treat those files as docs (a human restores the glob or re-plans)"],
 ];
 function safetyReason(gate, text, callee, fn) {
   for (const [re, r] of TEXT_REASON) if (re.test(text)) return r;

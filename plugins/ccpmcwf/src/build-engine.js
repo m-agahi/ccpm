@@ -1765,7 +1765,7 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
   "ruleset_surface": "37fb467c0f9208ddd1b798cbba209cbf9732923bcd0bc25a407fbd2f3c46475b",
-  "runtime_docs": "a6781353c05de16a3834b6278a2b4eb741e0ee2e6a56de1dd4bbc293f7011fd5",
+  "runtime_docs": "a302940e60db2a040bd185b57ebef0912d2416605e7c228a9c87a433e241bd32",
   "sandbox": "6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43",
   "scratch_copy": "f5e0a7bc1b20ac3188cad8bd100436958fd825813667b894fa8af52742793046",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
@@ -5438,6 +5438,21 @@ function runtimeDoc(p, rd) {
   const xs = String(p).split("/");
   return rd.some((g) => rdMatch(g.split("/"), xs));
 }
+// review of 3d945e5 (1): the build's list must keep every glob the plan sealed; the build then uses its own list (a
+// superset, so the union). A ref sealed before the list carries none: the plan applied no runtime-doc rule, so the
+// build's list (read at origin before any role) widens it, and nothing the plan relied on can have been dropped
+function runtimeDocsSealed(sealed, rd, refName, defaultBranch) {
+  if (sealed === undefined) {
+    gate("plan ref sealed before the runtime-doc list: the build uses the list at origin/" + defaultBranch + " (" + rd.join(", ") + ")");
+    return rd;
+  }
+  const p = runtimeDocsProblem(sealed);
+  if (p) halt("s", "needs_human", "plan ref " + refName + ": the sealed runtime-doc list is refused: " + p, "callers");
+  const gone = sealed.filter((g) => rd.indexOf(g) < 0);
+  if (gone.length)
+    halt("s", "needs_human", "plan ref " + refName + ": " + RUNTIME_DOCS_FILE + " at origin/" + defaultBranch + " no longer lists the sealed runtime-doc glob(s) " + gone.join(", ") + "; restore them on " + defaultBranch + ", or run plan again", "callers");
+  return rd;
+}
 // rd: the runtime-doc list of this run (no default: a call site that forgets it fails loudly)
 function docOrLockFile(p, rd) {
   if (!Array.isArray(rd)) throw new Error("docOrLockFile: no runtime-doc list");
@@ -5453,6 +5468,10 @@ function runtimeDocsStep(t, label, wt, defaultBranch) {
   const at = RUNTIME_DOCS_FILE + " at origin/" + defaultBranch;
   if (t.error !== null) halt("s", "needs_human", at + " refused: " + t.error, "callers");
   const cfg = t.docs === null ? [] : t.docs;
+  // review of 3d945e5: the config is capped so the default plus the config fits the 64 globs callers.py takes
+  const room = 64 - RUNTIME_DOCS_DEFAULT.length;
+  if (Array.isArray(cfg) && cfg.length > room)
+    halt("s", "needs_human", at + " refused: it lists " + cfg.length + " globs; at most " + room + " (64 with the default " + RUNTIME_DOCS_DEFAULT.join(", ") + ")", "callers");
   const rd = Array.isArray(cfg) ? RUNTIME_DOCS_DEFAULT.concat(cfg.filter((g) => RUNTIME_DOCS_DEFAULT.indexOf(g) < 0)) : null;
   const p = runtimeDocsProblem(cfg) || runtimeDocsProblem(rd);
   if (p) halt("s", "needs_human", at + " refused: " + p, "callers");
@@ -6139,6 +6158,8 @@ async function planAndAudit(ctx0) {
     changed_symbols: cs.clean,
     // origin's configured URL at plan time, before any role ran
     remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
+    // 8.9.14 review of 3d945e5 (1): the runtime-doc list this plan's caller check used; the build must keep it
+    runtime_docs: ctx.runtimeDocs,
     merge_after: typeof plan.merge_after === "string" && plan.merge_after.trim() ? plan.merge_after.trim() : null,
   };
   gate(
@@ -7063,8 +7084,9 @@ async function planMode(input, date) {
   const carry = ck || (parked && parked.src === src && !parked.ckpt ? parked : null);
   if (carry && (carry.round || carry.fp)) gate("parked round " + carry.round + " and findings fingerprint " + carry.fp + " carried");
   // the throwaway test database, up through plan-audit
-  await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
+  // 8.9.14 review of 3d945e5 (3): a bad runtime-doc list halts before the test database starts
   const runtimeDocs = runtimeDocsStep(scan.runtime_docs, "infra:branch-scan", lay.mainWt, ws.defaultBranch);
+  await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 
   phase("Plan");
   let draft = null;
@@ -7866,9 +7888,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const testable = testableOf(criteria);
   // the throwaway test database, one database per consumer
   const writerDbs = shortPath ? ["w_short"] : testable.map((c) => "w_" + c.id);
+  // 8.9.14 (yaadgaar #119): read before any role of this run, at origin (never the coder's tree); R5 uses it.
+  // Review of 3d945e5: it keeps every glob the plan sealed, and it halts before the test database starts
+  const runtimeDocs = runtimeDocsSealed(pf.runtime_docs, runtimeDocsStep(v.runtime_docs, "infra:verify-plan", mainWt, defaultBranch), ref.plan_ref, defaultBranch);
   await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks", "hrun", "gates"]), names.taskId);
-  // 8.9.14 (yaadgaar #119): read before any role of this run, at origin (never the coder's tree); R5 uses it
-  const runtimeDocs = runtimeDocsStep(v.runtime_docs, "infra:verify-plan", mainWt, defaultBranch);
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
   const hashedFiles = frozenFiles;

@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, DIST, HASHES, SOURCE, SCRIPTS_SRC, scratchRepo, sh, spawnSync, happy, run, runOne, call, inputsOf, callersDisk, callersHash } from "./harness.mjs";
+import { ARGS, DIST, HASHES, SOURCE, SCRIPTS_SRC, scratchRepo, sh, spawnSync, happy, run, runOne, call, inputsOf, callersDisk, callersHash, planRefFor, buildArgs } from "./harness.mjs";
+import { join as pjoin } from "node:path";
 
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 const READER = join(SCRIPTS_SRC, "runtime_docs.py");
@@ -408,4 +409,144 @@ test("8.9.14 (#119) RED on the dist: without the digest check a shrunk list reac
   // the tampered list passes: docs/prompts/a.md is auto again and the plan reaches confirmation
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).runtime_docs, DEF);
+});
+
+// ---------------------------------------------------------------- review of 3d945e5 (Max: fix first, then merge)
+
+const CFG1 = ["docs/prompts/*.md"];
+const DECL = { version: 1, engine: "mariadb", major: "11.4", env: "YADGAR_TEST_DSN" };
+function withDecl(s) {
+  for (const label of ["infra:branch-scan", "infra:verify-plan"]) {
+    const base = s[label];
+    s[label] = (p) => {
+      const b = typeof base === "function" ? base(p) : JSON.parse(JSON.stringify(base));
+      const i = inputsOf(p);
+      return Object.assign(b, { test_db: { decl: DECL, error: null, args: [i.main_worktree, i.default_branch] } });
+    };
+  }
+  return s;
+}
+const refOf = (s, out) => JSON.parse(s.__store[out.planResult.plan_ref.plan_commit]);
+
+test("8.9.14 review 1: the plan ref seals the runtime-doc list the plan used", async () => {
+  const s = withRd(happy(), "infra:branch-scan", CFG1);
+  withRd(s, "infra:verify-plan", CFG1);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(refOf(s, out).plan_facts.runtime_docs, DEF.concat(CFG1));
+  // no config: the default alone is sealed
+  const t = happy();
+  const o2 = await run(t, ARGS);
+  assert.deepEqual(refOf(t, o2).plan_facts.runtime_docs, DEF);
+});
+
+test("8.9.14 review 1: a default branch that drops a sealed glob before the build halts at verify (safety, callers)", async () => {
+  const s = withRd(happy(), "infra:branch-scan", CFG1);
+  const ref = await planRefFor(s);
+  // the build reads origin again: the glob is gone
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "callers");
+  assert.equal(out.result.stop_class, "safety");
+  assert.equal(out.result.reason, "plan ref " + ref.plan_ref + ": .fleet-runtime-docs.json at origin/master no longer lists the sealed runtime-doc glob(s) docs/prompts/*.md; restore them on master, or run plan again");
+  assert.ok(!out.labels.some((l) => l.startsWith("role:") || l.startsWith("infra:db-")), out.labels.join(", "));
+  // a wider build list is fine, and the build uses it
+  const t = withRd(happy(), "infra:branch-scan", CFG1);
+  const r2 = await planRefFor(t);
+  withRd(t, "infra:verify-plan", CFG1.concat(["tpl/*.md"]));
+  const o2 = await runOne(t, buildArgs(r2));
+  assert.equal(o2.result.status, "ok", o2.result.reason);
+  assert.ok(o2.logs.some((l) => l.includes(".fleet-runtime-docs.json at origin/master: 2 runtime-doc glob(s) (code, not docs): docs/prompts/*.md, tpl/*.md")), o2.logs.join("\n"));
+});
+
+test("8.9.14 review 1: a plan ref sealed before the list (no plan_facts.runtime_docs) builds with the build list", async () => {
+  // a plan run of a source that seals no list (the 8.9.14 key cut out of the dist)
+  const s = happy();
+  const cut = DIST.replace("runtime_docs:ctx.runtimeDocs,", "");
+  assert.notEqual(cut, DIST);
+  s.__source = cut;
+  const ref = await planRefFor(s);
+  delete s.__source;
+  withRd(s, "infra:verify-plan", CFG1);
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.some((l) => l.includes("plan ref sealed before the runtime-doc list: the build uses the list at origin/master (" + DEF.concat(CFG1).join(", ") + ")")), out.logs.join("\n"));
+  // a sealed list that is not a valid list fails closed
+  const t = happy();
+  const bad = DIST.replace("runtime_docs:ctx.runtimeDocs,", 'runtime_docs:["/x.md"],');
+  assert.notEqual(bad, DIST);
+  t.__source = bad;
+  const r2 = await planRefFor(t);
+  delete t.__source;
+  const o2 = await runOne(t, buildArgs(r2));
+  assert.equal(o2.result.status, "needs_human", o2.result.reason);
+  assert.equal(o2.result.stop_class, "safety");
+  assert.equal(o2.result.reason, "plan ref " + r2.plan_ref + ": the sealed runtime-doc list is refused: runtime_docs entry 0 must be a relative path of segments [A-Za-z0-9._+@-] and *, with no leading or trailing /");
+});
+
+test("8.9.14 review 2: runtime_docs.py fails closed when git cannot read the file (never 'no file')", () => {
+  readerRepo(JSON.stringify({ version: 1, runtime_docs: CFG1 }), null, (wt) => {
+    // the blob is gone from the object store: the tree still names it
+    const oid = sh(wt, "git", "rev-parse", "refs/remotes/origin/master:.fleet-runtime-docs.json").trim();
+    rmSync(pjoin(wt, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+    const o = reader(wt);
+    assert.equal(o.docs, null);
+    assert.equal(o.error, "git cannot read .fleet-runtime-docs.json at origin/master");
+  });
+  // the tree itself unreadable
+  readerRepo(JSON.stringify({ version: 1, runtime_docs: CFG1 }), null, (wt) => {
+    const tree = sh(wt, "git", "rev-parse", "refs/remotes/origin/master^{tree}").trim();
+    rmSync(pjoin(wt, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+    const o = reader(wt);
+    assert.equal(o.docs, null);
+    assert.equal(o.error, "git cannot list the tree of origin/master");
+  });
+  // a directory at the path is not a file; a missing file is still no list
+  readerRepo(null, null, (wt) => {
+    assert.equal(reader(wt).error, null);
+    mkdirSync(pjoin(wt, CFG));
+    writeFileSync(pjoin(wt, CFG, "x"), "x");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "dir");
+    sh(wt, "git", "update-ref", "refs/remotes/origin/master", "HEAD");
+    assert.equal(reader(wt).error, ".fleet-runtime-docs.json is not a file");
+  });
+});
+
+test("8.9.14 review 3: a bad runtime-doc list halts before the test database starts (plan and build)", async () => {
+  const p = withRd(withDecl(planOf(["src/p.py:1"], ["src/p.py:1"], [])), "infra:branch-scan", null, "version must be 1");
+  const o1 = await runOne(p, ARGS);
+  assert.equal(o1.result.reason, ".fleet-runtime-docs.json at origin/master refused: version must be 1");
+  assert.ok(!o1.labels.some((l) => l.startsWith("infra:db-")), o1.labels.join(", "));
+  const b = withDecl(happy());
+  const ref = await planRefFor(b);
+  withRd(b, "infra:verify-plan", null, "version must be 1");
+  const o2 = await runOne(b, buildArgs(ref));
+  assert.equal(o2.result.reason, ".fleet-runtime-docs.json at origin/master refused: version must be 1");
+  assert.ok(!o2.labels.some((l) => l.startsWith("infra:db-")), o2.labels.join(", "));
+});
+
+test("8.9.14 review 4: the config holds at most 63 globs (64 with the default); the stop names the count", async () => {
+  const globs = (n) => Array.from({ length: n }, (_, i) => "d" + i + "/*.md");
+  const o1 = await runOne(withRd(planOf(["src/p.py:1"], ["src/p.py:1"], []), "infra:branch-scan", globs(64)), ARGS);
+  assert.equal(o1.result.status, "needs_human", o1.result.reason);
+  assert.equal(o1.result.reason, ".fleet-runtime-docs.json at origin/master refused: it lists 64 globs; at most 63 (64 with the default roles/**/*.md)");
+  const o2 = await runOne(withRd(planOf(["src/p.py:1"], ["src/p.py:1"], []), "infra:branch-scan", globs(63)), ARGS);
+  assert.equal(o2.result.status, "awaiting_confirmation", o2.result.reason);
+  assert.equal(inputsOf(call(o2, "infra:callers").prompt).runtime_docs.length, 64);
+  // the cap counts the config as written: 63 globs plus a repeat of the default is 64
+  const o3 = await runOne(withRd(planOf(["src/p.py:1"], ["src/p.py:1"], []), "infra:branch-scan", globs(63).concat(DEF)), ARGS);
+  assert.equal(o3.result.status, "needs_human", o3.result.reason);
+  assert.match(o3.result.reason, /it lists 64 globs; at most 63/);
+});
+
+test("8.9.14 review 5: each runtime-doc stop site has its own reason in docs/stop-classes.md", () => {
+  const doc = readFileSync(pjoin(SCRIPTS_SRC, "..", "docs", "stop-classes.md"), "utf8");
+  const rows = doc.split("\n").filter((l) => /^\| \d+ \| `runtimeDocs(Step|Sealed)` \|/.test(l));
+  assert.ok(rows.length >= 6, rows.join("\n"));
+  const reasons = rows.map((l) => l.split(" | ").pop().replace(/ \|$/, ""));
+  for (const r of reasons) assert.ok(!r.includes("sealed caller map does not cover"), r);
+  // the relay-digest rule stays shared; every other site is its own
+  const own = reasons.filter((r) => !r.startsWith("relay digest or args mismatch"));
+  assert.equal(new Set(own).size, own.length, own.join("\n"));
 });

@@ -27,6 +27,15 @@ ccpmcwf 8.9.14 (yaadgaar `#119`, Max's ruling: option (b)): an explicit runtime-
   match a roles dir below the root).
 - The plan_wrong re-plan of a build runs its caller check with the build's list; `callerGrep`
   refuses a call with no list (a forgotten call site fails loudly).
+- Review of 3d945e5 (Max: fix first, then merge):
+  - The plan ref seals the list the plan used (`plan_facts.runtime_docs`). At verify the build's
+    list must hold every sealed glob, else a safety stop (`callers`); a wider list is used as it
+    is. A ref sealed before the list builds with the build's list.
+  - `runtime_docs.py` tells a missing file (an empty `ls-tree` of the root) from a git failure;
+    a failure is an error and the run stops.
+  - The list is read before the test database starts, in plan and build mode.
+  - The config holds at most 63 globs (64 with the default); the stop names the count.
+  - Each runtime-doc stop site has its own reason in `docs/stop-classes.md`.
 
 ## [8.9.13] - 2026-11-26
 

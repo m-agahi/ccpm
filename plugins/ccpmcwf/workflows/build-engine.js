@@ -1573,7 +1573,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "37fb467c0f9208ddd1b798cbba209cbf9732923bcd0bc25a407fbd2f3c46475b",
-"runtime_docs": "a6781353c05de16a3834b6278a2b4eb741e0ee2e6a56de1dd4bbc293f7011fd5",
+"runtime_docs": "a302940e60db2a040bd185b57ebef0912d2416605e7c228a9c87a433e241bd32",
 "sandbox": "6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43",
 "scratch_copy": "f5e0a7bc1b20ac3188cad8bd100436958fd825813667b894fa8af52742793046",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
@@ -4806,6 +4806,18 @@ function runtimeDoc(p,rd){
 const xs=String(p).split("/");
 return rd.some((g)=>rdMatch(g.split("/"),xs));
 }
+function runtimeDocsSealed(sealed,rd,refName,defaultBranch){
+if(sealed===undefined){
+gate("plan ref sealed before the runtime-doc list: the build uses the list at origin/"+defaultBranch+" ("+rd.join(", ")+")");
+return rd;
+}
+const p=runtimeDocsProblem(sealed);
+if(p)halt("s","needs_human","plan ref "+refName+": the sealed runtime-doc list is refused: "+p,"callers");
+const gone=sealed.filter((g)=>rd.indexOf(g)<0);
+if(gone.length)
+halt("s","needs_human","plan ref "+refName+": "+RUNTIME_DOCS_FILE+" at origin/"+defaultBranch+" no longer lists the sealed runtime-doc glob(s) "+gone.join(", ")+"; restore them on "+defaultBranch+", or run plan again","callers");
+return rd;
+}
 function docOrLockFile(p,rd){
 if(!Array.isArray(rd))throw new Error("docOrLockFile: no runtime-doc list");
 const b=String(p).split("/").pop();
@@ -4819,6 +4831,9 @@ halt("s","failed",label+": the relayed "+RUNTIME_DOCS_FILE+" read"+NOT_DIGEST+" 
 const at=RUNTIME_DOCS_FILE+" at origin/"+defaultBranch;
 if(t.error!==null)halt("s","needs_human",at+" refused: "+t.error,"callers");
 const cfg=t.docs===null?[]:t.docs;
+const room=64-RUNTIME_DOCS_DEFAULT.length;
+if(Array.isArray(cfg)&&cfg.length>room)
+halt("s","needs_human",at+" refused: it lists "+cfg.length+" globs; at most "+room+" (64 with the default "+RUNTIME_DOCS_DEFAULT.join(", ")+")","callers");
 const rd=Array.isArray(cfg)?RUNTIME_DOCS_DEFAULT.concat(cfg.filter((g)=>RUNTIME_DOCS_DEFAULT.indexOf(g)<0)):null;
 const p=runtimeDocsProblem(cfg)||runtimeDocsProblem(rd);
 if(p)halt("s","needs_human",at+" refused: "+p,"callers");
@@ -5432,6 +5447,7 @@ repo_obligations:stripHeldOut(obligations),
 commands:commandsOf(plan.test_cmd,obligations,criteria),
 changed_symbols:cs.clean,
 remote_url:validRemoteUrl(ctx.remoteUrl)?ctx.remoteUrl:null,
+runtime_docs:ctx.runtimeDocs,
 merge_after:typeof plan.merge_after==="string"&&plan.merge_after.trim()?plan.merge_after.trim():null,
 };
 gate(
@@ -6253,8 +6269,8 @@ const src=sha256Hex(canonical([raw,brief.sources.map((x)=>[x.kind,x.ref,String(x
 const ck=parkedBad?null:resumeOf(parked,input.checkpoint,scan.head,src);
 const carry=ck||(parked&&parked.src===src&&!parked.ckpt?parked:null);
 if(carry&&(carry.round||carry.fp))gate("parked round "+carry.round+" and findings fingerprint "+carry.fp+" carried");
-await testDbStep(scan.test_db,"infra:branch-scan",lay.mainWt,ws.defaultBranch,"Workspace",["plan","audit"],names.taskId);
 const runtimeDocs=runtimeDocsStep(scan.runtime_docs,"infra:branch-scan",lay.mainWt,ws.defaultBranch);
+await testDbStep(scan.test_db,"infra:branch-scan",lay.mainWt,ws.defaultBranch,"Workspace",["plan","audit"],names.taskId);
 phase("Plan");
 let draft=null;
 const parkOnStop=async(e)=>{
@@ -6949,8 +6965,8 @@ state.path=shortPath?"short":"full";
 const maxTestRounds=shortPath?MAX_SHORT_TEST_ROUNDS:MAX_TEST_ROUNDS;
 const testable=testableOf(criteria);
 const writerDbs=shortPath?["w_short"]:testable.map((c)=>"w_"+c.id);
+const runtimeDocs=runtimeDocsSealed(pf.runtime_docs,runtimeDocsStep(v.runtime_docs,"infra:verify-plan",mainWt,defaultBranch),ref.plan_ref,defaultBranch);
 await testDbStep(v.test_db,"infra:verify-plan",mainWt,defaultBranch,"Verify",writerDbs.concat(["plan","audit","tjudge","coder","cjudge","review","hooks","hrun","gates"]),names.taskId);
-const runtimeDocs=runtimeDocsStep(v.runtime_docs,"infra:verify-plan",mainWt,defaultBranch);
 const frozenFiles=[];
 for(const c of testable)for(const f of c.test_files)frozenFiles.push(f);
 const hashedFiles=frozenFiles;

@@ -286,8 +286,13 @@ A glob splits on `/`: `**` is a whole segment (zero or more segments), `*` match
 segment, everything else is literal and case-sensitive. A glob is anchored at the repo root, so
 the default does not match `sub/roles/x.md`. The workflow reads the file at `origin/<default
 branch>` only (`runtime_docs.py`, in `infra:branch-scan` for the plan and in `infra:verify-plan`
-for the build, before any role of the run), never in a worktree, so a role cannot shrink the list.
-The file is fenced like `.fleet-test-db.json`. The workflow passes the whole list to `callers.py`
+for the build, before any role of the run and before the test database), never in a worktree, so
+a role cannot shrink the list. Only an empty listing of the tree means "no file": any git failure
+is an error that stops the run. The file is fenced like `.fleet-test-db.json`. It holds at most 63
+globs (64 with the default). The plan ref seals the list the plan used (`plan_facts.runtime_docs`):
+the build's list must still hold every sealed glob, else the build stops at verify (safety,
+`stop_gate: "callers"`); a wider build list is used as it is. A ref sealed before the list builds
+with the build's list (that plan applied no runtime-doc rule). The workflow passes the whole list to `callers.py`
 as its last argument, and the program echoes it in `args` (inline and file mode), so the relay
 digest and the args check cover it. A malformed file, or a glob with `?`, `[`, `{`, `\`, a space, a
 leading or trailing `/`, an empty, `.` or `..` segment, or `**` inside a segment, stops the run
