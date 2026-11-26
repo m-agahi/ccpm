@@ -36,7 +36,7 @@ export const WANT_AGENT = [
   [/^infra:push-probe/, "ccpmcwf:judge"],
   [/^(preflight|intake|hasher:)/, "ccpmcwf:judge"],
   [
-    /^infra:(role-read|path-check|branch-scan|verify-plan|read-state|policy|pr-view|ci-logs|orch-scan|ci-watch|callers|check-scripts|precommit-ids|review-paths|remote-head|load-parked|fleet-branch|load-ref|tf-gate|hook-surface|ruleset-surface|surfaces|gates|fleet-scan|hash-diff|gh-identity|yaadgaar-read|comments-list)(:|$|-)/,
+    /^infra:(role-read|path-check|branch-scan|verify-plan|read-state|policy|pr-view|ci-logs|orch-scan|ci-watch|callers|check-scripts|precommit-ids|review-paths|remote-head|load-parked|fleet-branch|load-ref|tf-gate|hook-surface|ruleset-surface|surfaces|gates|gate-tools|fleet-scan|hash-diff|gh-identity|yaadgaar-read|comments-list)(:|$|-)/,
     "ccpmcwf:judge",
   ],
   [/^workspace$/, "ccpmcwf:infra-writer"],
@@ -383,7 +383,7 @@ export async function runOne(script, args0) {
     // 5.0.9 (ledger 2032): the session's yaadgaar project: script.__session_project, else args.project
     if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("session_project" in r))
       r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : argsProject(args));
-    if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("gate_tools" in r)) r.gate_tools = gateToolsOut(args && args.repo);
+    if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("gate_tools" in r)) r.gate_tools = gateToolsOut(inputsOf(prompt).repo);
     // 8.0.0 (G7): a gates stub with no security_scan slot relays the default (no runtime: partial)
     if (/^infra:gates:/.test(base) && r && typeof r === "object" && !rawResults.has(r) && r.status === "ok" && !("security_scan" in r)) r.security_scan = secOut(prompt);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
@@ -442,6 +442,8 @@ export async function runOne(script, args0) {
       if (SHARED_FOR_ROLE[role]) r.shared_file = { name: SHARED_FOR_ROLE[role], sha256: SHARED_PIN[SHARED_FOR_ROLE[role]] };
       return r;
     }
+    // 8.9.11 (#125): an unscripted census retry relays the default census of its repo
+    if (!(label in script) && /^infra:gate-tools:/.test(label)) return { status: "ok", reason: "ran", gate_tools: gateToolsOut(inputsOf(prompt).repo) };
     // 8.0.0 (G3): an unscripted held-out write stores every example it was sent
     if (!(label in script) && /^infra:held-out:write/.test(label)) return heldOutOut(prompt);
     // 8.0.0 (G4): an unscripted held-out runner finds no store file on this machine (not_run)
@@ -1289,7 +1291,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.10/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.11/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1476,6 +1478,8 @@ export const PROGRAM_LABELS = [
   // 8.0.0 (G2): a code round's gate programs, one slot per gate (read lazily)
   [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null], ["mutation", "mutants", PROGRAM_KEYS["mutants"] || null], ["security_scan", "sec_scan", PROGRAM_KEYS["sec_scan"] || null]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
+  // 8.9.11 (#125): preflight's census retry relays gate_tools in its own slot
+  [/^infra:gate-tools:/, [["gate_tools", "gate_tools", K("gate_tools")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
   [/^infra:gh-identity:/, [[null, "gh_identity", K("gh_identity")]]],

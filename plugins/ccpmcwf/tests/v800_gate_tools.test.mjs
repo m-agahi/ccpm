@@ -221,7 +221,8 @@ test("8.0.0 G1-3 (non-weakening): with no gate result, gates_not_run is exactly 
 // the census relay, broken in each way G1-4 names
 function brokenCensus(fn) {
   const s = happy();
-  s.__mutate = { label: "preflight", fn: (r) => Object.assign(r, { gate_tools: fn(r.gate_tools) }) };
+  // 8.9.11 (#125): and its one retry, broken the same way
+  s.__mutate = { label: /^(preflight|infra:gate-tools:preflight:relay-retry)$/, fn: (r) => Object.assign(r, { gate_tools: fn(r.gate_tools) }) };
   return s;
 }
 const reDigest = (o) => Object.assign(o, { digest: relayDigestOf(o, K("gate_tools")) });
@@ -240,8 +241,11 @@ test("8.0.0 G1-4: a malformed or digest-failed census never stops the run and ma
   for (const [what, fn] of Object.entries(BROKEN)) {
     const out = await runOne(brokenCensus(fn), ARGS);
     assert.equal(out.result.status, base.result.status, what + ": " + out.result.reason);
-    assert.deepEqual(out.labels, base.labels, what + ": no retry, no extra agent");
-    assert.ok(out.logs.includes("gate census unusable (no digest-checked gate_tools): no gate tool available"), what);
+    // 8.9.11 (#125): one retry, one extra agent, right after preflight
+    const want = base.labels.slice();
+    want.splice(want.indexOf("preflight") + 1, 0, "infra:gate-tools:preflight:relay-retry");
+    assert.deepEqual(out.labels, want, what + ": one retry, one extra agent");
+    assert.ok(out.logs.some((l) => l.startsWith("gate census unusable (no digest-checked gate_tools after one retry): no gate tool available")), what);
     assert.ok(!out.logs.some((l) => /^gate census (python|node|go|rust|other|security):/.test(l)), what + ": no tool claimed");
     const probe = await runOne(brokenCensus(fn), PROBE);
     assert.equal(probe.result.status, "ok", what);

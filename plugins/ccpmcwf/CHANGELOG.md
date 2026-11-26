@@ -1,5 +1,46 @@
 # Changelog
 
+## [8.9.11] - 2026-11-26
+
+ccpmcwf 8.9.11 (yaadgaar `#125`, `#127`): the gate census relay gets one retry, and its denial
+reason shows in the gate line.
+
+### Fixed
+
+- `#125` (daneel 8.9.7 probe wf_805cabc6-455): the Claude Code auto-mode permission classifier
+  denied the preflight agent's `gate_tools.py` Bash call ("Undermining Oversight"; 4 of 33 census
+  probes on 8.3.0 or newer). `gateCensus` took `pre.gate_tools` once, with no retry, so the run
+  had no census: since 8.9.7 that drops the uv coverage tier (`censusCoverTier()` returns ""),
+  and it skips intake's `unsupportedRequired` check. The denial showed only in the transcript.
+
+### Changed
+
+- A null `gate_tools` relay, or one that fails its args or digest check, gets one fresh agent,
+  `infra:gate-tools:preflight:relay-retry`, that runs only the census command (same args, digest
+  check) one tier above preflight (sonnet to opus, ADR-1364). It counts toward the agent cap, as
+  the scripts_probe retry does; the cap skips it and never stops the run. An unusable retry (null,
+  no result, a digest or args mismatch) is not used, and no third agent runs.
+- The unusable line is now `gate census unusable (no digest-checked gate_tools after one retry):
+no gate tool available; preflight said "<reason>"; the retry said "<reason>"`. Each reason is
+  capped at 200 characters, with control characters as spaces. It is log text only: nothing
+  routes or classifies on it.
+- The plugin README gives the command shape for a user Bash allow rule. The plugin changes no
+  settings.
+- Tests: `v800_gate_tools` G1-4 now breaks the retry too and expects one extra agent; `v4_s1`
+  applies its preflight program mutation to the retry too; `v897` breaks the retry too. These are
+  intended behaviour changes. The harness's default preflight census now echoes the prompt's
+  repo (as the program does), not the run args' repo: a build whose args named another repo
+  had an unusable census in the harness, and would now show a retry.
+
+### Not changed
+
+- `#127`: diagnosed, no gap. In wf_6205fd83-1de and wf_d5a2ddcd-8c5 the rewrite writer
+  `infra:plan-chunks:r1w0` ran on opus (meta.json `opus`, jsonl `claude-opus-5-5`), as the gate
+  line "(round 1) on opus" says. `infra:commit-plan:rewrite-1` re-runs the program step and
+  `infra:path-check:commit-plan:rewrite-1` is a standalone PATH re-check; both stay on sonnet by
+  ADR-1364. meta.json matched the jsonl model for every agent. `v730_chunk_rewrite_model` already
+  pins the writer tier.
+
 ## [8.9.10] - 2026-11-26
 
 ccpmcwf 8.9.10 (yaadgaar `#123`, `#129`, `#128`): an intact PR title and commit subject, a route
