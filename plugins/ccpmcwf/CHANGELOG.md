@@ -1,5 +1,85 @@
 # Changelog
 
+## [8.9.13] - 2026-11-26
+
+ccpmcwf 8.9.13 (yaadgaar `#121`): in Rust, a doc comment or a multi-line signature on a new
+method no longer counts as a change to its impl block.
+
+### Fixed
+
+- Build wf_96b5611c-9da (yadgarhq/iam-db, 8.9.6) stopped at `callers` (safety) after both judges
+  approved: "changes code the sealed changed_symbols does not map: IamDbService
+  (src/service/handlers.rs:28), IamDb (src/service/identity.rs:17), IamDb (src/service/seam.rs:15)".
+  The approved tree only added methods (`lookup_user`, `rotate_key_identity`, `find_user`,
+  `lookup_user_as`, `rotate_key_identity_as`) to those impl blocks. The roles and the program both
+  say a plain new method is an addition that needs no mapping, so the planner's map was correct.
+  `changed_defs.py` broke its own rule on two kinds of added line. Rerun on the real trees with
+  the same exclude list, it gives those three entries at 8.9.6 and at 8.9.12:
+  - a comment-only line above the new member (here the `///` doc comments) was neither a
+    definition nor a decorator, so it named the enclosing impl;
+  - the closing line of the member's multi-line signature (`    ) -> Result<..> {`, rustfmt's
+    layout) sits at the member's own indent, so it ended the new member and named the impl.
+- In `.rs` files only (Max's ruling on the review of c137fc9): an indented `//`, `///` or `//!`
+  line comment above a plain new member of an impl is part of that addition, and so is the
+  rustfmt closing line of the member's multi-line signature (`SIG_CLOSE` at the member's indent,
+  more `)` than `(`). Both apply only when the member cannot take over existing lines: the base
+  line after the hunk (comments stepped over) is a definition, a decorator, a close-only line or
+  the end of the file, it is not deeper than the member, and the base line before the hunk ends a
+  member (a close, a definition, a decorator or a deeper body line). Anywhere else, and in every
+  other language, comments and signature closers get the 8.9.12 attribution. A column-0 comment
+  always counts. A comment that ends in `\` is never deferred, and a deferred comment at another
+  indent than the member counts.
+- A generic Rust impl header (`impl<T> X<T>`, `impl<T: Into<U>> Trait for X<T>`, up to two levels of
+  nested `<>`) is a definition, named like a plain one and by the last segment of a path
+  (`impl<T> fmt::Display for X<T>` is `Display`). Before, it matched no pattern. A header with `->`
+  in its generics (`impl<F: Fn() -> T> X<F>`) or split by a `where` clause is still no definition
+  (fail closed).
+- With the fix, the incident trees give only `insert_user` (identity.rs:18), which the plan mapped.
+
+### Changed (stricter in every language)
+
+- The plain-new-member skip has a guard too: the base line after the hunk is not deeper than the
+  member, and the base line before it does not open text or a bracket (it ends in `"""`, `'''`, a
+  backtick, `r#"`, `"`, `(`, `[`, `{`, `\`, `,` or `=` and is no definition, decorator or
+  close-only line). This closes a hole in 8.9.12: a plain new member inserted in the middle of an
+  existing method body, or before a deeper nested definition or decorator in it, took over the
+  method's tail and named nothing. It now names the class. A plain new method after a field, an
+  attribute or a comment, or as the last method before column-0 code (`if __name__ == ...`), still
+  names nothing, as in 8.9.12.
+- A `type` item added to an impl names the impl; it is never a plain new member.
+- scope-and-plan: a Rust `impl` block counts as the class, named by the first name after `impl`
+  and its generics (the trait in `impl Trait for X`). In Rust only, a comment above a new member
+  and its signature's closing line are part of the addition. In every other language they name
+  the class (and can name the method above it): map them, or the build stops. In every language
+  a new method inserted inside an existing method's body names the class. `#[...]` on a new
+  method is a decorator.
+- plan-audit: a plan step that adds a decorated method or a nested class to an existing class or
+  impl block, or changes a field or an item line directly in it, with that class missing from
+  `changed_symbols` is a `plan_defect` (a refusal). A plain new method needs no entry. Outside
+  Rust, a commented or multi-line-signature new method with its class unmapped is an advisory
+  finding (the build-time check will name the class).
+- PROGRAM_SHA256 `changed_defs` moves (`b104493b…` to `dea1b316…`). ROLE_SHA256 `plan-audit` and
+  `scope-and-plan` move. The v5010 prompt-snapshot pins do not move (the role sha and the version
+  are masked).
+- Tests: `v8913_impl_members` runs the program on git trees: Rust `impl X`, `impl Trait for X`
+  and generic forms with the incident's shape; what still names the impl or class in every
+  language; each input of the reviews of 4e69dc0 (B1 to B6) and c137fc9 (nested-definition and
+  decorator steal; Python and JS keep the 8.9.12 result); the role text. Version pins move to
+  8.9.13.
+
+### Not changed
+
+- Accepted residual (ADR-0645 exception, Max 2026-11-26): a Rust raw string (`r#"…"#`) or normal
+  string that already holds fn-shaped lines on both sides of an insertion.
+- `impl Trait for X` still names the trait, not `X`. A new `impl Trait for Y` block re-adds the
+  name `Trait`, so it names every base `impl Trait for ...` header in the file (yaadgaar `#134`).
+- A plain (non-generic) `impl a::B for X` is still named `a` (yaadgaar `#135`).
+- No in-run repair of the caller check (ADR-1406).
+- Known limits (fail closed, they still stop the build): a new Rust method whose signature closes
+  with `) -> T` and has `where` on a line of its own still names the impl (an inline
+  `) -> T where … {` opens the block and names nothing); a new multi-line TS or JS method still
+  names the class.
+
 ## [8.9.12] - 2026-11-26
 
 ccpmcwf 8.9.12 (yaadgaar `#120`): the code judge flags coverage-tool tamper signatures in a diff

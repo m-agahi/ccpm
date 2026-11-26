@@ -99,6 +99,7 @@ For every existing function, guard, constant or other symbol the plan changes, l
 - A new function appended at column 0 (in a brace-language file too) and a new method in an existing class are additions and need no mapping.
 - A multi-line signature (`def f(` ... `) -> T:`, Go `func F(` ... `) T {`) counts from its opening line: cite that line.
 - A changed class attribute, enum value or field (and a decorated new method, or a new nested class) names the CLASS: map the class.
+- A Rust `impl` block counts as the class, named by the first name after `impl` and its generics (the trait in `impl Trait for X`). In Rust only, a comment or doc comment above a new member and the closing line of its multi-line signature are part of that addition. In every other language, a comment line above a new method, or the closing line of its multi-line signature, names the CLASS (and can name the method above it): map them, or the build stops. In every language, a new method inserted inside an existing method's body names the class. A `#[...]` attribute on a new Rust method is a decorator: map the impl's name.
 
 **Re-plan round:** when the workflow re-runs you after a refusal (`:audit-fix`, then `:audit-fix-2`), keep EVERY symbol from every previous map (`prior_round.symbols`) and every symbol any finding named. You may add narrower symbols in addition, never in place of one. Fix a flagged occurrence with a criterion that exercises it, or a `dont_care` whose reason answers the finding — never a vague reason.
 

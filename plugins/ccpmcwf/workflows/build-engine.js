@@ -110,7 +110,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.12";
+const FLEET_VERSION="8.9.13";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -1534,7 +1534,7 @@ const PROGRAM_SHA256 = {
 "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
 "build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
 "callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
-"changed_defs": "b104493bc23e3f342cd6a32db469ca14b00424b690a26138b8a2c67955970723",
+"changed_defs": "dea1b316f0294f9db3cb7860148e20a944836e84231cb2a76c5597b4c9ef07fb",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "cover_diff": "9b03ab47e911b44586a5283a44b34e331f37e2f4289794e862ecaadef3424660",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
@@ -1597,9 +1597,9 @@ const ROLE_SHA256 = {
 "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
-"plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
+"plan-audit": "c0f127b29b246a6274c73a404d4aa484dbafde43c7b8bb385bfbaa7d7ac6c07c",
 "pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
-"scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
+"scope-and-plan": "16a353c6182b1f54c54fd1fae8131d77c7482939ed43a8cfcfe67657a9a3e209"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
