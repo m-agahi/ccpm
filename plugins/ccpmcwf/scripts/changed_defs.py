@@ -66,10 +66,15 @@ JS_ARROW = re.compile(r'^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z
 JS_MEMBER_FN = re.compile(r'^\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)')
 SH_FUNC = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)')
 C_FUNC = re.compile(r'^\s*(?:[A-Za-z_][\w<>\[\],.*&:?]*\s+)+[*&]?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*$')
+# 8.9.13 (yaadgaar #121): a generic Rust impl header (impl<T> X<T>, impl<T: Into<U>> Trait for X<T>)
+# is named like a plain one: the first name after the generics
+RS_IMPL = re.compile(r'^\s*(?:unsafe\s+)?impl\s*<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>\s*(?:!\s*)?([A-Za-z_][A-Za-z0-9_]*)')
+# 8.9.13: a comment-only line; never a Rust #[attr], a #! line or a C #include
+COMMENT = {'py': re.compile(r'^\s*#(?![!\[])'), 'sh': re.compile(r'^\s*#(?!!)'), 'js': re.compile(r'^\s*//'), 'kw': re.compile(r'^\s*//'), 'c': re.compile(r'^\s*//')}
 def defname(lang, line):
     first = line.split()[0] if line.strip() else ''
     for rx in ([KEYWORD_DEF, JS_ARROW, JS_MEMBER_FN, JS_METHOD] if lang == 'js' else [SH_FUNC, KEYWORD_DEF] if lang == 'sh'
-               else [KEYWORD_DEF, C_FUNC] if lang == 'c' else [KEYWORD_DEF]):
+               else [KEYWORD_DEF, C_FUNC] if lang == 'c' else [KEYWORD_DEF, RS_IMPL] if lang == 'kw' else [KEYWORD_DEF]):
         m = rx.match(line)
         if m and m.group(1) not in KW and (rx is not C_FUNC or first not in KW):
             return m.group(1)
@@ -460,7 +465,8 @@ for status, path, newpath in entries:
         # A re-added definition line names every base definition of that name.
         # Lines that only close a block are skipped.
         start = a - 2 if b > 0 else a - 1
-        cur, pending = None, []
+        cur, pending, notes = None, [], []
+        note = COMMENT.get(lang)
         for t in added:
             if not t.strip():
                 continue
@@ -469,14 +475,27 @@ for status, path, newpath in entries:
                 # the body of a new definition: a column-0 one is an addition;
                 # a nested one already named its enclosing definition
                 continue
+            if cur is not None and cur[2] and ind == cur[0] and SIG_CLOSE.match(t) and parens(t) < 0:
+                # 8.9.13 (yaadgaar #121): the closing line of the new definition's
+                # multi-line signature (") -> T {") is part of that definition
+                cur = (cur[0], cur[1], False) if opens_block(t) else None
+                continue
             cur = None
             if lang != 'mk' and CLOSE_ONLY.match(t):
                 # a line that only closes a block adds no behaviour; the lines it
                 # moves in or out of a block are changed lines of their own
-                pending = []
+                for x in notes:
+                    attribute(start, indent(x), max(a, 1))
+                pending, notes = [], []
                 continue
             if deco(t):
                 pending.append(t)
+                continue
+            if note and ind > 0 and note.match(t):
+                # 8.9.13: an indented comment above a plain new member of a container
+                # belongs to that addition; anywhere else it counts as a changed line,
+                # as before. A column-0 comment (a coding cookie, a pragma) always counts
+                notes.append(t)
                 continue
             d = dn(t)
             if d:
@@ -484,20 +503,24 @@ for status, path, newpath in entries:
                     record(d, n)
                 if ind == 0:
                     skip = True
+                    for x in notes:
+                        attribute(start, indent(x), max(a, 1))
                 else:
                     e = enclosing(start, ind)
                     # a plain new member of a class-like container is an addition;
                     # a decorated one, or a new nested container, changes the class
                     skip = e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending
                     if not skip:
-                        for x in pending + [t]:
+                        for x in pending + notes + [t]:
                             attribute(start, indent(x), max(a, 1))
-                pending = []
-                cur = (ind, skip) if opens_block(t) else None
+                pending, notes = [], []
+                cur = (ind, skip, parens(t) > 0) if opens_block(t) else None
                 continue
-            for x in pending + [t]:
+            for x in pending + notes + [t]:
                 attribute(start, indent(x), max(a, 1))
-            pending = []
+            pending, notes = [], []
+        for x in notes:
+            attribute(start, indent(x), max(a, 1))
         if pending:
             nd = next_base_def(a - 1 + b if b > 0 else a)
             if nd:

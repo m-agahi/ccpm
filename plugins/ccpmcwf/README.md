@@ -338,7 +338,14 @@ decorator line belongs to the definition after it; a line that only closes a blo
 Any other removed line names the innermost definition above it. A multi-line signature (`def f(`
 ... `) -> T:`, Go `func F(` ... `) T {`, a TS method) counts from its opening line, and an
 Allman brace on its own line is stepped over to the signature above it. A decorated new member,
-and a new nested class or struct, name the enclosing class. A rename onto an excluded path (a
+and a new nested class or struct, name the enclosing class. Since 8.9.13 (yaadgaar `#121`) an
+indented line comment above a plain new member of a container (`//`, a Rust `///`, a Python `#`;
+never `#[`, `#!`, `#include` or a `/* */` block; a column-0 comment always counts) and the closing line of that member's multi-line signature (`) -> T {`
+at the member's indent) belong to that addition; before, both named the class or impl. A Rust
+`impl` block is named by the first name after `impl` and its generics (`impl<T> X<T>` is `X`;
+`impl Trait for X` is `Trait`); a header split over lines by a `where` clause is no definition
+(known limit: its new members stay unattributed). A `#[...]` attribute on a new method is a
+decorator. A rename onto an excluded path (a
 criterion test, the plan doc) is checked as a deletion of the old file. JS
 `X.y = function` and `X.y = (...) =>` are definitions. A renamed file is diffed old blob against
 new blob at the base path, so only its real changes count. Each definition is printed as
@@ -1467,8 +1474,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.12/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.12/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.13/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.13/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
