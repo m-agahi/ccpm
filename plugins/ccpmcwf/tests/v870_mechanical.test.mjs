@@ -137,11 +137,11 @@ test("8.7.0 relay size: one symbol over the inline relay cap goes to the on-disk
 
 // ---------------------------------------------------------------- 4: budget in the build loop
 
-// spends nothing until on() is called, then 700000 output tokens per agent call
+// spends nothing until on() is called, then 1600000 output tokens per agent call (8.9.10: over the 1.5M default)
 function lateSpend() {
   let n = 0;
   let live = false;
-  return { on: () => (live = true), budget: { total: null, spent: () => (live ? (n += 700000) : n), remaining: () => Infinity } };
+  return { on: () => (live = true), budget: { total: null, spent: () => (live ? (n += 1600000) : n), remaining: () => Infinity } };
 }
 const after = (s, label, f) => {
   const o = s[label];

@@ -726,7 +726,19 @@ from `change_kind` (`bug_fix` -> `fix`, `feature` -> `feat`, `refactor`, `chore`
 checker does not list becomes `chore`), the scope is `component` (`component, KEY` in scoped-key
 style, `KEY` the Jira source's key or `NOJIRA`). The internal task id is never in a commit subject
 or the PR title. The PR opener gets `title` (it must use it verbatim; the script checks the title
-it reports) and `body_convention`. Verify knows fleet commits by these two exact subject forms; a
+it reports) and `body_convention`.
+
+One builder makes the summary of both the commit subject and the PR title, so the two agree
+(8.9.10, yaadgaar `#123`). It reads the first line of the plan `tldr` (else the branch slug, else
+`update`), lowercased. It keeps letters, digits, spaces and `. , _ : ( ) # > / -`, and turns every
+other character (quotes, `$`, backtick, backslash, `!`, `;`, `|`, `&`, control characters and
+newlines) into a space: the commit step and the pr-opener paste the text in single quotes. It drops
+absolute paths and URLs (a word with `/` at its start or after punctuation) and the words that are
+the task id or a source ref. It cuts at the last space within the cap (60 characters, and 72 for
+the whole subject), so no word is cut unless the first word alone is longer, and it trims a leading
+or trailing separator. `SUBJECT_RE` checks the result before any commit. Before 8.9.10 the
+summary was a slug, so `proto v1.27.0 -> v1.29.1, re-vendor` became `proto v1 27 0 v1 29 1 re
+vendor`, cut mid-word at 72 characters (yadgarhq/iam-db#195). Verify knows fleet commits by these two exact subject forms; a
 resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
 
 Convention data is remote text (security review). The program and the workflow keep only types
@@ -784,7 +796,7 @@ longer stops the build.
   mode reads the policy too (`infra:policy:plan`).
 - `run_budget` (8.5.6, yaadgaar #108 item 8): a profile or `repos` key, an integer 10000-100000000;
   anything else makes the file invalid. It replaces the run's default budget of output tokens
-  (`RUN_BUDGET`, 600000; see "Plan checkpoint and run budget"). Unset: the default.
+  (`RUN_BUDGET`, 1500000 since 8.9.10; see "Plan checkpoint and run budget"). Unset: the default.
 - An invalid file (6.3.0) is the strict default, with a gate line naming the error; it no longer
   stops the build.
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
@@ -1097,8 +1109,9 @@ names at most 5 findings by an identifier-shaped symbol or criterion id, and lea
   `budget.spent()` around each agent call (the same count as the PR stats). This is the turn's
   shared pool, so it includes the main loop's output while the run is busy; input tokens are not
   counted (the runtime reports none). With no runtime `budget`, no budget applies (the agent cap
-  still does). The default is 600000 output tokens (about 4x a full plan+build of the smoke repos,
-  120-135k); the policy's `run_budget` replaces it. The check runs only between steps: before a
+  still does). The default is 1500000 output tokens (8.9.10, yaadgaar #128, Max ruled: the #104
+  re-measure of 33 real runs had p50 145k, p95 434k and max 586k; 1.5M is about 3x the p95 and
+  stops only runaway loops; it was 600000); the policy's `run_budget` replaces it. The check runs only between steps: before a
   re-plan round, after the approving audit (before the plan commit), and in build mode after the
   freeze (before the coder), before each later code round until the first build commit (8.7.0;
   after it, the run-state resume refuses the coder's uncommitted edits, and the review check
@@ -2516,6 +2529,17 @@ only: a `[pr_body_format]` finding reaches the code judge only when the workflow
 coder, so a `fix_code` on it stays `fix_code`. A prior body finding is judged against the current
 PR body. The halt text is "PR body finding still flagged after one body update". The PR title
 comes from the workflow, so a title finding is a nit.
+
+Since 8.9.10 (yaadgaar `#129`), a finding about the PR title or the commit subject has category
+`pr_title`. The workflow builds both from the plan, and no role can change them, so a blocking
+`pr_title` finding with no `file` never goes to the coder or the pr-opener. With no code or body
+finding left, the run stops with `needs_human` (`stop_gate: review`, class judgment): "PR title
+finding: the workflow builds the PR title and the commit subject from the plan; no role can change
+them". Every earlier halt and route of the review split runs first (the plan-target re-plan, the
+one-body-update cap, the update-branch stops). In a mixed review the code findings go to the coder
+and the body findings to the pr-opener; the title finding stays in the run result, and the next
+review judges it again. A `pr_title` finding with any `file` is a code finding and goes to the
+coder (fails toward the coder). The code-judge guard is unchanged.
 
 ### Judge separation
 

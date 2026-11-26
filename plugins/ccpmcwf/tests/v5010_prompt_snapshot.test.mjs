@@ -143,10 +143,11 @@ const SCENARIOS = {
 // 8.9.7 (yaadgaar #110): the infra:gates:r<n> prompt passes cover_diff.py a 7th arg, the census python coverage tier ("unsupported" here; mutants keeps 6), and the cover_diff program pin moves; same call counts: the three plan/build pins move, probe unchanged
 // 8.9.8 (yaadgaar #124): + infra:pr-stats:open (the stats block after the first PR open) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with that call dropped every pin is 8.9.7's
 // 8.9.9 (yaadgaar #122): the pr-review schema's category enum gains pr_body_format (the pr-review and the pr-opener role shas move, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.8's
+// 8.9.10 (yaadgaar #129): the pr-review schema's category enum gains pr_title (the pr-review role sha moves, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.9's (the #123 subject builder gives the fixture tldr the same subject)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "364a016d1298830e3dcd5fa6313b91def30ba87fdd3a1e133009a8a97e829c2f" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "6057e489ea962c4dc7c1646c63728149fcb29309df4590d008a8948ef2cc9a12" },
-  "short path (one test writer)": { calls: 90, sha256: "268da1ab9dc82ecb87657bc5da30746c0193477a119f10137c09cbbc89a8ba71" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "0f80094cf027aab7a5cf1cb74b70537437bcb7427274628bc4d4205a5f280862" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "79f917a5a2e115b0d85da9c3c550f58bb3813d361d81aeb6ca5014eff615539c" },
+  "short path (one test writer)": { calls: 90, sha256: "fbb095626a9bbaaee5deb05dd64dc2769739f535cc6cadf61a5415b82ccf8868" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

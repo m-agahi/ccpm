@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.9";
+const FLEET_VERSION = "8.9.10";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -236,7 +236,8 @@ const MAX_UPDATE_REVIEWS = 2;
 const MAX_BODY_FIXES = 1;
 const BODY_TAG = "[pr_body_claim]";
 const FINDING_SEVERITIES = ["blocking", "nit"];
-const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "pr_body_format", "test_quality", "obligation", "other"];
+// 8.9.10 (#129): pr_title, a finding about the PR title or the commit subject (the workflow builds both)
+const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "pr_body_format", "pr_title", "test_quality", "obligation", "other"];
 const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
@@ -286,7 +287,11 @@ const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 // security review: convention types and the scope are plain words; a subject is checked whole before use
 const COMPONENT_RE = /^[a-z][a-z0-9-]{0,19}$/;
-const SUBJECT_RE = /^[a-z][a-z0-9-]{0,19}\([a-z][a-z0-9-]{0,19}(, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA))?\): [a-z0-9 ]{1,60}$/;
+// 8.9.10 (#123): the summary keeps . , _ : ( ) # > / - (no quote, $, backtick, backslash, ! or control char: the
+// commit step and the pr-opener paste it in single quotes); it starts with a letter or digit, ends with one or ")",
+// holds no double space and is at most 60 characters; the whole subject at most SUBJECT_MAX
+const SUBJECT_RE = /^[a-z][a-z0-9-]{0,19}\([a-z][a-z0-9-]{0,19}(, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA))?\): (?!.* {2})[a-z0-9]([a-z0-9 .,_:()#>\/-]{0,58}[a-z0-9)])?$/;
+const SUBJECT_MAX = 72;
 const CC_TYPES = ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"];
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
@@ -1785,7 +1790,7 @@ const ROLE_SHA256 = {
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
   "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-  "pr-review": "87d7050a7fec336baa66a6ac7d7bb2ba68bed4786a7820bb8c0fb03cac89d6b2",
+  "pr-review": "b39d3a4f335426ea5e06b0be04fe9d0043242f56bd354be608ea67f9346824e0",
   "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -3908,7 +3913,8 @@ function tailWriter(l) {
 }
 
 // 8.5.6 (#108 item 8, ADR-1397): the output tokens (budget.spent() growth, TOK) a run may spend; checked between steps only
-const RUN_BUDGET = 600000;
+// 8.9.10 (#128, Max ruled): 1.5M, about 3x the p95 of the #104 re-measure (434k); it stops only runaway loops
+const RUN_BUDGET = 1500000;
 function budgetStop(at) {
   const n = Object.values(TOK).reduce((a, b) => a + b, 0);
   const cap = state.runBudget || RUN_BUDGET;
@@ -7371,6 +7377,22 @@ function ciWatchPrompt(inputs, runs) {
     'Return {status: "ok", reason, ' + returnKeys("ci_watch") + "}."
   );
 }
+// 8.9.10 (#123): the summary of a commit subject and PR title from planner text: the first line, lowercase; every
+// character outside a-z 0-9 . , _ : ( ) # > / - becomes a space (control chars, newlines, quotes and shell
+// characters too); a word that is an absolute path or URL (a "/" at its start or after punctuation) or one of the
+// drop keys (slugified task id and source refs) is dropped; cut at the last space within max, never mid-word unless
+// the first word alone is longer; no leading or trailing separator
+function subjectSummary(text, drop, max) {
+  const words = String(text == null ? "" : text).split(/[\r\n]/)[0].toLowerCase().replace(/[^a-z0-9 .,_:()#>\/-]+/g, " ").split(" ")
+    .filter((w) => w && !/(^|[^a-z0-9._-])\//.test(w) && drop.indexOf(slugify(w, 1e4)) < 0);
+  const trim = (x) => x.replace(/^[^a-z0-9]+/, "").replace(/[ .,_:(#>\/-]+$/, "");
+  let s = trim(words.join(" "));
+  if (s.length > max) {
+    const i = s.lastIndexOf(" ", max);
+    s = trim(i > 0 ? s.slice(0, i) : s.slice(0, max));
+  }
+  return s;
+}
 // 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
 function subjectsOf(pf, brief, slug, taskId, tldr) {
@@ -7383,9 +7405,11 @@ function subjectsOf(pf, brief, slug, taskId, tldr) {
   const head = (t) => (c.types.indexOf(t) >= 0 ? t : c.types.indexOf("chore") >= 0 ? "chore" : c.types[0]) + "(" + scope + "): ";
   // the summary drops the task id and every source ref the title carries
   // 8.3.0 (#87): from the plan tldr (first line, no absolute path tokens), not the intake slug
-  let sl = "-" + (slugify(String(tldr || "").split("\n")[0].replace(/(^|\s)\/\S*/g, " "), 80) || slug) + "-";
-  for (const x of [taskId].concat(brief.sources.map((y) => y.ref), brief.sources.map((y) => "l" + y.ref))) for (const k = slugify(x); k && sl.indexOf("-" + k + "-") >= 0; ) sl = sl.split("-" + k + "-").join("-");
-  const main = (head(KIND_TYPE[pf.change_kind] || "feat") + (sl.replace(/^-+|-+$/g, "").replace(/-+/g, " ") || "update")).slice(0, 72).replace(/\s+$/, "");
+  // 8.9.10 (#123): the one builder of the commit subject and the PR title (subjectSummary)
+  const drop = [taskId].concat(brief.sources.map((y) => y.ref), brief.sources.map((y) => "l" + y.ref)).map((x) => slugify(x, 1e4)).filter(Boolean);
+  const h = head(KIND_TYPE[pf.change_kind] || "feat");
+  const cap = Math.min(60, SUBJECT_MAX - h.length);
+  const main = h + (subjectSummary(tldr, drop, cap) || subjectSummary(String(slug || "").replace(/-/g, " "), drop, cap) || "update");
   const fix = head("fix");
   return { main, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
 }
@@ -7602,7 +7626,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const names = { taskId: ref.task_id, slug: ref.slug };
   state.ownRefs = ownRefPrefixes(names, lay);
   const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id, ref.tldr);
-  for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
+  for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x) || x.length > SUBJECT_MAX) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,
@@ -8188,8 +8212,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // 7.3.0 (#41): after update-branch too
           // 8.9.9 (#122): pr_body_format findings too, only with no file (null or absent); any file goes to the coder
           const isBody = (f) => f.category === "pr_body_claim" || (f.category === "pr_body_format" && f.file == null);
+          // 8.9.10 (#129): a pr_title finding with no file is about the title the workflow builds (no role can change
+          // it); any file goes to the coder. It never goes to the coder or the pr-opener
+          const isTitle = (f) => f.category === "pr_title" && f.file == null;
           const bodyF = rv.blocking.filter(isBody);
-          const codeF = rv.blocking.filter((f) => !isBody(f));
+          const titleF = rv.blocking.filter(isTitle);
+          const codeF = rv.blocking.filter((f) => !isBody(f) && !isTitle(f));
           const inUpd = upd || (state.update && state.update.head === approvedSha);
           // 7.4.0 (#61): a fix that contradicts a frozen test or criterion re-plans, never a coder round
           const planF = rv.blocking.filter((f) => f.target === "plan");
@@ -8214,6 +8242,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             gate("review u" + upd.reviews + ": changes_requested (" + codeF.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
             return { gate: "review", update: true, findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
           }
+          // 8.9.10 (#129): title findings alone, after every halt above: the human fixes the title and the commit subject
+          if (!codeF.length && !bodyF.length)
+            halt(J_PR, "needs_human", "review v" + reviews + ": PR title finding: the workflow builds the PR title and the commit subject from the plan; no role can change them: " + titleF.map((f) => (f.id || "-") + ": " + f.summary).join("; "), "review");
           if (!codeF.length) {
             // body only: a pr-opener body update and a re-review; no code round, no MAX_REVIEWS slot
             state.bodyFixes = (state.bodyFixes || 0) + 1;
