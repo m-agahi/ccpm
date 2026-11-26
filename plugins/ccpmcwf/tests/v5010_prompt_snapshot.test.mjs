@@ -142,10 +142,11 @@ const SCENARIOS = {
 // 8.9.5 (yaadgaar #112, review of #121): plan-audit's caller_check gains auto_unlisted (the doc and lock hit count per symbol checked by code hash; {} in these scenarios) and the plan-audit role sha moves (masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with auto_unlisted dropped from caller_check every pin is 8.9.4's
 // 8.9.7 (yaadgaar #110): the infra:gates:r<n> prompt passes cover_diff.py a 7th arg, the census python coverage tier ("unsupported" here; mutants keeps 6), and the cover_diff program pin moves; same call counts: the three plan/build pins move, probe unchanged
 // 8.9.8 (yaadgaar #124): + infra:pr-stats:open (the stats block after the first PR open) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with that call dropped every pin is 8.9.7's
+// 8.9.9 (yaadgaar #122): the pr-review schema's category enum gains pr_body_format (the pr-review and the pr-opener role shas move, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.8's
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "72d8f034dc88cd1ee581a9feda9a1a3d760a91108163e657e7c5590071f38637" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "47e04e9ef8c581b9ca16a107050386fca717c5da4261444a2f5205fca1be3551" },
-  "short path (one test writer)": { calls: 90, sha256: "b4fb18a0804b8f730f9cded31e5c7c384b403711142b9b21dc0f5190cef3139e" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "364a016d1298830e3dcd5fa6313b91def30ba87fdd3a1e133009a8a97e829c2f" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "6057e489ea962c4dc7c1646c63728149fcb29309df4590d008a8948ef2cc9a12" },
+  "short path (one test writer)": { calls: 90, sha256: "268da1ab9dc82ecb87657bc5da30746c0193477a119f10137c09cbbc89a8ba71" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

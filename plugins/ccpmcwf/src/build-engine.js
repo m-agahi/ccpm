@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.8";
+const FLEET_VERSION = "8.9.9";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -236,7 +236,7 @@ const MAX_UPDATE_REVIEWS = 2;
 const MAX_BODY_FIXES = 1;
 const BODY_TAG = "[pr_body_claim]";
 const FINDING_SEVERITIES = ["blocking", "nit"];
-const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "test_quality", "obligation", "other"];
+const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "pr_body_format", "test_quality", "obligation", "other"];
 const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
@@ -1780,12 +1780,12 @@ const ROLE_SHA256 = {
   "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
   "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
   "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-  "fleet-pr-opener": "1f88b7eafc51f60762bdc58b919e1ddbce39f56b1c044099b4225721eb495d0e",
+  "fleet-pr-opener": "da31c5fed3d8059b605d75dbd07d3f9736bab762262daa7bfe2232020e351d73",
   "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
   "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-  "pr-review": "e21205c77290c082cada562ac8a3c63b47a4d2866614d18f9f20d617c2c5e9f1",
+  "pr-review": "87d7050a7fec336baa66a6ac7d7bb2ba68bed4786a7820bb8c0fb03cac89d6b2",
   "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -8186,8 +8186,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         if (rv.blocking.length) {
           // 6.3.3 (2144): pr_body_claim findings go to the pr-opener (one body update per run), all others to the coder;
           // 7.3.0 (#41): after update-branch too
-          const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
-          const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
+          // 8.9.9 (#122): pr_body_format findings too, only with no file (null or absent); any file goes to the coder
+          const isBody = (f) => f.category === "pr_body_claim" || (f.category === "pr_body_format" && f.file == null);
+          const bodyF = rv.blocking.filter(isBody);
+          const codeF = rv.blocking.filter((f) => !isBody(f));
           const inUpd = upd || (state.update && state.update.head === approvedSha);
           // 7.4.0 (#61): a fix that contradicts a frozen test or criterion re-plans, never a coder round
           const planF = rv.blocking.filter((f) => f.target === "plan");
@@ -8200,7 +8202,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             return { gate: "review", plan: planF.map((f) => ({ target: "plan", criterion: null, finding: reviewFindingText(f) })) };
           }
           if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
-            halt(J_PR, "needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
+            halt(J_PR, "needs_human", "review v" + reviews + ": PR body finding still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
           // 6.1.0 (2049): code rounds on the forge's merge only when R1-R5 pass, else the 6.0.1 stop
           // (the findings stay in the run result, state.review; no PR-body write before the stop)
           if (codeF.length && inUpd) {
@@ -8221,7 +8223,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             if (!inUpd) reviewNotes = rv.nits;
             pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
             await statsStep(upd ? undefined : "body-v" + reviews);
-            gate("review v" + reviews + ": changes_requested (" + bodyF.length + " pr_body_claim) -> pr-opener body update");
+            gate("review v" + reviews + ": changes_requested (" + bodyF.length + " PR body finding(s)) -> pr-opener body update");
             i--;
             continue;
           }

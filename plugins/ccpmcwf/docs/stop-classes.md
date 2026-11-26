@@ -1,4 +1,4 @@
-# Stop classes of build-engine.js (ccpmcwf 8.9.8)
+# Stop classes of build-engine.js (ccpmcwf 8.9.9)
 
 yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in
 script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or
@@ -281,7 +281,7 @@ three stops that return without `halt` are listed after the table.
 | 241 | `buildFromRef` | - | safety | "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha | repo or branch identity |
 | 242 | `buildFromRef` | review | safety | "review: no PR to review (pr-opener returned no pr_url/pr_number)" | the review state does not match the pushed head, or a review role broke its contract |
 | 243 | `buildFromRef` | review | judgment | "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge | a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand |
-| 244 | `buildFromRef` | review | judgment | "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id \|\| " | a PR body claim is still flagged after one body update: a human edits the body |
+| 244 | `buildFromRef` | review | judgment | "review v" + reviews + ": PR body finding still flagged after one body update: " + bodyF.map((f) => (f.id \|\| | a PR body finding is still flagged after one body update: a human edits the body |
 | 245 | `buildFromRef` | review | judgment | "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id \|\| "-")).join(", ") | the re-review after update-branch requests changes: no coder round runs on the forge's merge |
 | 246 | `buildFromRef` | review | judgment | "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id \|\| "-") + " " + (f.f | the review rounds are spent: a human fixes or re-plans |
 | 247 | `buildFromRef` | stopGate | safety | where + ": " + noPushText(remoteSlug) | push access is not known or is refused |
