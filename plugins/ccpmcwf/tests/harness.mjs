@@ -1791,6 +1791,9 @@ function argsProject(args) {
 }
 
 export function happy(over = {}) {
+  // 8.9.15 review of cae63d3: over.planBase, a full plan base sha for the tests that need one (PB is short)
+  const pb = over.planBase || PB;
+  const fpb = (fp) => ({ head: pb, tree: fp.tree });
   const crit = over.criteria || criteria(2);
   const store = {};
   // the last commit the commit step made: the review's worktree state
@@ -1809,7 +1812,7 @@ export function happy(over = {}) {
     "infra:yaadgaar-read:ci": yaadgaarReadOk,
     "infra:yaadgaar-writeback": yaadgaarWritten,
     "infra:yaadgaar-writeback:ci": yaadgaarWritten,
-    "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits: [], refs: [] },
+    "infra:branch-scan": { status: "ok", reason: "scanned", head: pb, commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:verify-plan-commit": verifyStub(store),
@@ -1818,7 +1821,7 @@ export function happy(over = {}) {
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
-      head: PB,
+      head: pb,
       plan_sha256: PSHA,
       is_ancestor: true,
       commits_since: [],
@@ -1850,10 +1853,10 @@ export function happy(over = {}) {
       memory_notes: ["planner fact"],
     },
     "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
+    "hasher:pre-writers:r1": { status: "ok", fingerprint: fpb(FP_PRE) },
     "hasher:post-writers:r1": (prompt) => ({
       status: "ok",
-      fingerprint: FP_TESTS,
+      fingerprint: fpb(FP_TESTS),
       changed: crit.flatMap((c) => c.test_files),
     }),
     "role:fleet-test-judge:r1": {
@@ -1864,8 +1867,8 @@ export function happy(over = {}) {
       checked: [],
       memory_notes: ["judge fact"],
     },
-    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
-    "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
+    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: fpb(FP_TESTS) },
+    "hasher:freeze:f1": { status: "ok", fingerprint: fpb(FP_TESTS), hashes: HASHES },
     "role:fleet-coder:r1": {
       status: "ok",
       reason: "done",
@@ -1873,7 +1876,7 @@ export function happy(over = {}) {
       frozen_tests_red_at_start: true,
       suite_result: { command: "pytest", exit_code: 0 },
     },
-    "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES },
+    "hasher:post-coder:r1": { status: "ok", fingerprint: fpb(FP_K1), hashes: HASHES },
     "role:fleet-code-judge:r1": {
       status: "ok",
       reason: "good",
@@ -1882,7 +1885,7 @@ export function happy(over = {}) {
       hash_check: { match: true, mismatched: [] },
       suite_result: { command: "pytest", exit_code: 0 },
     },
-    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1 },
+    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: fpb(FP_K1) },
     "infra:commit:r1": commitStepStub(1, live),
     "infra:commit:r2": commitStepStub(2, live),
     "infra:commit:r3": commitStepStub(3, live),

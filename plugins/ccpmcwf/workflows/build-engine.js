@@ -1576,7 +1576,7 @@ const PROGRAM_SHA256 = {
 "policy": "cc6e2915dfb969338e46d0dc114c870739727db275e513d63b2c0e71c49dae43",
 "pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
 "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
-"pr_state": "13184f1102ca4d6c4085e89c0a2a86294cc3c36858936fa443ba6c331e572703",
+"pr_state": "47572a3baa0d1f0ce76b96ba069fc24986cc50215845b0d48fe61af0ee86b8bd",
 "pr_test_block": "9f4047598d925a5d0fdfe19d465799aa1ae778165d94b6f3a688e22c908893ad",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
@@ -7240,7 +7240,7 @@ const c=(ref.plan_facts.conventions.body||{}).checker;
 if(typeof c!=="string"||!c)return null;
 const pre=remoteSlug.toLowerCase()+"/";
 const path=c.toLowerCase().startsWith(pre)?c.slice(pre.length):null;
-if(!path||!/^[A-Za-z0-9._\/-]{1,255}\.py$/.test(path)||path.split("/").indexOf("..")>=0||!/^[0-9a-f]{7,40}$/.test(String(planBase))){
+if(!path||!/^[A-Za-z0-9._\/-]{1,255}\.py$/.test(path)||path.split("/").indexOf("..")>=0||!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(String(planBase))){
 gate(tl+": the repo's body checker "+JSON.stringify(c.slice(0,200))+" is not a script of "+remoteSlug+" at the plan base; not run");
 return null;
 }
@@ -7566,9 +7566,10 @@ state.bodyReviews=(state.bodyReviews||0)+1;
 state.bodyFixed=(state.bodyFixed||[]).concat(bodyF);
 state.bodyCheck=(state.bodyCheck||[]).concat(bfacts);
 if(!inUpd)reviewNotes=rv.nits;
+await saveState("pr_open","infra:state:pr_open:pre-body-v"+reviews);
 pr=await openPr("role:fleet-pr-opener:body-v"+reviews,{body_findings:state.bodyFixed});
-await statsStep(upd?undefined:"body-v"+reviews);
 await saveState("pr_open","infra:state:pr_open:body-v"+reviews);
+await statsStep(upd?undefined:"body-v"+reviews);
 gate("review v"+reviews+": changes_requested ("+bodyF.length+" PR body finding(s)) -> pr-opener body update");
 i--;
 continue;

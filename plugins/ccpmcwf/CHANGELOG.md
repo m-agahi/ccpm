@@ -30,8 +30,8 @@ review.
   failing then still holds, with the CI watch on or off. A fact that holds stops the run for a
   human (judgment class, gate review), also on an approve. There is no second body update.
 - The body route's state (the update cap, the fixed and pending findings, the facts to confirm, the
-  demoted ids) is in the run-state, and the body-only route saves a `pr_open` run-state after its
-  body update. A resume keeps the cap of one body update and runs the confirmation. A run-state
+  demoted ids) is in the run-state, and the body-only route saves a `pr_open` run-state before its
+  body update and again before its stats block (review of cae63d3). A resume keeps the cap of one body update and runs the confirmation. A run-state
   before 8.9.15 has none of these keys; one with some but not all, or a malformed one, is refused.
 
 ### Added
@@ -48,7 +48,8 @@ review.
 - The repo's body checker runs only when `body_convention.checker` names a `.py` file of this repo:
   `pr_convention.py` writes `<owner>/<repo>/<path>.py` when it read the checker and
   `<repo>:<workflow path>` when it could not. Another repo's checker, the workflow form and a path
-  with `..` get a gate line and do not run. The script is read from the plan base commit, never the
+  with `..` get a gate line and do not run. The script is read from the plan base commit (40 or 64 hex, as
+  `plan_ref_write.py` takes it; any other base skips it with a gate line), never the
   worktree or the PR head, and runs once in `sandbox.py` (pinned sha256; no network, a read-only
   `/`, the worktree and HOME hidden, a fresh overlay, a 60 s deadline) as `python3 -I <checker.py>
 <body.md>` with `PR_BODY_FILE` and `GITHUB_EVENT_PATH`, and no test DSN (a body checker needs no

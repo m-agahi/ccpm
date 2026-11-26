@@ -433,7 +433,7 @@ try:
         if tp is not None and not (isinstance(tp, dict) and isinstance(tp.get('repo'), str) and SLUG.match(tp['repo']) and isinstance(tp.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}$', tp['path']) and '..' not in tp['path'].split('/') and (tp.get('ref') is None or (isinstance(tp.get('ref'), str) and SHA.match(tp['ref'])))):
             raise Fail('bad template in the body spec')
         ck = sp.get('checker')
-        if ck is not None and not (isinstance(ck, dict) and isinstance(ck.get('worktree'), str) and os.path.isabs(ck['worktree']) and ck['worktree'] == os.path.normpath(ck['worktree']) and isinstance(ck.get('base'), str) and re.match(r'^[0-9a-f]{7,40}$', ck['base']) and isinstance(ck.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}\.py$', ck['path']) and '..' not in ck['path'].split('/') and not ck['path'].startswith('/')):
+        if ck is not None and not (isinstance(ck, dict) and isinstance(ck.get('worktree'), str) and os.path.isabs(ck['worktree']) and ck['worktree'] == os.path.normpath(ck['worktree']) and isinstance(ck.get('base'), str) and re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', ck['base']) and isinstance(ck.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}\.py$', ck['path']) and '..' not in ck['path'].split('/') and not ck['path'].startswith('/')):
             raise Fail('bad checker in the body spec')
         v = view('body,headRefOid,state')
         out['head'] = v.get('headRefOid')

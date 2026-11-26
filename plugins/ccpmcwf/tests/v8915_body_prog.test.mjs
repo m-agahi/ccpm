@@ -217,7 +217,10 @@ test("8.9.15 B2: a checker the sandbox cannot run (sandbox.py off its pin, or no
     const off = body({ body: "b" }, { checker: Object.assign({}, ck, { path: "other.py" }) }, join(d, "pr_state.py")).o;
     assert.deepEqual([off.checker.ran, off.checker.reason], [false, "sandbox unavailable: sandbox.py does not hash to its pinned sha256"]);
     assert.equal(body({ body: "b" }, {}).o.checker, null);
-    for (const bad of [{ worktree: "rel", base: x.base, path: "c.py" }, { worktree: x.wt, base: "zz", path: "c.py" }, { worktree: x.wt, base: x.base, path: "../c.py" }, { worktree: x.wt, base: x.base, path: "c.sh" }])
+    // review of cae63d3: the base is 40 or 64 hex (a SHA-256 repo), as plan_ref_write.py takes it; never abbreviated
+    const sha256Base = body({ body: "b" }, { checker: Object.assign({}, ck, { base: "c".repeat(64) }) }).o;
+    assert.deepEqual([sha256Base.error, sha256Base.checker.reason], [null, "the checker check.py is not a file at " + "c".repeat(64)]);
+    for (const bad of [{ worktree: x.wt, base: x.base.slice(0, 7), path: "c.py" }, { worktree: x.wt, base: x.base.slice(0, 39), path: "c.py" }, { worktree: x.wt, base: "c".repeat(41), path: "c.py" }, { worktree: "rel", base: x.base, path: "c.py" }, { worktree: x.wt, base: "zz", path: "c.py" }, { worktree: x.wt, base: x.base, path: "../c.py" }, { worktree: x.wt, base: x.base, path: "c.sh" }])
       assert.match(body({ body: "b" }, { checker: bad }).o.error, /bad checker in the body spec/, JSON.stringify(bad));
   } finally {
     x.done();

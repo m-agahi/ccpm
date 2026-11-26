@@ -2653,8 +2653,9 @@ check passing. A pending check waits once (`infra:ci-watch:body-v<n>`, the polic
 minutes) and is read again; still pending or failing, it holds. Else the run stops with
 `needs_human` (`stop_gate: review`, class judgment, the `J_PR` options), on an approve too; the
 stop names finding ids and fact kinds, never the quote. The body route's state is in the run-state,
-and the body-only route saves a `pr_open` run-state after its update, so a resume keeps the cap of
-one body update and the confirmation.
+and the body-only route saves a `pr_open` run-state before its body update and again before its
+stats block, so a resume from any stop keeps the cap of one body update and the confirmation (a
+resume onto a body the update never rewrote fails closed).
 
 Known limits: the body describes the code, so a code defect mislabelled as a body claim can still
 quote the body's own sentence about that code; the confirmation then only proves the sentence
@@ -2670,7 +2671,8 @@ checker's exit code and stderr tail in `retry_reason`); a second miss goes on as
 The checker runs only when `body_convention.checker` is `<owner>/<repo>/<path>.py` of this repo
 (the form `pr_convention.py` writes when it read the checker). Another repo's checker or the
 `<repo>:<workflow path>` form (checker not readable) is skipped with a gate line. The script is
-read from the plan base commit, never the worktree or the PR head, and runs in `sandbox.py` (no
+read from the plan base commit (40 or 64 hex; any other base skips the checker with a gate line),
+never the worktree or the PR head, and runs in `sandbox.py` (no
 network, `/` read-only, a 60 s deadline, no test DSN) on the body as a file (`argv[1]`,
 `PR_BODY_FILE`, and `GITHUB_EVENT_PATH` with `pull_request.body`). Known limits: a checker that
 imports sibling files cannot run (only the one file is copied), and a checker that reads the body
