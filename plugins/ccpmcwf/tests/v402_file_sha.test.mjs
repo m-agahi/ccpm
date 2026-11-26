@@ -34,6 +34,8 @@ const SAMPLES = [
   "preflight",
   "infra:path-check:commit-plan",
   "infra:path-check:commit-plan:relay-retry",
+  // 8.9.11 (#125): the census retry
+  "infra:gate-tools:preflight:relay-retry",
   "workspace",
   // 5.0.8 (ledger 2030)
   "infra:gh-identity:intake",

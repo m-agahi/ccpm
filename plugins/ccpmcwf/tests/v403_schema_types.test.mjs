@@ -396,6 +396,18 @@ const READS = {
     "g.container object": "prog:gate_tools:container",
     "g.container.present boolean": "prog:gate_tools:container.present",
   },
+  // 8.9.11 (#125): the census retry's result (null with no result), and an agent's reason for the gate line only
+  censusStep: {
+    "r object": "parsed: the census retry's result; a non-object relays no census",
+    // Max ruled: the retry decision reads the relay's shape (a script fact), never its reason text
+    "g object": "preflight:gate_tools",
+    "pg object": "preflight:gate_tools.program",
+    "g.digest string-re": "prog:gate_tools:digest",
+  },
+  agentReason: {
+    "r object": "parsed: the preflight or census retry result; a non-object gives no reason",
+    "r.reason string": "parsed: an agent's reason (preflight:reason, the retry's reason), log text only; a non-string gives no reason",
+  },
   // 8.9.7 (#110): the census python coverage tier for cover_diff's 7th arg (state.gateTools is set by gateCensus only)
   censusCoverTier: {
     "row object": "prog:gate_tools:matrix.*",
@@ -1346,7 +1358,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.10\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.10\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.11\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.11\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

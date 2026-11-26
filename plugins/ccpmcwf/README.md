@@ -1433,6 +1433,52 @@ intake, and `probe.gate_tools` carries the rows. The census is advisory: an unus
 digest, other args, a malformed shape) logs `gate census unusable` and marks no gate tool
 available; it never stops the run.
 
+**Census retry (8.9.11, yaadgaar `#125`).** The script retries a census relay mis-copy only. It
+never retries a census call that did not run.
+
+- A preflight `gate_tools` relay that carries the program's own header (`program.name` is
+  `gate_tools`) and a 64-hex digest, but fails its args or digest check, is a mis-copy: the
+  program ran. The script decides this from the relay's shape, never from the agent's reason text.
+  A mis-copy gets one fresh agent, `infra:gate-tools:preflight:relay-retry`. That agent runs only
+  the census command, on the same args, one model tier above preflight (sonnet to opus,
+  ADR-1364). Its gate line is a `warning:` line, so the stats block does not count it as a gate.
+  The retry counts toward the agent cap, as the scripts_probe retry does. A retry that is not
+  usable (no result, a digest or args mismatch) is not used, and no third agent runs. The line is
+  then `gate census unusable (no digest-checked gate_tools after one retry): no gate tool
+available; the preflight agent's reason: "<reason>"; the retry agent's reason: "<reason>"`.
+- Any other relay (null, absent, a non-object, or an object with no `gate_tools` header or no
+  64-hex digest) means the program did not run. The script runs
+  no retry (Max ruled: a fresh agent that sends the same command in other words would re-ask a
+  safety classifier until it says yes). The line is `gate census unusable (no gate_tools relay:
+the program did not run; no retry): no gate tool available; the preflight agent's reason:
+"<reason>"; if a permission denial blocked it, add the allow rule (README: Census retry)`.
+- Each reason is the agent's own text, at most 200 characters. Control characters and the bidi
+  controls U+202A to U+202E and U+2066 to U+2069 become spaces. The preflight agent's reason can
+  be about any of its steps, not only the census. It is log text only: no stop class or route
+  reads it.
+
+The cause seen in real runs (4 of 33 census probes on 8.3.0 or newer) is the Claude Code auto-mode
+permission classifier. It denied the census Bash call with "Undermining Oversight". The plugin
+changes no settings. To keep auto mode from denying the call, add allow rules in your own
+settings. The preflight agent runs
+`sha256sum -- <scripts_dir>/gate_tools.py && python3 -I <scripts_dir>/gate_tools.py '<repo>' '<AUDIT_IMAGE>'`,
+and the retry runs the same command with the two script paths in single quotes. `<scripts_dir>` is
+`$HOME/.claude/plugins/cache/<marketplace>/ccpmcwf/<version>/scripts`. Pin the rules to the
+marketplace and the version, and put a wildcard in the args only:
+
+```
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.11/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.11/scripts/gate_tools.py *)
+```
+
+- These rules go stale at every plugin update: change the version in both after each update.
+- Never put a wildcard in the path (for example `cache/*/ccpmcwf/*/scripts`). A `*` there can
+  match `/` or `..`, so a traversal path, or any `gate_tools.py` that an agent writes under the
+  cache dir, would run arbitrary Python with no prompt.
+- How Claude Code matches a `&&` chain, and a quoted path, against these rules is not verified.
+  It is also not verified that an allow rule always skips the auto-mode classifier. Test the
+  rules with a real probe (`/ccpmcwf:build-task probe`) before you rely on them.
+
 ### Throwaway test database (4.0.0, ledger 1981)
 
 Opt-in: a repo commits `.fleet-test-db.json`, for example

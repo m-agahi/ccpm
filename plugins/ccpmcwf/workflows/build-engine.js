@@ -40,6 +40,7 @@ const TIERS=["fable","opus","sonnet","haiku"];
 const INFRA_TIER = [
 ["infra:role-read:", "haiku"],
 ["infra:path-check:", "sonnet"],
+["infra:gate-tools:", "sonnet"],
 ["preflight:relay-retry", "opus"],
 ["preflight", "sonnet"],
 ["workspace", "sonnet"],
@@ -109,7 +110,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.10";
+const FLEET_VERSION="8.9.11";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -1662,6 +1663,7 @@ return cmd;
 const PROGRAM_SLOTS=[
 [/^preflight(:relay-retry)?$/,[["path_check","path_check"],["session_project","session_project"],["gate_tools","gate_tools"]]],
 [/^infra:path-check:/,[[null,"path_check"]]],
+[/^infra:gate-tools:/,[["gate_tools","gate_tools"]]],
 [/^workspace$/,[["remote_url_check","remote_url"],["gh_check","gh_identity"],["exclude","exclude_add"]]],
 [/^infra:gh-identity:/,[[null,"gh_identity"]]],
 [/^hasher:/,[[null,"hasher"]]],
@@ -4034,7 +4036,7 @@ state.sessionProject=sjOk&&sj.project?sj.project:null;
 gate("session yaadgaar project: "+(sjOk?JSON.stringify(state.sessionProject)+" ("+sj.source+" of "+logPath(sj.cwd)+")":"unknown (no digest-checked session_project)"));
 if(sjOk&&String(sj.cwd).indexOf(repo+"/.claude/worktrees/")===0)
 gate("WARN session_project ran in "+logPath(sj.cwd)+" (a worktree under the repo): a cd there is ignored; start the session in the directory you mean");
-gateCensus(pre.gate_tools,repo);
+await censusStep(pre,repo);
 state.repo=repo;
 for(const role of ROLES){
 const line=ROLE_DISPATCH[role];
@@ -4052,9 +4054,32 @@ function gateCensus(g,repo){
 const ok=!!g&&typeof g==="object"&&canonical(g.args)===canonical([repo,AUDIT_IMAGE])&&relayDigestOk(g,progKeys("gate_tools"),"gate_tools")&&
 strsOf(g.languages)&&!!g.matrix&&typeof g.matrix==="object"&&g.languages.every((l)=>!!g.matrix[l]&&typeof g.matrix[l]==="object")&&!!g.container&&typeof g.container==="object";
 state.gateTools=ok?g:null;
-if(!ok)return gate("gate census unusable (no digest-checked gate_tools): no gate tool available");
+if(!ok)return false;
 for(const l of g.languages)gate(censusLine(g,l));
 gate("gate census security: "+(g.container.present===true?g.container.runtime+" "+AUDIT_IMAGE:"not available: "+g.container.reason));
+return true;
+}
+const GATE_TOOLS_SCHEMA={type:"object",required:["status","reason"],properties:{status:STATUS_PROP,reason:STR,gate_tools:PROGRAM_OUTPUT}};
+function agentReason(r){
+const t=r&&typeof r==="object"&&typeof r.reason==="string"&&r.reason?r.reason:"no reason";
+return JSON.stringify(Array.from(t).map((c)=>(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(c)?" ":c)).slice(0,200).join(""));
+}
+async function censusStep(pre,repo){
+const g=pre.gate_tools;
+if(gateCensus(g,repo))return;
+const own="; the preflight agent's reason: "+agentReason(pre);
+const pg=g&&typeof g==="object"?g.program:null;
+if(!pg||typeof pg!=="object"||pg.name!=="gate_tools"||!SHA256_RE.test(g.digest))
+return gate("gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool available"+own+"; if a permission denial blocked it, add the allow rule (README: Census retry)");
+const label="infra:gate-tools:preflight:relay-retry";
+const up=RETRY_UP[infraModel("preflight")];
+if(capped()+1>MAX_AGENTS)return gate("gate census unusable (no digest-checked gate_tools, no retry: agent cap "+MAX_AGENTS+"): no gate tool available"+own);
+gate("warning: preflight: the gate_tools relay does not check out (args or digest); running the census once more on "+up+" ("+label+")");
+state.agents++;
+const ic=infraCall(label,INFRA_STEP+"the gate tool census, again. Read only; no edits"+ONE_CMD+".\n"+inputsLine({repo})+RUN_600S+progCmd("gate_tools",[repo,AUDIT_IMAGE])+"\n"+PRINTS_ONE+printsKeys("gate_tools")+": "+relayAs("gate_tools")+". Non-zero exit or not run -> status failed, gate_tools null, the error or refusal in reason.\nReturn {status, reason, gate_tools}.",{schema:GATE_TOOLS_SCHEMA,agentType:JUDGE_AGENT,phase:"Preflight"});
+const r=await agentT(ic.prompt,agentOpts(ic.opts,label,up));
+if(gateCensus(r&&typeof r==="object"?r.gate_tools:null,repo))return;
+gate("gate census unusable (no digest-checked gate_tools after one retry): no gate tool available"+own+"; the retry agent's reason: "+agentReason(r));
 }
 function censusCoverTier(){
 const g=state.gateTools;

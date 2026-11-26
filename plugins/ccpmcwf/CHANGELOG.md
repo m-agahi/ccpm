@@ -1,5 +1,57 @@
 # Changelog
 
+## [8.9.11] - 2026-11-26
+
+ccpmcwf 8.9.11 (yaadgaar `#125`, `#127`): the gate census relay gets one retry for a relay
+mis-copy only, and the agent's reason shows in the gate line.
+
+### Fixed
+
+- `#125` (daneel 8.9.7 probe wf_805cabc6-455): the Claude Code auto-mode permission classifier
+  denied the preflight agent's `gate_tools.py` Bash call ("Undermining Oversight"; 4 of 33 census
+  probes on 8.3.0 or newer). `gateCensus` took `pre.gate_tools` once, with no retry, so the run
+  had no census: since 8.9.7 that drops the uv coverage tier (`censusCoverTier()` returns ""),
+  and it skips intake's `unsupportedRequired` check. The denial showed only in the transcript.
+
+### Changed
+
+- A `gate_tools` relay with the program's own header (`program.name` `gate_tools`) and a 64-hex
+  digest that fails its args or digest check (a mis-copy: the program ran, a script fact) gets one fresh agent, `infra:gate-tools:preflight:relay-retry`, that runs only the
+  census command (same args, digest check) one tier above preflight (sonnet to opus, ADR-1364).
+  Its gate line is a `warning:` line, so the stats block's gates count leaves it out. It counts
+  toward the agent cap, as the scripts_probe retry does; the cap skips it and never stops the
+  run. An unusable retry (no result, a digest or args mismatch) is not used, and no third agent
+  runs. The line is then `gate census unusable (no digest-checked gate_tools after one retry): no
+gate tool available; the preflight agent's reason: "<reason>"; the retry agent's reason:
+"<reason>"`.
+- Review of c6b3c5b (Max ruled) and of 94efc77: any other relay (null, absent, a non-object, or
+  an object with no `gate_tools` header or no 64-hex digest) means the program did not run, for
+  example after a permission denial. It gets no retry: a fresh agent that sends the same
+  command in other words would re-ask a safety classifier until it says yes. The line is
+  `gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool
+available; the preflight agent's reason: "<reason>"; if a permission denial blocked it, add the
+allow rule (README: Census retry)`. The decision reads the relay's shape only, never the reason.
+- Each reason is capped at 200 characters; control characters and the bidi controls U+202A to
+  U+202E and U+2066 to U+2069 become spaces. It is log text only: nothing routes or classifies
+  on it.
+- The plugin README gives allow rules pinned to the marketplace and the version, with a wildcard
+  in the args only (review of c6b3c5b: a wildcard in the path can match `..`). They go stale at
+  every update, and their matching is unverified. The plugin changes no settings.
+- Tests: `v800_gate_tools` G1-4 expects one retry for an object relay and none for a null or
+  string relay; `v4_s1` applies its preflight program mutation to the retry too; `v897` breaks
+  the retry too. These are intended behaviour changes. The harness's default preflight census
+  now echoes the prompt's repo (as the program does), not the run args' repo: a build whose args
+  named another repo had an unusable census in the harness.
+
+### Not changed
+
+- `#127`: diagnosed, no gap. In wf_6205fd83-1de and wf_d5a2ddcd-8c5 the rewrite writer
+  `infra:plan-chunks:r1w0` ran on opus (meta.json `opus`, jsonl `claude-opus-5-5`), as the gate
+  line "(round 1) on opus" says. `infra:commit-plan:rewrite-1` re-runs the program step and
+  `infra:path-check:commit-plan:rewrite-1` is a standalone PATH re-check; both stay on sonnet by
+  ADR-1364. meta.json matched the jsonl model for every agent. `v730_chunk_rewrite_model` already
+  pins the writer tier.
+
 ## [8.9.10] - 2026-11-26
 
 ccpmcwf 8.9.10 (yaadgaar `#123`, `#129`, `#128`): an intact PR title and commit subject, a route

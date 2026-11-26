@@ -302,7 +302,8 @@ test("8.9.7 #110: the workflow passes the digest-checked census python coverage 
 
 test("8.9.7 #110: a census that fails its digest gives cover_diff no tier", async () => {
   const s = happy();
-  s.__mutate = { label: "preflight", fn: (r) => Object.assign(r, { gate_tools: Object.assign(r.gate_tools, { matrix: Object.assign(r.gate_tools.matrix, { python: { coverage: UV_TIER, mutation: "builtin", security: "unsupported" } }) }) }) };
+  // 8.9.11 (#125): and its one retry fails the same way
+  s.__mutate = { label: /^(preflight|infra:gate-tools:preflight:relay-retry)$/, fn: (r) => Object.assign(r, { gate_tools: Object.assign(r.gate_tools, { matrix: Object.assign(r.gate_tools.matrix, { python: { coverage: UV_TIER, mutation: "builtin", security: "unsupported" } }) }) }) };
   const out = await run(s, ARGS);
   assert.equal(argsOf(call(out, "infra:gates:r1").prompt, "cover_diff")[6], "");
 });
