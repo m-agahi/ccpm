@@ -187,6 +187,21 @@ test("8.9.13 review of c137fc9: a new member inserted before a deeper nested def
     for (const [form, text] of FORMS_RS) assert.deepEqual(defsOf("a.rs", base, ins(base, "        let v = 1;", text)).defs, ["X@a.rs:1"], "rust " + kind + ", " + form);
 });
 
+test("8.9.13 review of 4369d29: a plain new member after a field, an attribute or a comment names nothing, as in 8.9.12", { skip: !HAVE_PY }, () => {
+  const M = "    def y(self):\n        return 2\n";
+  const rows = [
+    ["py class attribute", "k.py", "class A:\n    z = 1\n", "class A:\n    z = 1\n" + M],
+    ["py member-indent comment", "k.py", "class A:\n    def x(self):\n        return 1\n    # helpers\n", "class A:\n    def x(self):\n        return 1\n    # helpers\n" + M],
+    ["py dataclass fields", "k.py", "@dataclass\nclass A:\n    a: int\n    b: str = ''\n", "@dataclass\nclass A:\n    a: int\n    b: str = ''\n\n" + M],
+    ["js class field", "c.js", "export class C {\n  x = 1;\n}\n", "export class C {\n  x = 1;\n  b() {\n    return 2;\n  }\n}\n"],
+    ["js member comment", "c.js", "export class C {\n  a() {\n    return 1;\n  }\n  // helpers\n}\n", "export class C {\n  a() {\n    return 1;\n  }\n  // helpers\n  b() {\n    return 2;\n  }\n}\n"],
+    ["kt property", "a.kt", "class K {\n    val z = 1\n}\n", "class K {\n    val z = 1\n    fun b(): Int {\n        return 2\n    }\n}\n"],
+    ["java field", "K.java", "class K {\n  private int z;\n}\n", "class K {\n  private int z;\n  int b() {\n    return 2;\n  }\n}\n"],
+    ["rs const", "a.rs", "impl X {\n    const Z: i32 = 1;\n}\n", "impl X {\n    const Z: i32 = 1;\n    fn b(&self) -> i32 {\n        2\n    }\n}\n"],
+  ];
+  for (const [what, path, before, after] of rows) assert.deepEqual(defsOf(path, before, after), { defs: [], unattributed: [] }, what);
+});
+
 test("8.9.13 review of c137fc9: the accepted Rust residual (ADR-0645 exception)", { skip: !HAVE_PY }, () => {
   // a Rust raw string (r#"..."#) or normal string that already holds fn-shaped lines on both sides of an insertion
   const RSS = 'impl X {\n    const S: &str = r#"\n    fn p(&self) {}\n    fn q(&self) {}\n    "#;\n    fn a(&self) {}\n}\n';

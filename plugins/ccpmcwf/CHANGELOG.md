@@ -38,11 +38,14 @@ method no longer counts as a change to its impl block.
 
 ### Changed (stricter in every language)
 
-- The plain-new-member skip has the same guard (the base lines before and after the hunk, the
-  member's indent). This closes a hole in 8.9.12: a plain new member inserted in the middle of an
+- The plain-new-member skip has a guard too: the base line after the hunk is not deeper than the
+  member, and the base line before it does not open text or a bracket (it ends in `"""`, `'''`, a
+  backtick, `r#"`, `"`, `(`, `[`, `{`, `\`, `,` or `=` and is no definition, decorator or
+  close-only line). This closes a hole in 8.9.12: a plain new member inserted in the middle of an
   existing method body, or before a deeper nested definition or decorator in it, took over the
-  method's tail and named nothing. It now names the class. A plain new last method before
-  column-0 code (`if __name__ == ...`) still names nothing, as in 8.9.12.
+  method's tail and named nothing. It now names the class. A plain new method after a field, an
+  attribute or a comment, or as the last method before column-0 code (`if __name__ == ...`), still
+  names nothing, as in 8.9.12.
 - A `type` item added to an impl names the impl; it is never a plain new member.
 - scope-and-plan: a Rust `impl` block counts as the class, named by the first name after `impl`
   and its generics (the trait in `impl Trait for X`). In Rust only, a comment above a new member
@@ -55,7 +58,7 @@ method no longer counts as a change to its impl block.
   `changed_symbols` is a `plan_defect` (a refusal). A plain new method needs no entry. Outside
   Rust, a commented or multi-line-signature new method with its class unmapped is an advisory
   finding (the build-time check will name the class).
-- PROGRAM_SHA256 `changed_defs` moves (`b104493b…` to `039a964f…`). ROLE_SHA256 `plan-audit` and
+- PROGRAM_SHA256 `changed_defs` moves (`b104493b…` to `dea1b316…`). ROLE_SHA256 `plan-audit` and
   `scope-and-plan` move. The v5010 prompt-snapshot pins do not move (the role sha and the version
   are masked).
 - Tests: `v8913_impl_members` runs the program on git trees: Rust `impl X`, `impl Trait for X`

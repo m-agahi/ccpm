@@ -345,7 +345,8 @@ addition, when the member cannot take over existing lines: the base line after t
 (comments stepped over) is a definition, a decorator, a close-only line or the end of the file
 and is not deeper than the member, and the base line before the hunk ends a member. In every
 other language comments and signature closers count as before. The plain-new-member skip has
-the same indent and neighbour guard in every language, so a new member inserted inside an
+an indent guard in every language (the base line after the hunk is not deeper than the member;
+the base line before it opens no string or bracket), so a new member inserted inside an
 existing method body (before its tail, or before a deeper nested definition or decorator) names
 the class. A Rust `impl` block is named by the first name after `impl` and its generics
 (`impl<T> X<T>` is `X`; `impl Trait for X` and `impl<T> fmt::Display for X<T>` name the trait);

@@ -484,6 +484,10 @@ for status, path, newpath in entries:
         ok = nb is None or bool(dn(nb) or deco(nb) or CLOSE_ONLY.match(nb))
         near = lambda i: (nb is None or indent(nb) <= i) and (pb is None or indent(pb) > i or bool(dn(pb) or deco(pb) or CLOSE_ONLY.match(pb)))
         okat = lambda i: rust and ok and near(i)
+        # r129 final: the plain-member skip refuses only a previous line that opens text or a
+        # bracket (a string start, an open paren); a field, a statement or a comment ends a member
+        OPENS = re.compile(r'("""|\'\'\'|`|r#*"|"|[(\[{\\,=])\s*$')
+        plain = lambda i: (nb is None or indent(nb) <= i) and (pb is None or indent(pb) > i or bool(dn(pb) or deco(pb) or CLOSE_ONLY.match(pb)) or not OPENS.search(pb))
         if not ok:
             note = None
         for t in added:
@@ -528,7 +532,7 @@ for status, path, newpath in entries:
                     e = enclosing(start, ind)
                     # a plain new member of a class-like container is an addition;
                     # a decorated one, or a new nested container, changes the class
-                    skip = (okat(ind) if notes else near(ind)) and e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending and not (lang == 'kw' and re.match(r'^\s*(?:pub(?:\([^)]*\))?\s+)?type\b', t))
+                    skip = (okat(ind) if notes else plain(ind)) and e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending and not (lang == 'kw' and re.match(r'^\s*(?:pub(?:\([^)]*\))?\s+)?type\b', t))
                     if not skip:
                         for x in pending + notes + [t]:
                             attribute(start, indent(x), max(a, 1))
