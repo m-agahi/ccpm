@@ -71,6 +71,8 @@ const INFRA_TIER = [
   ["infra:ci-rerun", "sonnet"],
   ["infra:ci-logs", "sonnet"],
   ["infra:pr-view", "sonnet"],
+  // 8.9.15 (#131, #130): the PR body facts (read only)
+  ["infra:pr-body", "sonnet"],
   ["infra:pr-fetch", "sonnet"],
   ["infra:fleet-cleanup", "sonnet"],
   ["infra:orch-scan", "sonnet"],
@@ -141,7 +143,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.14";
+const FLEET_VERSION = "8.9.15";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -237,6 +239,22 @@ const MAX_UPDATE_REVIEWS = 2;
 // 6.3.3 (2144): one pr-opener body update per run for review findings of category pr_body_claim
 const MAX_BODY_FIXES = 1;
 const BODY_TAG = "[pr_body_claim]";
+// 8.9.15 (yaadgaar #131): the body route needs a program fact. A body_quote counts from 12 characters (whitespace runs
+// collapsed): a shorter span is one word or a short heading, which any finding could "quote". At most 300 characters
+// and 10 quotes per read.
+const QUOTE_MIN = 12;
+const QUOTE_MAX = 300;
+// 8.9.15 review of d9ae4c6 (B1): the run-state keys of the body route: [key, state field, a count (else a list)]
+const BODY_KEYS = [["body_fixes", "bodyFixes", 1], ["body_reviews", "bodyReviews", 1], ["body_fixed", "bodyFixed"], ["body_pending", "bodyPending"], ["body_pending_facts", "bodyPendingFacts"], ["body_check", "bodyCheck"], ["body_demoted", "bodyDemoted"]];
+const FACT_KINDS = ["quote", "header", "check"];
+// a run-state's body-route value: a count 0..9, findings (objects), facts ({id, kind, value}) or ids
+function bodyKeyBad(k, v) {
+  if (k === "body_fixes" || k === "body_reviews") return !(Number.isInteger(v) && v >= 0 && v <= 9);
+  if (!Array.isArray(v) || v.length > 50) return true;
+  if (k === "body_demoted") return v.some((x) => typeof x !== "string");
+  if (k === "body_check" || k === "body_pending_facts") return v.some((x) => !x || typeof x !== "object" || typeof x.id !== "string" || FACT_KINDS.indexOf(x.kind) < 0 || typeof x.value !== "string");
+  return v.some((x) => !x || typeof x !== "object" || Array.isArray(x));
+}
 const FINDING_SEVERITIES = ["blocking", "nit"];
 // 8.9.10 (#129): pr_title, a finding about the PR title or the commit subject (the workflow builds both)
 const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "pr_body_format", "pr_title", "test_quality", "obligation", "other"];
@@ -428,6 +446,8 @@ const REVIEW_FINDINGS = {
     required: ["severity", "summary"],
   },
 };
+// 8.9.15 (#131): pr-review's findings carry body_quote (required, string or null): the body route depends on it
+const PR_REVIEW_FINDINGS = { type: "array", items: Object.assign({}, REVIEW_FINDINGS.items, { properties: Object.assign({ body_quote: STR_OR_NULL }, REVIEW_FINDINGS.items.properties), required: ["severity", "summary", "body_quote"] }) };
 const ROLE_FILE_PROP = { type: ["object", "null"], properties: { name: STR, sha256: STR } };
 function withShared(schema) {
   return Object.assign({}, schema, { required: schema.required.concat(["shared_file"]), properties: Object.assign({}, schema.properties, { shared_file: ROLE_FILE_PROP }) });
@@ -630,7 +650,7 @@ const SCHEMAS = {
   }),
   "pr-review": roleSchema({
     verdict: { type: "string", enum: VERDICTS["pr-review"] },
-    findings: REVIEW_FINDINGS,
+    findings: PR_REVIEW_FINDINGS,
     touches_gate: BOOL,
     checked: { type: "array", items: ANY_ITEM },
   }),
@@ -1755,7 +1775,7 @@ const PROGRAM_SHA256 = {
   "policy": "cc6e2915dfb969338e46d0dc114c870739727db275e513d63b2c0e71c49dae43",
   "pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
   "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
-  "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
+  "pr_state": "47572a3baa0d1f0ce76b96ba069fc24986cc50215845b0d48fe61af0ee86b8bd",
   "pr_test_block": "9f4047598d925a5d0fdfe19d465799aa1ae778165d94b6f3a688e22c908893ad",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
@@ -1789,12 +1809,12 @@ const ROLE_SHA256 = {
   "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
   "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
   "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-  "fleet-pr-opener": "ed1c45ae5248914375b34dbb396885e56e4ce1b5d2c0f63d0178f74ea973545d",
+  "fleet-pr-opener": "3d091d4e2093f5b58c511bd4ebcb3806e24a00569e53967a30806d811dcbe054",
   "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
   "plan-audit": "c0f127b29b246a6274c73a404d4aa484dbafde43c7b8bb385bfbaa7d7ac6c07c",
-  "pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
+  "pr-review": "b71da9560bc673164385e5d72a6e4a2bc074e6fe9c323c5dd5350141b1aecb8b",
   "scope-and-plan": "5e6ac229b3c7bb1ebbf870569e2fb7279818c3a1abec9f937994ae0bfcba1bf3"
 };
 // ROLE_SHA256_END
@@ -1886,7 +1906,7 @@ const PROGRAM_SLOTS = [
   [/^infra:pr-stats/, [[null, "pr_body_block"]]],
   // 7.1.0 (L2145)
   [/^infra:pr-tests/, [[null, "pr_test_block"]]],
-  [/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-fetch|fleet-cleanup)/, [[null, "pr_state"]]],
+  [/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-body|pr-fetch|fleet-cleanup)/, [[null, "pr_state"]]],
   [/^infra:orch-scan/, [[null, "orch_scan"]]],
   [/^infra:ci-watch/, [[null, "ci_watch"]]],
   [/^infra:state:/, [[null, "state_write"]]],
@@ -1993,6 +2013,7 @@ const PROGRAM_KEYS = {
   "pr_state:update": ["mode", "updated", "head", "base", "overlap", "error", "args"],
   "pr_state:view": ["mode", "state", "head", "merge_sha", "error", "args"],
   "pr_state:logs": ["mode", "head", "logs", "error", "args"],
+  "pr_state:body": ["mode", "head", "body_sha256", "headers_missing", "short", "quotes", "checks", "template_read", "checker", "error", "args"],
   "pr_state:fetch": ["mode", "head", "tree", "error", "args"],
   "pr_state:rerun": ["mode", "rerun", "error", "args"],
   "pr_state:cleanup": ["mode", "removed", "deleted", "error", "args"],
@@ -2207,6 +2228,13 @@ const PROGRAM_OUT = {
     tree: STR_OR_NULL,
     logs: { type: ["array", "null"], items: { type: "object", properties: { name: STR, url: STR_OR_NULL, run_id: STR_OR_NULL, excerpt: STR_OR_NULL, verified: BOOL } } },
     rerun: STRS_OR_NULL,
+    body_sha256: STR_OR_NULL,
+    headers_missing: STRS_OR_NULL,
+    short: BOOL_OR_NULL,
+    quotes: { type: ["array", "null"], items: BOOL },
+    checks: { type: ["array", "null"], items: { type: "object", properties: { name: STR, bucket: STR } } },
+    template_read: BOOL_OR_NULL,
+    checker: { type: ["object", "null"], properties: { ran: BOOL, exit: INT_OR_NULL, timed_out: BOOL, excerpt: STR_OR_NULL, reason: STR_OR_NULL } },
     removed: BOOL_OR_NULL,
     deleted: BOOL_OR_NULL,
     error: STR_OR_NULL,
@@ -7483,7 +7511,7 @@ async function prTestsStep(label, args, block, prUrl, supplied, again) {
 // 7.1.1 (L2142): a failed relay for the program's own error goes to the caller's error branch, as in
 // infra(); no digest retry (a write step: a retried merge or rerun could act twice)
 // 8.4.0 (#25): the read-only pr_state modes (run as ccpmcwf:judge)
-const PR_STATE_READS = ["view", "logs"];
+const PR_STATE_READS = ["view", "logs", "body"];
 async function prState(label, args, what, stopGate) {
   const prompt = INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\n" + PRINTS_ONE + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.";
   let r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, agentType: PR_STATE_READS.indexOf(args[0]) >= 0 ? JUDGE_AGENT : INFRA_AGENT, phase: "PR" });
@@ -7942,6 +7970,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 8.9.3 (#117 i): a count of the run-state's auto_decisions (absent before 8.9.3)
       const bd = st.body_decided;
       if (bd !== undefined && (!Number.isInteger(bd) || bd < 0 || bd > (Array.isArray(ad) ? ad.length : 0))) mis("body_decided");
+      // 8.9.15 review of d9ae4c6 (B1): all of the body-route keys or none (none before 8.9.15)
+      const bk = BODY_KEYS.filter(([k]) => st[k] !== undefined);
+      if (bk.length && (bk.length !== BODY_KEYS.length || BODY_KEYS.some(([k]) => bodyKeyBad(k, st[k])))) mis("body route state");
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
       resume = st;
@@ -8093,7 +8124,130 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     return r.diff;
   }
 
-  async function openPr(label, extra) {
+  // 8.9.15 (yaadgaar #131, #130): the facts of the fleet's own PR body, read by pr_state.py body (read only, no wait).
+  // The required checks that read the body: a workflow path or check name that names pr-body (pr_convention.py's rule
+  // for the body checker).
+  const bodyChecks = () => [...new Set(rcOf(ref).filter((c) => c && typeof c.check === "string" && /pr[-_ ]?body/i.test(String(c.workflow || "").split(":").pop() + " " + c.check)).map((c) => c.check))].slice(0, 20);
+  // all: the body convention's required sections, its template's headings and min_chars. The template is read on
+  // the default branch (ref null), never at the PR head, which the PR itself can change
+  function bodySpec(all, headers, quotes, checks) {
+    const bc = (all && ref.plan_facts.conventions.body) || {};
+    const rs = Array.isArray(bc.required_sections) ? bc.required_sections.filter((h) => typeof h === "string" && h && h.length <= 200) : [];
+    return {
+      headers: rs.concat(headers).slice(0, 40),
+      template: typeof bc.template === "string" ? { repo: bc.template_repo || remoteSlug, path: bc.template, ref: null } : null,
+      min_chars: Number.isInteger(bc.min_chars) ? bc.min_chars : null,
+      quotes: quotes.slice(0, 10),
+      checks,
+    };
+  }
+  async function bodyFacts(label, spec, n) {
+    const x = await prState(label, ["body", ghCmd("PR body facts", "review"), remoteSlug, String(n), approvedSha, base64Of(JSON.stringify(spec))], "read the facts of the fleet's own PR body (read only)", "review");
+    const ok = x.error === null && Array.isArray(x.headers_missing) && Array.isArray(x.quotes) && x.quotes.length === spec.quotes.length && Array.isArray(x.checks) && x.checks.length === spec.checks.length;
+    if (!ok) gate(label + ": no PR body facts (" + (x.error === null ? "malformed result" : x.error) + ")");
+    return ok ? x : null;
+  }
+  // #131: the program facts that tie each body-category finding to the body (none: the finding goes to the coder).
+  // pr_body_claim: its quote is in the body. pr_body_format: that, or its quote is a header the body lacks; a
+  // required check that reads the body and fails at the head counts only with one of those (review of d9ae4c6, R1).
+  // R5: format characters (Unicode Cf: zero-width, bidi) are dropped, as pr_state.py does; no case folding.
+  const normQ = (q) => (typeof q === "string" && q.length <= QUOTE_MAX ? q.replace(/\p{Cf}/gu, "").replace(/\s+/g, " ").trim() : "");
+  const isBodyCat = (f) => !!f && (f.category === "pr_body_claim" || f.category === "pr_body_format");
+  async function routeFacts(cand, k) {
+    const quotes = [...new Set(cand.map((f) => normQ(f.body_quote)).filter((q) => q.length >= QUOTE_MIN))].slice(0, 10);
+    const checks = bodyChecks();
+    const r = await bodyFacts("infra:pr-body:route:v" + k, bodySpec(true, [], quotes, checks), pr.pr_number);
+    return cand.map((f) => {
+      const q = normQ(f.body_quote);
+      const id = String(f.id || "-");
+      const out = [];
+      if (!r) return out;
+      if (quotes.indexOf(q) >= 0 && r.quotes[quotes.indexOf(q)] === true) out.push({ id, kind: "quote", value: q });
+      if (f.category === "pr_body_format") {
+        if (q && r.headers_missing.some((h) => normQ(h) === q)) out.push({ id, kind: "header", value: q });
+        if (out.length) for (const c of r.checks) if (c && c.bucket === "fail" && checks.indexOf(c.name) >= 0) out.push({ id, kind: "check", value: c.name });
+      }
+      return out;
+    });
+  }
+  // review of d9ae4c6 (R2): a pending body check at the confirmation waits for the checks, bounded by the policy's
+  // CI-watch minutes (ci_watch.py, its own clock), whether or not the CI step watches later
+  async function bodyWait(k) {
+    const wa = [ghCmd("PR body check wait", "review"), remoteSlug, String(pr.pr_number), approvedSha, String(policy.caps.ci_watch_minutes * 60), scratchOf(mainWt) + "/ci-" + safeName(state.nonce) + "-body-v" + k + ".json"];
+    const wl = "infra:ci-watch:body-v" + k;
+    const w = await infra(wl, ciWatchPrompt({ args: wa }, Math.ceil(policy.caps.ci_watch_minutes / 8) + 3), "Review", JUDGE_AGENT, "ci_watch", wa);
+    requireProgram(w, "ci_watch", wl, "needs_human", "review");
+    if (!relayDigestOk(w, progKeys("ci_watch"), "ci_watch") || canonical(w.args) !== canonical(wa)) halt("s", "needs_human", wl + RELAY_MISMATCH, "review");
+    gate(wl + ": the checks of " + pr.pr_url + " are " + w.state + " after the wait");
+  }
+  // #131: a body finding sent to the pr-opener and not flagged again counts as resolved only when the program finds
+  // its facts gone: the header present, the quote gone, the check passing (R2: pending waits once, then holds)
+  async function confirmBody(rv, k) {
+    const again = rv.blocking.filter(isBodyCat).map((f) => String(f.id || "-")).filter((id) => id !== "-");
+    const todo = (state.bodyCheck || []).filter((x) => again.indexOf(x.id) < 0);
+    if (!todo.length) return;
+    const of = (kind) => [...new Set(todo.filter((x) => x.kind === kind).map((x) => x.value))];
+    const spec = bodySpec(false, of("header"), of("quote"), of("check"));
+    const cl = "infra:pr-body:confirm:v" + k;
+    let r = await bodyFacts(cl, spec, pr.pr_number);
+    if (r && r.checks.some((c) => c && c.bucket === "pending")) {
+      await bodyWait(k);
+      r = await bodyFacts(cl + ":again", spec, pr.pr_number);
+    }
+    const holds = todo.filter((x) =>
+      !r ? true
+      : x.kind === "header" ? r.headers_missing.indexOf(x.value) >= 0
+      : x.kind === "quote" ? r.quotes[spec.quotes.indexOf(x.value)] !== false
+      : !r.checks.some((c) => c && c.name === x.value && c.bucket === "pass"));
+    if (holds.length)
+      halt(J_PR, "needs_human", "review v" + k + ": PR body finding(s) " + [...new Set(holds.map((x) => x.id))].join(", ") + " count as resolved after the body update, but the program " + (r ? "finds the cited fact(s) still hold: " + holds.map((x) => x.id + " " + x.kind + (x.kind === "quote" ? "" : " " + JSON.stringify(x.value))).join("; ") : "could not read the body facts") + "; fix the body of " + pr.pr_url + " by hand", "review");
+    state.bodyCheck = (state.bodyCheck || []).filter((x) => todo.indexOf(x) < 0);
+    gate("review v" + k + ": " + todo.length + " PR body fact(s) gone after the body update (program)");
+  }
+  // review of d9ae4c6 (B2): the repo's body checker runs only when body_convention.checker names a .py file of this
+  // repo, "<owner>/<repo>/<path>.py" (pr_convention.py's form for a checker it read). The script is read at the
+  // plan base (the default branch the plan sealed), never at the PR head, and runs in the sandbox (pr_state.py)
+  function checkerOf(tl) {
+    const c = (ref.plan_facts.conventions.body || {}).checker;
+    if (typeof c !== "string" || !c) return null;
+    const pre = remoteSlug.toLowerCase() + "/";
+    const path = c.toLowerCase().startsWith(pre) ? c.slice(pre.length) : null;
+    if (!path || !/^[A-Za-z0-9._\/-]{1,255}\.py$/.test(path) || path.split("/").indexOf("..") >= 0 || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(String(planBase))) {
+      gate(tl + ": the repo's body checker " + JSON.stringify(c.slice(0, 200)) + " is not a script of " + remoteSlug + " at the plan base; not run");
+      return null;
+    }
+    return { worktree: mainWt, base: planBase, path };
+  }
+  // #130: before the review, the opener's body against the template headings, required sections, min_chars and the
+  // repo's own body checker (B2): one rewrite on a miss (shared); a second miss goes on (pr_test_block.py and the
+  // review see it)
+  async function preBody(label, r, opener, why) {
+    const tl = "infra:pr-body:open" + label.replace("role:fleet-pr-opener", "");
+    const spec = Object.assign(bodySpec(true, [], [], []), { checker: checkerOf(tl) });
+    if (!spec.headers.length && !spec.template && spec.min_chars === null && !spec.checker) return r;
+    const miss = (x, at) => {
+      if (!x) return "";
+      // R8: a template that cannot be read gives no headings
+      if (spec.template && x.template_read === false) gate(at + ": warning: the PR template " + spec.template.path + " could not be read on the default branch; its headings are not checked");
+      const k = x.checker;
+      if (spec.checker && !(k && k.ran === true && Number.isInteger(k.exit))) gate(at + ": the repo's body checker did not run (" + String((k && k.reason) || "no result").slice(0, 200) + "); skipped");
+      const parts = x.headers_missing.map((h) => JSON.stringify(h)).concat(x.short === true ? ["fewer than " + spec.min_chars + " characters"] : []);
+      // the checker's exit code and its stderr excerpt only (control and format characters stripped, 300 at most)
+      if (spec.checker && k && k.ran === true && Number.isInteger(k.exit) && k.exit !== 0) parts.push("the repo's body checker exited " + k.exit + (typeof k.excerpt === "string" && k.excerpt ? " (stderr: " + JSON.stringify(k.excerpt.slice(0, 300)) + ")" : ""));
+      return parts.join("; ");
+    };
+    const m = miss(await bodyFacts(tl, spec, r.pr_number), tl);
+    if (!m) return r;
+    gate(tl + ": the PR body misses " + m + "; one pr-opener rewrite (" + label + ":body)");
+    const r2 = await opener(label + ":body", { pr_url: r.pr_url, pr_number: r.pr_number, retry_reason: "the PR body misses the repo's PR template or body rules: " + m + "; write each missing heading as its own line, meet the checker's rule, and keep every other section" });
+    if (r2.pr_url !== r.pr_url || r2.pr_number !== r.pr_number) halt("s", "needs_human", "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + r.pr_url + " (#" + r.pr_number + "); check both PRs", "role");
+    const w2 = why(r2);
+    if (w2) halt(J_PR, "needs_human", w2, "role");
+    const m2 = miss(await bodyFacts(tl + ":body", spec, r.pr_number), tl + ":body");
+    if (m2) gate(tl + ":body: the PR body still misses " + m2 + "; the review sees it");
+    return Object.assign({}, r2, { created: r.created });
+  }
+  async function openPr(label, extra, pre) {
     // no agent call without a gh command that can push; an unknown answer is probed once more (2038)
     let g = ghFor(remoteSlug);
     if (g && !g.push && !ghNoPush(remoteSlug) && !reprobed) {
@@ -8170,6 +8324,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.pr = r;
     gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
     if (w) halt(J_PR, "needs_human", w);
+    // 8.9.15 (#130): ahead of the test block, whose program refuses a body without a required section
+    if (pre) r = state.pr = await preBody(label, r, opener, why);
     // 7.1.0 (L2145): the script-written test block, then one checked rewrite for a count claim outside it
     const tl = "infra:pr-tests" + label.replace("role:fleet-pr-opener", "");
     const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
@@ -8224,6 +8380,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           auto_decisions: state.autoDecisions,
           // 8.9.3 (#117 i): how many of them the PR body's Unattended section holds
           ...(Number.isInteger(state.bodyDecided) ? { body_decided: state.bodyDecided } : {}),
+          // 8.9.15 review of d9ae4c6 (B1): the body route's state, so a resume keeps the one-update cap and the
+          // confirmation (absent when no body finding was routed, and in a run-state before 8.9.15)
+          ...(BODY_KEYS.some(([, s]) => state[s] && (!Array.isArray(state[s]) || state[s].length)) ? Object.fromEntries(BODY_KEYS.map(([k, s, n]) => [k, state[s] || (n ? 0 : [])])) : {}),
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
@@ -8355,8 +8514,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           state.bodyFixed = (state.bodyFixed || []).concat(state.bodyPending);
           state.bodyFixes = (state.bodyFixes || 0) + 1;
           state.bodyPending = null;
+          // 8.9.15 (#131): their facts are checked at the next review
+          state.bodyCheck = (state.bodyCheck || []).concat(state.bodyPendingFacts || []);
+          state.bodyPendingFacts = null;
         }
-        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""), state.bodyFixed ? { body_findings: state.bodyFixed } : null);
+        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""), state.bodyFixed ? { body_findings: state.bodyFixed } : null, true);
         // 6.1.0 review N7: the pr-opener rewrote the body; the stats block goes back before any later stop
         if (upd) await statsStep();
         await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
@@ -8372,9 +8534,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           mainWt, lay, remoteSlug, pr, approvedSha, baseRef: diffBase(), criteria, obligations: planFacts.repo_obligations, hashedFiles,
           allowedAdditions: planFacts.allowed_additions,
           // the previous review round's blocking findings
-          priorFindings: state.review && Array.isArray(state.review.blocking) ? state.review.blocking : [],
+          // 8.9.15 (#131): a body finding sent to the coder (no program fact) is judged against the code, not the body
+          priorFindings: (state.review && Array.isArray(state.review.blocking) ? state.review.blocking : []).map((f) => ((state.bodyDemoted || []).indexOf(String(f.id || "-")) >= 0 && isBodyCat(f) ? Object.assign({}, f, { category: "other" }) : f)),
         });
         state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
+        // 8.9.15 (#131): before any route, on approve too
+        await confirmBody(rv, reviews);
+        state.bodyDemoted = [];
         if (rv.blocking.length) {
           // 6.3.3 (2144): pr_body_claim findings go to the pr-opener (one body update per run), all others to the coder;
           // 7.3.0 (#41): after update-branch too
@@ -8383,9 +8549,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // 8.9.10 (#129): a pr_title finding with no file is about the title the workflow builds (no role can change
           // it); any file goes to the coder. It never goes to the coder or the pr-opener
           const isTitle = (f) => f.category === "pr_title" && f.file == null;
-          const bodyF = rv.blocking.filter(isBody);
           const titleF = rv.blocking.filter(isTitle);
-          const codeF = rv.blocking.filter((f) => !isBody(f) && !isTitle(f));
           const inUpd = upd || (state.update && state.update.head === approvedSha);
           // 7.4.0 (#61): a fix that contradicts a frozen test or criterion re-plans, never a coder round
           const planF = rv.blocking.filter((f) => f.target === "plan");
@@ -8397,6 +8561,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             await statsStep("review:v" + reviews);
             return { gate: "review", plan: planF.map((f) => ({ target: "plan", criterion: null, finding: reviewFindingText(f) })) };
           }
+          // 8.9.15 (#131): a body-category finding takes the body route only with a program fact; with none it goes to
+          // the coder, tagged so the code-judge guard never drops it
+          const cand = rv.blocking.filter(isBody);
+          const facts = cand.length ? await routeFacts(cand, reviews) : [];
+          const bodyF = cand.filter((f, j) => facts[j].length);
+          const bfacts = [].concat(...facts);
+          const noFact = cand.filter((f, j) => !facts[j].length).map((f) => Object.assign({}, f, { category: f.category + ": no PR-body fact" }));
+          state.bodyDemoted = noFact.map((f) => String(f.id || "-"));
+          if (noFact.length) gate("review v" + reviews + ": " + noFact.length + " PR body finding(s) with no program fact -> coder");
+          const codeF = rv.blocking.filter((f) => !isBody(f) && !isTitle(f)).concat(noFact);
           if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
             halt(J_PR, "needs_human", "review v" + reviews + ": PR body finding still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
           // 6.1.0 (2049): code rounds on the forge's merge only when R1-R5 pass, else the 6.0.1 stop
@@ -8406,7 +8580,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             if (no)
               halt(J_BASE, "needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
             upd.pr = rv.changed;
-            if (bodyF.length) state.bodyPending = bodyF;
+            if (bodyF.length) [state.bodyPending, state.bodyPendingFacts] = [bodyF, bfacts];
             gate("review u" + upd.reviews + ": changes_requested (" + codeF.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
             return { gate: "review", update: true, findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
           }
@@ -8419,16 +8593,21 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             state.bodyFixes = (state.bodyFixes || 0) + 1;
             state.bodyReviews = (state.bodyReviews || 0) + 1;
             state.bodyFixed = (state.bodyFixed || []).concat(bodyF);
+            state.bodyCheck = (state.bodyCheck || []).concat(bfacts);
             // 6.1.0: a review of the update merge never writes its text to the PR body
             if (!inUpd) reviewNotes = rv.nits;
+            // 8.9.15 review of d9ae4c6 (B1), of cae63d3: saved before the body update and again before stats, so a
+            // stop at any point resumes with the cap spent and the facts to confirm (an unrewritten body fails closed)
+            await saveState("pr_open", "infra:state:pr_open:pre-body-v" + reviews);
             pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
+            await saveState("pr_open", "infra:state:pr_open:body-v" + reviews);
             await statsStep(upd ? undefined : "body-v" + reviews);
             gate("review v" + reviews + ": changes_requested (" + bodyF.length + " PR body finding(s)) -> pr-opener body update");
             i--;
             continue;
           }
           // mixed: the code findings go to the coder first; the next PR-step pr-opener call fixes the body
-          if (bodyF.length) state.bodyPending = bodyF;
+          if (bodyF.length) [state.bodyPending, state.bodyPendingFacts] = [bodyF, bfacts];
           if (reviews - (state.bodyReviews || 0) >= MAX_REVIEWS)
             halt(J_FIX,
               "needs_human",
@@ -8892,6 +9071,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (const [g, n] of Object.entries(Object(resume.gates_seen))) if (GATES3.includes(g) && n === (n & 7)) state.gates[g] = { status: "not_run", reason: null, findings: [], round: 0, seen: n };
     state.review = resume.review || null;
     reviews = resume.reviews || 0;
+    // 8.9.15 review of d9ae4c6 (B1): the body route's cap, findings and facts (an empty list is none)
+    if (resume.body_fixes !== undefined) for (const [k, s, n] of BODY_KEYS) state[s] = n ? resume[k] : resume[k].length ? resume[k] : null;
     if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
     state.testsWritten = resume.tests_written || 0;
     iacTouched = resume.iac_touched === true;

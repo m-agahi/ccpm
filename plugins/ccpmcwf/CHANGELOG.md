@@ -1,5 +1,66 @@
 # Changelog
 
+## [8.9.15] - 2026-11-26
+
+ccpmcwf 8.9.15 (yaadgaar `#131` and `#130`, Max's ruling: facts plus a pre-review check): the
+PR-body review route needs a program-checked fact, and the pr-opener's body is checked before the
+review.
+
+### Fixed
+
+- A code defect that the reviewer labelled `pr_body_claim` or `pr_body_format` (no file) went to
+  the pr-opener, never to the coder, and could ship unfixed. Now such a finding takes the body route
+  only with a program fact that ties it to the body:
+
+  - (b) its `body_quote` (12 to 300 characters after format characters are dropped and whitespace
+    runs collapse, no case folding) is in one segment of the current body: the text between heading
+    lines and the workflow's test and stats blocks, never across them;
+  - for `pr_body_format` also (a) its quote is a heading the body lacks (the body convention's
+    required sections or the template's headings). A failing required check that reads the body (a
+    workflow path or check name that names pr-body) joins the facts only with (a) or (b); alone it
+    is no fact. A pending check is no fact, and nothing waits at routing.
+
+  With no fact the finding goes to the coder, tagged `[<category>: no PR-body fact]`, so the code
+  judge's `[pr_body_claim]` guard never drops it. The next review gets it as a prior finding of
+  category `other`, so it is judged against the code, not the body.
+
+- A body finding that the next review does not flag again counts as resolved only when the program
+  finds its facts gone (the heading present, the quote gone, the check passing). A pending check
+  waits once, with `ci_watch.py` and the policy's CI-watch minutes, then is read again; pending or
+  failing then still holds, with the CI watch on or off. A fact that holds stops the run for a
+  human (judgment class, gate review), also on an approve. There is no second body update.
+- The body route's state (the update cap, the fixed and pending findings, the facts to confirm, the
+  demoted ids) is in the run-state, and the body-only route saves a `pr_open` run-state before its
+  body update and again before its stats block (review of cae63d3). A resume keeps the cap of one body update and runs the confirmation. A run-state
+  before 8.9.15 has none of these keys; one with some but not all, or a malformed one, is refused.
+
+### Added
+
+- `pr_state.py body <gh> <owner/repo> <pr> <sha> <spec_b64>`: a read-only mode (run as the judge)
+  that reads the body, the template's headings, and the named checks of the PR at `<sha>`.
+- `pr-review` findings carry a required `body_quote` (string or null); the role text says when to
+  use a body category and what to quote.
+- `#130`: before the first review of a PR step, the pr-opener's body is checked against the
+  template headings (read on the default branch, never at the PR head), the required sections,
+  `min_chars` and the repo's own body checker. A miss gets one pr-opener rewrite, shared by all of
+  them; a second miss goes on as before (the test-block program and the review see it). A template
+  that cannot be read gets a warning gate line.
+- The repo's body checker runs only when `body_convention.checker` names a `.py` file of this repo:
+  `pr_convention.py` writes `<owner>/<repo>/<path>.py` when it read the checker and
+  `<repo>:<workflow path>` when it could not. Another repo's checker, the workflow form and a path
+  with `..` get a gate line and do not run. The script is read from the plan base commit (40 or 64 hex, as
+  `plan_ref_write.py` takes it; any other base skips it with a gate line), never the
+  worktree or the PR head, and runs once in `sandbox.py` (pinned sha256; no network, a read-only
+  `/`, the worktree and HOME hidden, a fresh overlay, a 60 s deadline) as `python3 -I <checker.py>
+<body.md>` with `PR_BODY_FILE` and `GITHUB_EVENT_PATH`, and no test DSN (a body checker needs no
+  database). Only a single-file checker can run: its sibling modules are not copied. A non-zero exit
+  is a miss; the rewrite prompt carries only the exit code and the last 300 characters of its
+  stderr, with control and format characters dropped. A checker that cannot run (no bwrap, a
+  timeout, no file at the base) gets a gate line and is skipped.
+- Tests: the body-route fixtures of 6.3.3 to 8.9.9 (v633, v710, v730, v898, v899) now give their
+  body finding a `body_quote` that the harness's body read finds, because the route needs a fact;
+  their assertions are unchanged.
+
 ## [8.9.14] - 2026-11-26
 
 ccpmcwf 8.9.14 (yaadgaar `#119`, Max's ruling: option (b)): an explicit runtime-doc rule makes the

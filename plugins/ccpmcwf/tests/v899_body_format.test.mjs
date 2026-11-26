@@ -24,6 +24,8 @@ const FMT = {
   summary: "The PR body's ## Breaking? section opens with 'no. The change adds two RPCs' instead of 'no' alone on its first line",
   evidence: "check run 'ci / template' at head_sha has conclusion=failure",
   target: "code",
+  // 8.9.15 (#131): the body route needs a program fact; this quote is in the body (the harness's body read)
+  body_quote: "no. The change adds two RPCs",
 };
 const TNIT = { id: "R2", severity: "nit", category: "other", file: null, line: null, summary: "the PR title is cut off mid-word", evidence: "gh pr view 195", target: "code" };
 const CODE = { id: "R3", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };

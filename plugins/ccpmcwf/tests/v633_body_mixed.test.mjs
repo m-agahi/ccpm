@@ -10,8 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARGS, HASHES, CSHA, happy, run, call, inputsOf } from "./harness.mjs";
 
-const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
-const BODY2 = { id: "R4", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says no weakening", evidence: "none" };
+const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
+const BODY2 = { id: "R4", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says no weakening", evidence: "none" };
 const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
 const SEC = { id: "R3", severity: "blocking", category: "security", file: "src/y.py", line: 5, summary: "token logged", evidence: "grep log" };
 const NIT = { id: "N1", severity: "nit", category: "style", file: "src/x.py", line: 2, summary: "nit text", evidence: "e" };

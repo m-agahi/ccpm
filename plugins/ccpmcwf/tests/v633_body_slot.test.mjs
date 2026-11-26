@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARGS, HASHES, CSHA, happy, run, call, inputsOf } from "./harness.mjs";
 
-const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
+const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
 const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
 const CODE2 = { id: "R5", severity: "blocking", category: "correctness", file: "src/x.py", line: 7, summary: "still wrong", evidence: "e" };
 const REV = (fs) => ({ status: "ok", reason: "x", verdict: "changes_requested", findings: fs, touches_gate: false, checked: [] });

@@ -21,7 +21,7 @@ const DEFAULT_CAPS = { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, sta
 const polOut = (caps) => (p) => ({ status: "ok", reason: "read", profile: null, file: "/h/.config/fleet/policy.json", policy_sha256: null, caps: Object.assign({}, caps), matched: "no policy file", error: null, args: inputsOf(p).args });
 const blockOf = (out, label) => Buffer.from(inputsOf(call(out, label).prompt).args[3], "base64").toString("utf8");
 const CODE = { id: "R1", severity: "blocking", category: "bug", file: "src/x.py", line: 3, summary: "off by one", evidence: "src/x.py:3" };
-const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
+const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
 const NIT = { id: "N1", severity: "nit", category: "docs", file: "src/x.py", line: 3, summary: "name the unit", evidence: "src/x.py:3" };
 const OPEN7 = { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true };
 const REV = (verdict, findings) => ({ status: "ok", reason: "x", verdict, findings, touches_gate: false, checked: [] });

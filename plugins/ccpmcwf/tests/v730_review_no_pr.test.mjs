@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { ARGS, SOURCE, happy, run } from "./harness.mjs";
 
 const NOPR = { status: "ok", reason: "x", pr_url: null, pr_number: null, created: false, template_used: null, gates_not_run_stated: true };
-const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed", evidence: "npm test: 133 pass" };
+const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed", evidence: "npm test: 133 pass" };
 
 test("7.3.0 A14: an ok pr-opener with no PR stops needs_human (role); no review runs", async () => {
   const out = await run(happy({ script: { "role:fleet-pr-opener": NOPR } }), ARGS);

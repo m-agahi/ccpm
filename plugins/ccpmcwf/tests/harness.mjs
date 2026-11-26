@@ -36,7 +36,7 @@ export const WANT_AGENT = [
   [/^infra:push-probe/, "ccpmcwf:judge"],
   [/^(preflight|intake|hasher:)/, "ccpmcwf:judge"],
   [
-    /^infra:(role-read|path-check|branch-scan|verify-plan|read-state|policy|pr-view|ci-logs|orch-scan|ci-watch|callers|check-scripts|precommit-ids|review-paths|remote-head|load-parked|fleet-branch|load-ref|tf-gate|hook-surface|ruleset-surface|surfaces|gates|gate-tools|fleet-scan|hash-diff|gh-identity|yaadgaar-read|comments-list)(:|$|-)/,
+    /^infra:(role-read|path-check|branch-scan|verify-plan|read-state|policy|pr-view|pr-body|ci-logs|orch-scan|ci-watch|callers|check-scripts|precommit-ids|review-paths|remote-head|load-parked|fleet-branch|load-ref|tf-gate|hook-surface|ruleset-surface|surfaces|gates|gate-tools|fleet-scan|hash-diff|gh-identity|yaadgaar-read|comments-list)(:|$|-)/,
     "ccpmcwf:judge",
   ],
   [/^workspace$/, "ccpmcwf:infra-writer"],
@@ -574,6 +574,14 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:pr-view/.test(label)) {
       const a = inputsOf(prompt).args;
       return { status: "ok", reason: "read", mode: "view", state: "OPEN", head: a[4], merge_sha: null, error: null, args: a };
+    }
+    // 8.9.15 (#131, #130): an unscripted body read finds every quote in the body before the body update (open and
+    // route reads) and none after it (confirm reads), no header missing, the body long enough, every check passing
+    if (!(label in script) && /^infra:pr-body/.test(label)) {
+      const a = inputsOf(prompt).args;
+      const sp = JSON.parse(Buffer.from(a[5], "base64").toString("utf8"));
+      const after = /^infra:pr-body:confirm:/.test(label);
+      return { status: "ok", reason: "read", mode: "body", head: a[4], body_sha256: "2".repeat(64), headers_missing: [], short: sp.min_chars === null ? null : false, quotes: sp.quotes.map(() => !after), checks: sp.checks.map((name) => ({ name, bucket: "pass" })), template_read: sp.template ? true : null, checker: sp.checker ? { ran: true, exit: 0, timed_out: false, excerpt: null, reason: null } : null, error: null, args: a };
     }
     if (!(label in script) && /^infra:pr-fetch/.test(label)) {
       const a = inputsOf(prompt).args;
@@ -1301,7 +1309,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.14/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.15/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1547,6 +1555,8 @@ export const PROGRAM_LABELS = [
   [/^infra:ci-rerun/, [[null, "pr_state", K("pr_state:rerun")]]],
   [/^infra:ci-logs/, [[null, "pr_state", K("pr_state:logs")]]],
   [/^infra:pr-view/, [[null, "pr_state", K("pr_state:view")]]],
+  // 8.9.15 (#131, #130): read lazily (the module imports while PROGRAM_KEYS lacks the entry)
+  [/^infra:pr-body/, [[null, "pr_state", PROGRAM_KEYS["pr_state:body"] || null]]],
   [/^infra:pr-fetch/, [[null, "pr_state", K("pr_state:fetch")]]],
   [/^infra:fleet-cleanup/, [[null, "pr_state", K("pr_state:cleanup")]]],
   [/^infra:orch-scan/, [[null, "orch_scan", K("orch_scan")]]],
@@ -1781,6 +1791,9 @@ function argsProject(args) {
 }
 
 export function happy(over = {}) {
+  // 8.9.15 review of cae63d3: over.planBase, a full plan base sha for the tests that need one (PB is short)
+  const pb = over.planBase || PB;
+  const fpb = (fp) => ({ head: pb, tree: fp.tree });
   const crit = over.criteria || criteria(2);
   const store = {};
   // the last commit the commit step made: the review's worktree state
@@ -1799,7 +1812,7 @@ export function happy(over = {}) {
     "infra:yaadgaar-read:ci": yaadgaarReadOk,
     "infra:yaadgaar-writeback": yaadgaarWritten,
     "infra:yaadgaar-writeback:ci": yaadgaarWritten,
-    "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits: [], refs: [] },
+    "infra:branch-scan": { status: "ok", reason: "scanned", head: pb, commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:verify-plan-commit": verifyStub(store),
@@ -1808,7 +1821,7 @@ export function happy(over = {}) {
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
-      head: PB,
+      head: pb,
       plan_sha256: PSHA,
       is_ancestor: true,
       commits_since: [],
@@ -1840,10 +1853,10 @@ export function happy(over = {}) {
       memory_notes: ["planner fact"],
     },
     "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
+    "hasher:pre-writers:r1": { status: "ok", fingerprint: fpb(FP_PRE) },
     "hasher:post-writers:r1": (prompt) => ({
       status: "ok",
-      fingerprint: FP_TESTS,
+      fingerprint: fpb(FP_TESTS),
       changed: crit.flatMap((c) => c.test_files),
     }),
     "role:fleet-test-judge:r1": {
@@ -1854,8 +1867,8 @@ export function happy(over = {}) {
       checked: [],
       memory_notes: ["judge fact"],
     },
-    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
-    "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
+    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: fpb(FP_TESTS) },
+    "hasher:freeze:f1": { status: "ok", fingerprint: fpb(FP_TESTS), hashes: HASHES },
     "role:fleet-coder:r1": {
       status: "ok",
       reason: "done",
@@ -1863,7 +1876,7 @@ export function happy(over = {}) {
       frozen_tests_red_at_start: true,
       suite_result: { command: "pytest", exit_code: 0 },
     },
-    "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES },
+    "hasher:post-coder:r1": { status: "ok", fingerprint: fpb(FP_K1), hashes: HASHES },
     "role:fleet-code-judge:r1": {
       status: "ok",
       reason: "good",
@@ -1872,7 +1885,7 @@ export function happy(over = {}) {
       hash_check: { match: true, mismatched: [] },
       suite_result: { command: "pytest", exit_code: 0 },
     },
-    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1 },
+    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: fpb(FP_K1) },
     "infra:commit:r1": commitStepStub(1, live),
     "infra:commit:r2": commitStepStub(2, live),
     "infra:commit:r3": commitStepStub(3, live),

@@ -1503,8 +1503,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
@@ -2630,6 +2630,53 @@ only: a `[pr_body_format]` finding reaches the code judge only when the workflow
 coder, so a `fix_code` on it stays `fix_code`. A prior body finding is judged against the current
 PR body. The halt text is "PR body finding still flagged after one body update". The PR title
 comes from the workflow, so a title finding is a nit.
+
+Since 8.9.15 (yaadgaar `#131`), a body-category finding takes the body route only with a program
+fact that ties it to the body, read by `pr_state.py body` (read only, run as the judge):
+
+- (b) the finding's `body_quote` (a required field of every pr-review finding, string or null; 12
+  to 300 characters after Unicode format characters are dropped and whitespace runs collapse to
+  one space, no case folding) is in one segment of the current body: the text between heading
+  lines and the workflow's test and stats blocks, never across them. 12 characters rule out a
+  single word or a short heading, which any finding could "quote".
+- `pr_body_format` only: (a) its quote is a heading the body lacks (the body convention's
+  required sections or the PR template's headings). A required check that reads the body and fails
+  at the PR head joins the facts only with (a) or (b). A check reads the body when its sealed
+  workflow path or check name names pr-body (the rule `pr_convention.py` uses for the body
+  checker). A pending check is no fact.
+
+With no fact the finding goes to the coder as `[<category>: no PR-body fact]`, so the code-judge
+guard never drops it, and the next review gets it as a prior finding of category `other` (judged
+against the code, not the body). A body finding that the next review does not flag again counts
+as resolved only when the program finds its facts gone: the heading present, the quote gone, the
+check passing. A pending check waits once (`infra:ci-watch:body-v<n>`, the policy's CI-watch
+minutes) and is read again; still pending or failing, it holds. Else the run stops with
+`needs_human` (`stop_gate: review`, class judgment, the `J_PR` options), on an approve too; the
+stop names finding ids and fact kinds, never the quote. The body route's state is in the run-state,
+and the body-only route saves a `pr_open` run-state before its body update and again before its
+stats block, so a resume from any stop keeps the cap of one body update and the confirmation (a
+resume onto a body the update never rewrote fails closed).
+
+Known limits: the body describes the code, so a code defect mislabelled as a body claim can still
+quote the body's own sentence about that code; the confirmation then only proves the sentence
+changed. A check such as `ci / template` that reads the body but does not name pr-body is not
+known as a body check.
+
+Since 8.9.15 (yaadgaar `#130`), the PR step checks the pr-opener's body before the review: the
+template headings (the template is read on the default branch, never at the PR head; an unreadable
+one gets a warning gate line), the required sections, `min_chars`, and the repo's own body checker.
+A miss gets one pr-opener rewrite (`role:fleet-pr-opener:body`, with the missing headings and the
+checker's exit code and stderr tail in `retry_reason`); a second miss goes on as before.
+
+The checker runs only when `body_convention.checker` is `<owner>/<repo>/<path>.py` of this repo
+(the form `pr_convention.py` writes when it read the checker). Another repo's checker or the
+`<repo>:<workflow path>` form (checker not readable) is skipped with a gate line. The script is
+read from the plan base commit (40 or 64 hex; any other base skips the checker with a gate line),
+never the worktree or the PR head, and runs in `sandbox.py` (no
+network, `/` read-only, a 60 s deadline, no test DSN) on the body as a file (`argv[1]`,
+`PR_BODY_FILE`, and `GITHUB_EVENT_PATH` with `pull_request.body`). Known limits: a checker that
+imports sibling files cannot run (only the one file is copied), and a checker that reads the body
+another way sees no body. With no bwrap the checker is skipped with a gate line.
 
 Since 8.9.10 (yaadgaar `#129`), a finding about the PR title or the commit subject has category
 `pr_title`. The workflow builds both from the plan, and no role can change them, so a blocking
