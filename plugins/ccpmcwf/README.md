@@ -576,7 +576,7 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
 | 15   | pr-opener          | `.fleet/` check first; PR (ready unless `draft`) at `approved_sha`         |
 | 16   | review             | pr-review, plus the non-weakening sweep for gate changes (below)           |
-| 16a  | pr-opener          | only `pr_body_claim` blocking -> pr-opener body update, then review again  |
+| 16a  | pr-opener          | only `pr_body_claim`/`pr_body_format` blocking -> body update, re-review   |
 | 17   | write-back         | ledger section and one marked comment per external source                  |
 
 ### No commit before approval
@@ -2503,6 +2503,17 @@ findings go with every later pr-opener call of the run. One body update per run:
 `approve`. The re-review after update-branch still sends every blocking finding to the coder, and
 this code-judge guard is off in the code rounds after update-branch (ledger 2174).
 
+Since 8.9.9 (yaadgaar `#122`), a blocking finding of category `pr_body_format` takes the same
+route as a `pr_body_claim` finding. The reviewer uses this category when the only fix is a change
+to the PR body text: a template section, a body convention, a repo obligation or a CI check that
+reads the body (seen on yadgarhq/iam-db#195: `## Breaking?` must open with `no` alone, reported
+as `obligation`, sent to the coder, and the run stopped). The pr-opener gets it in
+`body_findings` and changes the body to meet the rule. The one-body-update cap, the review cap
+and the update-branch stops are unchanged, and review text still never goes into the body. A
+`pr_body_format` finding whose `file` is one of the program-listed changed paths is a code finding
+and goes to the coder. The code-judge guard drops a review-shaped `[pr_body_format]` finding as it
+drops a `[pr_body_claim]` one. The PR title comes from the workflow, so a title finding is a nit.
+
 ### Judge separation
 
 Judges (test, code, intent, pr-review, sweep), preflight, intake, branch-scan, load-ref, verify,
@@ -2526,7 +2537,8 @@ change that a judge makes and reverts within its own run.
   its capped agents are the plan's and the build's together. The harness's two-criterion happy
   runs have 17 capped agents in plan mode and 42 in build mode. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
   run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
-  count as one code round. A PR-body update for a `pr_body_claim` finding is no code round.
+  count as one code round. A PR-body update for a `pr_body_claim` or `pr_body_format` finding is
+  no code round.
 - Nothing is committed before the code judge approves, so a build interrupted before its commit
   step leaves uncommitted tests and code in the fleet worktree. The workspace and verify steps
   require a clean worktree, so a re-run stops with `needs_human` until a human commits, stashes or

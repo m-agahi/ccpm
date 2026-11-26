@@ -1,5 +1,38 @@
 # Changelog
 
+## [8.9.9] - 2026-11-26
+
+ccpmcwf 8.9.9 (yaadgaar `#122`): a pr-review finding about the PR body goes to the pr-opener, not
+the coder.
+
+### Fixed
+
+- yadgarhq/iam-db#195 (8.9.6 run wf_29ad47bb-640): pr-review v1 returned one blocking finding, R1:
+  the body's `## Breaking?` section must open with `no` alone (repo obligation OB9; the CI
+  template check failed on it). The reviewer gave it category `obligation`, so the review split
+  sent it to the coder (`fix_code`). The coder cannot edit a PR, returned `needs_human`, and the
+  run stopped. Only category `pr_body_claim` went to the pr-opener.
+
+### Changed
+
+- New review finding category `pr_body_format`: the only fix is a change to the PR body text (a
+  template section, a body convention, a repo obligation or a CI check that reads the body). The
+  pr-review role says to use it with `file: null`, also when the rule is an obligation, and that a
+  PR title finding is a nit (the workflow writes the title).
+- The review split routes `pr_body_format` with `pr_body_claim`: body-only reviews get one
+  pr-opener body update and a re-review with no code round; in a mixed review the code findings go
+  to the coder and the next PR-step pr-opener call fixes the body. A `pr_body_format` finding whose
+  `file` is a program-listed changed path stays a code finding (the check only moves findings
+  toward the coder). The one-body-update cap (the same stop text), the review cap and the
+  update-branch stops are unchanged.
+- The code-judge guard drops a review-shaped `[pr_body_format]` finding as it drops a
+  `[pr_body_claim]` one.
+- The pr-opener role: a `pr_body_format` entry of `body_findings` names a body rule; change the body
+  to meet it. Never copy a finding's summary or evidence into the body.
+- The pr-review schema's category enum gains `pr_body_format`: the three plan/build prompt-snapshot
+  pins move (probe unchanged); with that enum entry dropped every pin is 8.9.8's. The pr-review
+  and pr-opener role pins move; with the two role edits reverted the role pins are 8.9.8's.
+
 ## [8.9.8] - 2026-11-26
 
 ccpmcwf 8.9.8 (yaadgaar `#124`, Max's ruling: option a): the stats block is written at the first PR

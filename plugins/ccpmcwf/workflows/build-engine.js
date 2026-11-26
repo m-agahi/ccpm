@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.8";
+const FLEET_VERSION="8.9.9";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -187,8 +187,9 @@ const MAX_REVIEWS=2;
 const MAX_UPDATE_REVIEWS=2;
 const MAX_BODY_FIXES=1;
 const BODY_TAG="[pr_body_claim]";
+const BODY_TAGS=[BODY_TAG,"[pr_body_format]"];
 const FINDING_SEVERITIES=["blocking","nit"];
-const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","test_quality","obligation","other"];
+const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","pr_body_format","test_quality","obligation","other"];
 const GATE_PATH_RE=/(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
 const PRECOMMIT_CMD_RE=/^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 const FENCE_COMMAND_RE=/\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
@@ -1591,12 +1592,12 @@ const ROLE_SHA256 = {
 "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-"fleet-pr-opener": "1f88b7eafc51f60762bdc58b919e1ddbce39f56b1c044099b4225721eb495d0e",
+"fleet-pr-opener": "da31c5fed3d8059b605d75dbd07d3f9736bab762262daa7bfe2232020e351d73",
 "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-"pr-review": "e21205c77290c082cada562ac8a3c63b47a4d2866614d18f9f20d617c2c5e9f1",
+"pr-review": "461b33f1f58776c15481e75eedbe08cc0bcae128683fe04f04cd45767b77a03e",
 "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -3889,7 +3890,7 @@ if(!(opts&&opts.allowNotOk))requireOk(role,r);
 if(role==="fleet-code-judge"&&r.verdict==="fix_code"){
 const isTag=(f)=>
 !!f&&f.target==="code"&&f.criterion==null&&typeof f.finding==="string"&&f.finding.startsWith("review ")&&
-f.finding.indexOf(" ",7)>7&&f.finding.slice(7,f.finding.indexOf(" ",7)).indexOf("[")<0&&f.finding.slice(f.finding.indexOf(" ",7)+1).startsWith(BODY_TAG+" ");
+f.finding.indexOf(" ",7)>7&&f.finding.slice(7,f.finding.indexOf(" ",7)).indexOf("[")<0&&BODY_TAGS.some((t)=>f.finding.slice(f.finding.indexOf(" ",7)+1).startsWith(t+" "));
 const rest=(r.routed_findings||[]).filter((f)=>!isTag(f));
 const sr=r.suite_result||{};
 const failing=!(Number.isInteger(sr.exit_code)&&sr.exit_code===0)||(sr.failed!=null&&sr.failed!==0)||(sr.errors!=null&&sr.errors!==0);
@@ -7245,8 +7246,9 @@ priorFindings:state.review&&Array.isArray(state.review.blocking)?state.review.bl
 });
 state.review={verdict:rv.verdict,blocking:rv.blocking,nits:rv.nits,rounds:reviews,sweep:rv.sweep,model:rv.model};
 if(rv.blocking.length){
-const bodyF=rv.blocking.filter((f)=>f.category==="pr_body_claim");
-const codeF=rv.blocking.filter((f)=>f.category!=="pr_body_claim");
+const isBody=(f)=>f.category==="pr_body_claim"||(f.category==="pr_body_format"&&!(typeof f.file==="string"&&rv.changed.indexOf(normPath(f.file))>=0));
+const bodyF=rv.blocking.filter(isBody);
+const codeF=rv.blocking.filter((f)=>!isBody(f));
 const inUpd=upd||(state.update&&state.update.head===approvedSha);
 const planF=rv.blocking.filter((f)=>f.target==="plan");
 if(planF.length&&inUpd)

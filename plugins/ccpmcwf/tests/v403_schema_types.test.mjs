@@ -932,6 +932,8 @@ const READS = {
     // 8.9.3 (#117 i): + the body_decided default of a run-state before 8.9.3
     "resume.auto_decisions array": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
+    // 8.9.9 (#122): a pr_body_format finding with a changed path as its file goes to the coder
+    "f.file string": "role:pr-review:findings[].file",
     // 8.9.5 (yaadgaar #112): R5 leaves out an inline grep's auto hit only with a doctest list
     "g.doctest_md array": "prog:callers:doctest_md",
     "g.auto_dont_care[n] array": "prog:callers:auto_dont_care.*",
@@ -1346,7 +1348,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.8\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.8\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.9\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.9\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
