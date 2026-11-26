@@ -7377,19 +7377,49 @@ function ciWatchPrompt(inputs, runs) {
     'Return {status: "ok", reason, ' + returnKeys("ci_watch") + "}."
   );
 }
-// 8.9.10 (#123): the summary of a commit subject and PR title from planner text: the first line, lowercase; every
-// character outside a-z 0-9 . , _ : ( ) # > / - becomes a space (control chars, newlines, quotes and shell
-// characters too); a word that is an absolute path or URL (a "/" at its start or after punctuation) or one of the
-// drop keys (slugified task id and source refs) is dropped; cut at the last space within max, never mid-word unless
-// the first word alone is longer; no leading or trailing separator
+// 8.9.10 (#123): the summary of a commit subject and PR title from planner text: the first line, accents stripped
+// (NFD), lowercase, apostrophes deleted; every other character outside a-z 0-9 . , _ : ( ) # > / - becomes a space
+// (control chars, newlines, quotes and shell characters too); a word that is an absolute path or URL (a "/" at its
+// start or after punctuation) is dropped; a part of a word split on # ( ) that is a drop key (slugified task id or
+// source ref) is dropped with the # before it (never split on - or ., so v1.42.0 stays whole); a parenthesis left
+// without its pair is removed; cut at the last space within max, never mid-word unless the first word alone is
+// longer, and a cut that ends on a stop word drops it (unless that empties the summary); no leading or trailing
+// separator
+const SUMMARY_STOP = ["and", "or", "the", "a", "to", "in", "of", "for", "with"];
 function subjectSummary(text, drop, max) {
-  const words = String(text == null ? "" : text).split(/[\r\n]/)[0].toLowerCase().replace(/[^a-z0-9 .,_:()#>\/-]+/g, " ").split(" ")
-    .filter((w) => w && !/(^|[^a-z0-9._-])\//.test(w) && drop.indexOf(slugify(w, 1e4)) < 0);
+  const unkeyed = (w) => {
+    const p = w.split(/([#()])/);
+    for (let i = 0; i < p.length; i++)
+      if (p[i] && drop.indexOf(slugify(p[i], 1e4)) >= 0) {
+        p[i] = "";
+        if (p[i - 1] === "#") p[i - 1] = "";
+      }
+    return p.join("");
+  };
+  const words = String(text == null ? "" : text).split(/[\r\n]/)[0].normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/['’]/g, "").replace(/[^a-z0-9 .,_:()#>\/-]+/g, " ").split(" ")
+    .filter((w) => w && !/(^|[^a-z0-9._-])\//.test(w)).map(unkeyed).filter((w) => w && !/^[#()]+$/.test(w));
+  const paired = (x) => {
+    const a = x.split("");
+    const open = [];
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] === "(") open.push(i);
+      else if (a[i] === ")") {
+        if (open.length) open.pop();
+        else a[i] = "";
+      }
+    }
+    for (const i of open) a[i] = "";
+    return a.join("").replace(/ {2,}/g, " ");
+  };
   const trim = (x) => x.replace(/^[^a-z0-9]+/, "").replace(/[ .,_:(#>\/-]+$/, "");
-  let s = trim(words.join(" "));
+  const clean = (x) => trim(paired(trim(paired(x))));
+  let s = clean(words.join(" "));
   if (s.length > max) {
     const i = s.lastIndexOf(" ", max);
-    s = trim(i > 0 ? s.slice(0, i) : s.slice(0, max));
+    s = i > 0 ? s.slice(0, i) : s.slice(0, max);
+    for (let w = s.split(" "); w.length > 1 && SUMMARY_STOP.indexOf(w[w.length - 1]) >= 0; w = s.split(" ")) s = w.slice(0, -1).join(" ");
+    s = clean(s);
   }
   return s;
 }
@@ -7408,10 +7438,11 @@ function subjectsOf(pf, brief, slug, taskId, tldr) {
   // 8.9.10 (#123): the one builder of the commit subject and the PR title (subjectSummary)
   const drop = [taskId].concat(brief.sources.map((y) => y.ref), brief.sources.map((y) => "l" + y.ref)).map((x) => slugify(x, 1e4)).filter(Boolean);
   const h = head(KIND_TYPE[pf.change_kind] || "feat");
-  const cap = Math.min(60, SUBJECT_MAX - h.length);
+  // review of a0cf2eb (F4): a prefix that leaves no room is refused at build start, never cut from the end
+  const cap = Math.max(0, Math.min(60, SUBJECT_MAX - h.length));
   const main = h + (subjectSummary(tldr, drop, cap) || subjectSummary(String(slug || "").replace(/-/g, " "), drop, cap) || "update");
   const fix = head("fix");
-  return { main, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
+  return { main, prefix: h, room: cap > 0, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
 }
 
 async function buildMode(input, date) {
@@ -7626,6 +7657,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const names = { taskId: ref.task_id, slug: ref.slug };
   state.ownRefs = ownRefPrefixes(names, lay);
   const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id, ref.tldr);
+  // review of a0cf2eb (F4): a type(scope) prefix with no room for a summary (a long Jira key) stops before the subject check
+  if (!subj.room)
+    halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": commit prefix too long (" + subj.prefix.length + " characters; a subject is at most " + SUBJECT_MAX + "): " + JSON.stringify(subj.prefix) + "; use a shorter component or Jira key, then re-run plan");
   for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x) || x.length > SUBJECT_MAX) halt("s", "needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
     runs: (ref.history.runs || 0) + 1,
@@ -8245,7 +8279,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // 8.9.10 (#129): title findings alone (no plan, code or body finding left, so no other halt or route applies):
           // a re-plan gives a new tldr and subject; a PR-title edit alone would not reach the commit subject
           if (!codeF.length && !bodyF.length)
-            halt(J_FIX, "needs_human", "review v" + reviews + ": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): " + titleF.map((f) => (f.id || "-") + ": " + f.summary).join("; "), "review");
+            halt(inUpd ? J_BASE : J_FIX, "needs_human", "review v" + reviews + ": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): " + titleF.map((f) => (f.id || "-") + ": " + f.summary).join("; "), "review");
           if (!codeF.length) {
             // body only: a pr-opener body update and a re-review; no code round, no MAX_REVIEWS slot
             state.bodyFixes = (state.bodyFixes || 0) + 1;

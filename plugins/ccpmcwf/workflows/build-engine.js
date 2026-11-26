@@ -6532,14 +6532,41 @@ INFRA_STEP+"watch the CI checks of the fleet's own PR. READ ONLY: never rerun, c
 'Return {status: "ok", reason, '+returnKeys("ci_watch")+"}."
 );
 }
+const SUMMARY_STOP=["and","or","the","a","to","in","of","for","with"];
 function subjectSummary(text,drop,max){
-const words=String(text==null?"":text).split(/[\r\n]/)[0].toLowerCase().replace(/[^a-z0-9 .,_:()#>\/-]+/g," ").split(" ")
-.filter((w)=>w&&!/(^|[^a-z0-9._-])\//.test(w)&&drop.indexOf(slugify(w,1e4))<0);
+const unkeyed=(w)=>{
+const p=w.split(/([#()])/);
+for(let i=0;i<p.length;i++)
+if(p[i]&&drop.indexOf(slugify(p[i],1e4))>=0){
+p[i]="";
+if(p[i-1]==="#")p[i-1]="";
+}
+return p.join("");
+};
+const words=String(text==null?"":text).split(/[\r\n]/)[0].normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase()
+.replace(/['’]/g,"").replace(/[^a-z0-9 .,_:()#>\/-]+/g," ").split(" ")
+.filter((w)=>w&&!/(^|[^a-z0-9._-])\//.test(w)).map(unkeyed).filter((w)=>w&&!/^[#()]+$/.test(w));
+const paired=(x)=>{
+const a=x.split("");
+const open=[];
+for(let i=0;i<a.length;i++){
+if(a[i]==="(")open.push(i);
+else if(a[i]===")"){
+if(open.length)open.pop();
+else a[i]="";
+}
+}
+for(const i of open)a[i]="";
+return a.join("").replace(/ {2,}/g," ");
+};
 const trim=(x)=>x.replace(/^[^a-z0-9]+/,"").replace(/[ .,_:(#>\/-]+$/,"");
-let s=trim(words.join(" "));
+const clean=(x)=>trim(paired(trim(paired(x))));
+let s=clean(words.join(" "));
 if(s.length>max){
 const i=s.lastIndexOf(" ",max);
-s=trim(i>0?s.slice(0,i):s.slice(0,max));
+s=i>0?s.slice(0,i):s.slice(0,max);
+for(let w=s.split(" ");w.length>1&&SUMMARY_STOP.indexOf(w[w.length-1])>=0;w=s.split(" "))s=w.slice(0,-1).join(" ");
+s=clean(s);
 }
 return s;
 }
@@ -6554,10 +6581,10 @@ const scope=c.style==="scoped-key"?pf.component+", "+key:pf.component;
 const head=(t)=>(c.types.indexOf(t)>=0?t:c.types.indexOf("chore")>=0?"chore":c.types[0])+"("+scope+"): ";
 const drop=[taskId].concat(brief.sources.map((y)=>y.ref),brief.sources.map((y)=>"l"+y.ref)).map((x)=>slugify(x,1e4)).filter(Boolean);
 const h=head(KIND_TYPE[pf.change_kind]||"feat");
-const cap=Math.min(60,SUBJECT_MAX-h.length);
+const cap=Math.max(0,Math.min(60,SUBJECT_MAX-h.length));
 const main=h+(subjectSummary(tldr,drop,cap)||subjectSummary(String(slug||"").replace(/-/g," "),drop,cap)||"update");
 const fix=head("fix");
-return{main,fix:(n)=>fix+"code round "+n,isFleet:(x)=>x===main||new RegExp("^"+escapeRe(fix)+"code round [0-9]+$").test(x)};
+return{main,prefix:h,room:cap>0,fix:(n)=>fix+"code round "+n,isFleet:(x)=>x===main||new RegExp("^"+escapeRe(fix)+"code round [0-9]+$").test(x)};
 }
 async function buildMode(input,date){
 if(input.plan_ref&&typeof input.plan_ref==="object"&&"ref_path"in input.plan_ref)stop("s","needs_human",LEGACY_REF);
@@ -6747,6 +6774,8 @@ const brief=cleanBrief(ref.brief);
 const names={taskId:ref.task_id,slug:ref.slug};
 state.ownRefs=ownRefPrefixes(names,lay);
 const subj=subjectsOf(ref.plan_facts,brief,ref.slug,ref.task_id,ref.tldr);
+if(!subj.room)
+halt("s","needs_human","plan ref "+tiny.plan_ref+": commit prefix too long ("+subj.prefix.length+" characters; a subject is at most "+SUBJECT_MAX+"): "+JSON.stringify(subj.prefix)+"; use a shorter component or Jira key, then re-run plan");
 for(const x of[subj.main,subj.fix(1)])if(!SUBJECT_RE.test(x)||x.length>SUBJECT_MAX)halt("s","needs_human","plan ref "+tiny.plan_ref+": unsafe commit subject "+JSON.stringify(x)+"; re-run plan");
 const history={
 runs:(ref.history.runs||0)+1,
@@ -7284,7 +7313,7 @@ gate("review u"+upd.reviews+": changes_requested ("+codeF.length+" blocking); R1
 return{gate:"review",update:true,findings:codeF.map((f)=>({target:"code",criterion:null,finding:reviewFindingText(f)}))};
 }
 if(!codeF.length&&!bodyF.length)
-halt(J_FIX,"needs_human","review v"+reviews+": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): "+titleF.map((f)=>(f.id||"-")+": "+f.summary).join("; "),"review");
+halt(inUpd?J_BASE:J_FIX,"needs_human","review v"+reviews+": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): "+titleF.map((f)=>(f.id||"-")+": "+f.summary).join("; "),"review");
 if(!codeF.length){
 state.bodyFixes=(state.bodyFixes||0)+1;
 state.bodyReviews=(state.bodyReviews||0)+1;

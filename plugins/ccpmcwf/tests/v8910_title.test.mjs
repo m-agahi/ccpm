@@ -14,8 +14,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARGS, HASHES, CSHA, SOURCE, happy, run, call, inputsOf } from "./harness.mjs";
 
-const subjectsOfRun = async (tldr) => {
-  const s = happy();
+const subjectsOfRun = async (tldr, over) => {
+  const s = happy(over);
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { tldr });
   const out = await run(s, ARGS);
   const subj = out.calls.filter((c) => /^infra:commit:r/.test(c.label)).map((c) => inputsOf(c.prompt).subject);
@@ -169,4 +169,88 @@ test("8.9.10 #129: a pr_title finding still flagged after the code round stops f
 
 test("8.9.10 #128: the default run budget is 1.5M output tokens", () => {
   assert.match(SOURCE, /const RUN_BUDGET = 1500000;/);
+});
+
+// ---------------------------------------------------------------- review of a0cf2eb (#123)
+// ARGS input "#42": yaadgaar source ref 42, task id y42
+
+const summaryOf = async (tldr, over) => {
+  const { out, subj, titles } = await subjectsOfRun(tldr, over);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const t of titles) assert.equal(t, subj[0]);
+  return subj[0];
+};
+
+test("8.9.10 review B1: a source ref glued to a word by # is dropped; the word stays", async () => {
+  assert.equal(await summaryOf("fix yaadgaar#42 crash"), "feat(thing): fix yaadgaar crash");
+  assert.equal(await summaryOf("fix crash per issue#42"), "feat(thing): fix crash per issue");
+});
+
+test("8.9.10 review B1: (yaadgaar #42) leaves no id and no stray parenthesis", async () => {
+  const x = await summaryOf("fix crash (yaadgaar #42) now");
+  assert.equal(x, "feat(thing): fix crash yaadgaar now");
+  assert.doesNotMatch(x, /42|: .*[()]/);
+});
+
+test("8.9.10 review B1: a version that holds the ref stays whole", async () => {
+  assert.equal(await summaryOf("bump to v1.42.0 (#42)"), "feat(thing): bump to v1.42.0");
+});
+
+test("8.9.10 review F3: an apostrophe is deleted, not turned into a space", async () => {
+  assert.equal(await summaryOf("don't break it’s parser"), "feat(thing): dont break its parser");
+});
+
+test("8.9.10 review F3: accents are stripped (NFD) before the allowlist", async () => {
+  assert.equal(await summaryOf("résumé naïve café"), "feat(thing): resume naive cafe");
+});
+
+test("8.9.10 review F3: a parenthesis left without its pair after a dropped path is removed", async () => {
+  assert.equal(await summaryOf("fix (see /home/u/x.py) now"), "feat(thing): fix see now");
+});
+
+test("8.9.10 review F3: a cut that ends on a stop word drops that word", async () => {
+  assert.equal(await summaryOf("x".repeat(55) + " and more words here"), "feat(thing): " + "x".repeat(55));
+});
+
+test("8.9.10 review F3: a lone stop word is kept when dropping it would empty the summary", async () => {
+  assert.equal(await summaryOf("a " + "b".repeat(80)), "feat(thing): a");
+});
+
+test("8.9.10 review F4: a commit prefix over the subject cap stops with a clear message", async () => {
+  const key = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ-1234567";
+  const s = happy({ brief: { title: "Add Thing", description: "add a thing", sources: [{ kind: "jira", ref: key, url: null, body: "x" }], repo: "/r", plan_path: null } });
+  s["infra:pr-convention:plan"] = (p) => ({ status: "ok", reason: "read", title: { style: "scoped-key", types: ["feat", "fix", "chore"], key_required: true }, body: { template: null, template_repo: "q/.github", required_sections: ["## Summary"], min_chars: 50, checker: "q/actions/pr-body-convention/pr_body_check.py" }, source: ["title: x"], unreadable: [], args: inputsOf(p).args });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /commit prefix too long \(\d+ characters; a subject is at most 72\)/);
+  assert.ok(!out.labels.some((l) => /^infra:commit:r/.test(l)), out.labels.join(", "));
+});
+
+// F2: after update-branch the title stop takes the J_BASE options (as the plan-target stop there does)
+const DEFAULT_CAPS = { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" };
+const PERSONAL = Object.assign({}, DEFAULT_CAPS, { merge: "auto", update_branch: "once", ci_trigger: true });
+const D = "d".repeat(40);
+const C = "c".repeat(40);
+test("8.9.10 review F2: a title finding on the re-review after update-branch stops with the J_BASE options", async () => {
+  const t = happy();
+  t["infra:policy"] = (p) => ({ status: "ok", reason: "read", profile: "personal", file: "/h/p.json", policy_sha256: null, caps: Object.assign({}, PERSONAL), matched: "x", error: null, now: 1000, args: inputsOf(p).args });
+  t["infra:pr-merge"] = (p) => {
+    const a = inputsOf(p).args;
+    return { status: "ok", reason: "b", mode: "merge", merged: false, auto_enabled: false, method: "squash", merge_sha: null, blocked: "behind", merge_state: "BEHIND", head: a[4], branch_deleted: null, error: null, args: a };
+  };
+  t["infra:pr-update"] = (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: D, base: C, overlap: ["src/x.py"], error: null, args: inputsOf(p).args });
+  Object.assign(t, {
+    "hasher:update:u1": { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: HASHES, changed: ["src/x.py"] },
+    "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py", "tests/test_a.py"] },
+    "hasher:pre-review:v2": { status: "ok", fingerprint: { head: D, tree: "KU" } },
+    "role:pr-review:v2": REV("changes_requested", [TITLE]),
+    "hasher:fp-post:pr-review:v2": { status: "ok", fingerprint: { head: D, tree: "KU" } },
+    "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
+  });
+  const out = await run(t, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "review");
+  assert.match(out.result.reason, /^review v2: PR title finding/);
+  assert.ok(out.result.options.some((o) => /run plan again on the new base/.test(o)), JSON.stringify(out.result.options));
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
 });

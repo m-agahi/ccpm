@@ -228,6 +228,8 @@ const TEXT_REASON = [
   [/test-count phrases than the program reports/, "a truncated claims list fails closed (8.7.0 keeps it a stop)"],
   [/^halt\("s", "needs_human", msg/, "per caller gate: ownership or hash (ownership rule)"],
   [/noPushText\(remoteSlug\), stopGate/, "push access is not known or is refused"],
+  // 8.9.10 review of a0cf2eb (F4)
+  [/commit prefix too long/, "the sealed type(scope) prefix leaves no room for a summary under the subject cap (a long Jira key)"],
   [/which a resumed run cannot start/, "a resumed run cannot start a coder round (run-state trust)"],
   [/augmentation round \(test round/, "a test writer broke the augmentation contract (role contract)"],
   [/^halt\("s", "needs_human", w\)$/, "the test judge broke its routing contract after one scripted retry"],

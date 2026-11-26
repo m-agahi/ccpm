@@ -726,20 +726,31 @@ from `change_kind` (`bug_fix` -> `fix`, `feature` -> `feat`, `refactor`, `chore`
 checker does not list becomes `chore`), the scope is `component` (`component, KEY` in scoped-key
 style, `KEY` the Jira source's key or `NOJIRA`). The internal task id is never in a commit subject
 or the PR title. The PR opener gets `title` (it must use it verbatim; the script checks the title
-it reports) and `body_convention`.
+it reports) and `body_convention`. Verify knows fleet commits by these two exact subject forms; a
+resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
 
 One builder makes the summary of both the commit subject and the PR title, so the two agree
 (8.9.10, yaadgaar `#123`). It reads the first line of the plan `tldr` (else the branch slug, else
-`update`), lowercased. It keeps letters, digits, spaces and `. , _ : ( ) # > / -`, and turns every
-other character (quotes, `$`, backtick, backslash, `!`, `;`, `|`, `&`, control characters and
-newlines) into a space: the commit step and the pr-opener paste the text in single quotes. It drops
-absolute paths and URLs (a word with `/` at its start or after punctuation) and the words that are
-the task id or a source ref. It cuts at the last space within the cap (60 characters, and 72 for
-the whole subject), so no word is cut unless the first word alone is longer, and it trims a leading
-or trailing separator. `SUBJECT_RE` checks the result before any commit. Before 8.9.10 the
-summary was a slug, so `proto v1.27.0 -> v1.29.1, re-vendor` became `proto v1 27 0 v1 29 1 re
-vendor`, cut mid-word at 72 characters (yadgarhq/iam-db#195). Verify knows fleet commits by these two exact subject forms; a
-resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
+`update`), strips accents (NFD), lowercases it and deletes apostrophes (`don't` -> `dont`). It
+keeps letters, digits, spaces and `. , _ : ( ) # > / -`, and turns every other character (quotes,
+`$`, backtick, backslash, `!`, `;`, `|`, `&`, control characters and newlines) into a space: the
+commit step and the pr-opener paste the text in single quotes. It drops absolute paths and URLs (a
+word with `/` at its start or after punctuation). It splits each word on `#`, `(` and `)` and drops
+a part that is the task id or a source ref, with the `#` before it (`yaadgaar#123` -> `yaadgaar`);
+it never splits on `-` or `.`, so a ref `42` leaves `v1.42.0` whole. A parenthesis left without its
+pair is removed. It cuts at the last space within the cap (60 characters, and 72 for the whole
+subject), so no word is cut unless the first word alone is longer; a cut that ends on a stop word
+(`and`, `or`, `the`, `a`, `to`, `in`, `of`, `for`, `with`) drops it, unless that empties the
+summary; it trims a leading or trailing separator. A `type(scope): ` prefix that leaves no room
+for a summary (a long Jira key) stops the build with "commit prefix too long". `SUBJECT_RE` checks
+the result before any commit. Before 8.9.10 the summary was a slug, so `proto v1.27.0 -> v1.29.1,
+re-vendor` became `proto v1 27 0 v1 29 1 re vendor`, cut mid-word at 72 characters
+(yadgarhq/iam-db#195).
+
+A PR that 8.9.9 opened does not resume under 8.9.10 in most cases: the punctuation and the cut both
+changed, so most sentence-length tldrs now give a different subject than the one on the branch.
+Verify then stops with "plan changed since approval: branch moved by a non-fleet commit". Re-plan,
+or finish the PR by hand.
 
 Convention data is remote text (security review). The program and the workflow keep only types
 and a scope matching `^[a-z][a-z0-9-]{0,19}$` (none left: the Conventional Commits list), and
@@ -2534,7 +2545,7 @@ Since 8.9.10 (yaadgaar `#129`), a finding about the PR title or the commit subje
 `pr_title`. The workflow builds both from the plan, and no role can change them, so a blocking
 `pr_title` finding with no `file` never goes to the coder or the pr-opener. With no code or body
 finding left, the run stops with `needs_human` (`stop_gate: review`, class judgment, the `J_FIX`
-options): "PR title finding: the workflow builds the PR title and the commit subject from the plan
+options; after update-branch the `J_BASE` options, as the plan-target stop there): "PR title finding: the workflow builds the PR title and the commit subject from the plan
 tldr; no role can change them (re-plan for a new tldr, or fix both by hand)". A re-plan gives a
 new tldr and so a new subject; an edit of the PR title alone does not reach the pushed commit
 subject. The stop fires only when no plan, code or body finding is left, so it never preempts an
