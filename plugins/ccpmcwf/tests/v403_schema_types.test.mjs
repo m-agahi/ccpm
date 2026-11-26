@@ -173,6 +173,16 @@ const PARSED_TOKEN = "parsed: a token the script split from a typed string";
 // fn -> {"<expr> <kind>": spec}. A read with no entry fails; so does an
 // entry the source no longer has, and an agent path not typed for the read.
 const READS = {
+  // 8.9.15 review of d9ae4c6 (B1): a run-state's body-route keys, checked here
+  bodyKeyBad: {
+    "v integer": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_fixes or body_reviews",
+    "v array": "parsed: JSON.parse of the run-state message (digest-checked read_state), a body-route list",
+    "x string": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_demoted[]",
+    "x object": ["parsed: JSON.parse of the run-state message (digest-checked read_state), a body-route entry", 2],
+    "x.id string": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_check[].id",
+    "x.value string": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_check[].value",
+    "x array": "parsed: JSON.parse of the run-state message (digest-checked read_state), body_fixed[] or body_pending[]",
+  },
   // 7.1.0 (L2145): the script-written test block of the PR body
   testsBlock: {
     "suite object": CJ + "suite_result",
@@ -958,7 +968,15 @@ const READS = {
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 8.9.15 (yaadgaar #131, #130): the PR body facts (pr_state.py body), the sealed body convention and checks
     "c.check string": "prog:ruleset_surface:checks[].check",
-    "h string": ["parsed: a body header, the sealed body convention's required_sections[] or the pr_state body relay's headers_missing[], filtered to strings here", 2],
+    "h string": "prog:pr_convention:body.required_sections[]",
+    // 8.9.15 review of d9ae4c6 (B1, B2, R8): the body checker, the checker relay, the template read, the run-state body keys
+    "c string": "prog:pr_convention:body.checker",
+    "x.template_read boolean": "prog:pr_state:template_read",
+    "k.exit integer": ["prog:pr_state:checker.exit", 2],
+    "k.exit number-literal": "prog:pr_state:checker.exit",
+    "k.ran boolean": ["prog:pr_state:checker.ran", 2],
+    "k.excerpt string": "prog:pr_state:checker.excerpt",
+    "state[s] array": PARSED_LOCAL,
     "bc.required_sections array": "prog:pr_convention:body.required_sections",
     "bc.template string": "prog:pr_convention:body.template",
     "bc.min_chars integer": "prog:pr_convention:body.min_chars",
@@ -969,7 +987,6 @@ const READS = {
     "r.quotes[quotes.indexOf(q)] boolean": "prog:pr_state:quotes[]",
     "r.quotes[spec.quotes.indexOf(x.value)] boolean": "prog:pr_state:quotes[]",
     "x.short boolean": "prog:pr_state:short",
-    "policy.caps.ci_watch boolean": "prog:policy:caps.ci_watch",
     // 8.9.5 (yaadgaar #112): R5 leaves out an inline grep's auto hit only with a doctest list
     "g.doctest_md array": "prog:callers:doctest_md",
     "g.auto_dont_care[n] array": "prog:callers:auto_dont_care.*",

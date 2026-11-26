@@ -147,10 +147,11 @@ const SCENARIOS = {
 // 8.9.14 (yaadgaar #119): infra:branch-scan and infra:verify-plan run runtime_docs.py after test_db_decl.py (their prompts list the command and return runtime_docs, the schema gains the runtime_docs slot), and every callers prompt passes the runtime-doc list as its last argument (callers prompts name args); same call counts: the three plan/build pins move, probe unchanged. Checked: with src/build-engine.js, roles/scope-and-plan.md and scripts/callers.py at 8.9.13 (the version and the tests of this commit kept) the three old pins come back.
 // 8.9.14 review of 3d945e5: the plan ref seals plan_facts.runtime_docs (the plan-ref chunks the commit-plan prompt carries hold it); same call counts: the three plan/build pins move, probe unchanged. Checked: with only that plan_facts line dropped from src the 3d945e5 pins come back.
 // 8.9.15 (yaadgaar #131, #130): the pr-review schema's findings require body_quote (string or null), and the pr_state relay schema (every pr_state step: infra:pr-ready here) gains the body mode's typed keys; the pr-review and pr-opener role shas, the pr_state program pin and the version move (masked); no infra:pr-body call runs here (no body convention, no body finding); same call counts: the three plan/build pins move, probe unchanged. Checked in a scratch copy: with only the body_quote schema reverted, or only the pr_state keys reverted, the pins still move; with both reverted every pin is 8.9.14's.
+// 8.9.15 review of d9ae4c6: the pr_state relay schema gains the body mode's checker key (B2); same call counts: the three plan/build pins move, probe unchanged. Checked in a scratch copy: with only that schema key reverted every pin is d9ae4c6's.
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "6f6032e70ab5893b2cd9f51e6e6c85edb380fcb1b97fa9a57fc1e949ee72f26a" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "a3d7b3fc7dc0fa7b73f11fc99b85f2f8ed4438f3fa7408f46a53e0bdf119d690" },
-  "short path (one test writer)": { calls: 90, sha256: "db0afbd4541cff1688f4d0aa6b34b1ce5cb9324a1ed535930217ef3c0e4fd2a0" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "52575236caec248a4dce66039db3ba0dc73ecf13d5a2f8543545cc65ab40abdc" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "3f81482d153b55a654c93400b6e549db3435edbbb1b929fd53ec5236f77ec7e3" },
+  "short path (one test writer)": { calls: 90, sha256: "c735545c3bd5a85a0787305fde8cc4f4444f3330b34883b00e469c3b5c96ad32" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

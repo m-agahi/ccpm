@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARGS, HASHES, CSHA, happy, run, call, inputsOf } from "./harness.mjs";
+import { ARGS, HASHES, CSHA, happy, run, runOne, call, inputsOf, stateJsonOf } from "./harness.mjs";
 
 const CLAIM = { id: "R1", severity: "blocking", category: "pr_body_claim", file: null, line: null, summary: "the empty-input path returns 200", evidence: "ran x", target: "code", body_quote: null };
 const FMT = { id: "R1", severity: "blocking", category: "pr_body_format", file: null, line: null, summary: "the Breaking? section is missing", evidence: "template", target: "code", body_quote: "## Breaking?" };
@@ -26,7 +26,7 @@ const JUDGE2 = { status: "ok", reason: "good", verdict: "approve", routed_findin
 const BODY = (o) => (p) => {
   const a = inputsOf(p).args;
   const sp = JSON.parse(Buffer.from(a[5], "base64").toString("utf8"));
-  const r = { status: "ok", reason: "read", mode: "body", head: a[4], body_sha256: "2".repeat(64), headers_missing: [], short: sp.min_chars === null ? null : false, quotes: sp.quotes.map(() => false), checks: sp.checks.map((name) => ({ name, bucket: "pass" })), template_read: sp.template ? true : null, error: null, args: a };
+  const r = { status: "ok", reason: "read", mode: "body", head: a[4], body_sha256: "2".repeat(64), headers_missing: [], short: sp.min_chars === null ? null : false, quotes: sp.quotes.map(() => false), checks: sp.checks.map((name) => ({ name, bucket: "pass" })), template_read: sp.template ? true : null, checker: sp.checker ? { ran: true, exit: 0, timed_out: false, excerpt: null, reason: null } : null, error: null, args: a };
   return Object.assign(r, typeof o === "function" ? o(sp) : o);
 };
 const specOf = (out, l) => JSON.parse(Buffer.from(inputsOf(call(out, l).prompt).args[5], "base64").toString("utf8"));
@@ -140,13 +140,23 @@ function withChecks(s) {
 }
 const FMTC = Object.assign({}, FMT, { body_quote: null });
 
-test("8.9.15 #131 (c): a failing required check that reads the body makes a pr_body_format fact; only that check is read", async () => {
-  const s = withChecks(fixture({ "role:pr-review:v1": REV("changes_requested", [FMTC]), "infra:pr-body:route:v1": BODY({ checks: [{ name: "PR body / check", bucket: "fail" }] }), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": APPROVE }));
+// review of d9ae4c6 (R1): a failing body check counts only together with a quote or header fact
+const FMTQ = Object.assign({}, FMT, { body_quote: "no. The change adds two RPCs" });
+test("8.9.15 R1: a failing body-reading check alone is no fact; the pr_body_format finding goes to the coder", async () => {
+  const s = withChecks(fixture(Object.assign({ "role:pr-review:v1": REV("changes_requested", [FMTC]), "infra:pr-body:route:v1": BODY({ checks: [{ name: "PR body / check", bucket: "fail" }] }) }, CODE_ROUND)));
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(toCoder(out), out.labels.join(", "));
+  assert.deepEqual(specOf(out, "infra:pr-body:route:v1").checks, ["PR body / check"]);
+});
+
+test("8.9.15 R1: a failing body check with a quote fact joins the facts; the confirmation reads only that check", async () => {
+  const s = withChecks(fixture({ "role:pr-review:v1": REV("changes_requested", [FMTQ]), "infra:pr-body:route:v1": BODY({ quotes: [true], checks: [{ name: "PR body / check", bucket: "fail" }] }), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": APPROVE }));
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(bodyRouted(out), out.labels.join(", "));
-  assert.deepEqual(specOf(out, "infra:pr-body:route:v1").checks, ["PR body / check"]);
   assert.deepEqual(specOf(out, "infra:pr-body:confirm:v2").checks, ["PR body / check"]);
+  assert.ok(out.result.gate_log.some((l) => /review v2: 2 PR body fact\(s\) gone/.test(l)), out.result.gate_log.join("\n"));
 });
 
 test("8.9.15 #131 (c): a pending body check is no fact; the finding goes to the coder", async () => {
@@ -199,18 +209,36 @@ test("8.9.15 #131 confirm: v2 changes_requested on code but the body fact still 
   assert.ok(!out.labels.includes("role:fleet-coder:r2"));
 });
 
-test("8.9.15 #131 confirm: a check fact: pending clears only while the CI step watches it; fail stops", async () => {
-  const base = () => withChecks(fixture({ "role:pr-review:v1": REV("changes_requested", [FMTC]), "infra:pr-body:route:v1": BODY({ checks: [{ name: "PR body / check", bucket: "fail" }] }), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": APPROVE }));
-  const pend = await run(Object.assign(base(), { "infra:pr-body:confirm:v2": BODY({ checks: [{ name: "PR body / check", bucket: "pending" }] }) }), ARGS);
-  assert.equal(pend.result.status, "ok", pend.result.reason);
-  const off = Object.assign(base(), { "infra:pr-body:confirm:v2": BODY({ checks: [{ name: "PR body / check", bucket: "pending" }] }) });
-  off["infra:policy"] = (p) => ({ status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: false, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(p).args });
-  const unwatched = await run(off, ARGS);
-  assert.equal(unwatched.result.status, "needs_human", unwatched.result.reason);
-  assert.match(unwatched.result.reason, /R1 check "PR body \/ check"/);
-  const fail = await run(Object.assign(base(), { "infra:pr-body:confirm:v2": BODY({ checks: [{ name: "PR body / check", bucket: "fail" }] }) }), ARGS);
-  assert.equal(fail.result.status, "needs_human");
-  assert.match(fail.result.reason, /R1 check "PR body \/ check"/);
+// review of d9ae4c6 (R2): a pending body check waits once (ci_watch.py, the policy's CI-watch minutes), then holds
+const PEND = { checks: [{ name: "PR body / check", bucket: "pending" }] };
+const confirmBase = () => withChecks(fixture({ "role:pr-review:v1": REV("changes_requested", [FMTQ]), "infra:pr-body:route:v1": BODY({ quotes: [true], checks: [{ name: "PR body / check", bucket: "fail" }] }), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": APPROVE, "infra:pr-body:confirm:v2": BODY(PEND) }));
+test("8.9.15 R2: a pending body check at the confirmation waits once, then passing clears it", async () => {
+  const out = await run(Object.assign(confirmBase(), { "infra:pr-body:confirm:v2:again": BODY({}) }), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const w = inputsOf(call(out, "infra:ci-watch:body-v2").prompt).args;
+  assert.equal(w[4], "3600", "the policy's ci_watch_minutes (60) in seconds");
+  assert.equal(call(out, "infra:ci-watch:body-v2").opts.agentType, "ccpmcwf:judge");
+  const at = (l) => out.labels.indexOf(l);
+  assert.ok(at("infra:pr-body:confirm:v2") < at("infra:ci-watch:body-v2") && at("infra:ci-watch:body-v2") < at("infra:pr-body:confirm:v2:again"), out.labels.join(", "));
+});
+
+for (const [name, again, watch] of [["still pending", PEND, true], ["failing", { checks: [{ name: "PR body / check", bucket: "fail" }] }, true], ["still pending with the CI watch off", PEND, false]]) {
+  test("8.9.15 R2: a body check " + name + " after the wait is not resolved: the run stops (J_PR, review)", async () => {
+    const s = Object.assign(confirmBase(), { "infra:pr-body:confirm:v2:again": BODY(again) });
+    if (!watch) s["infra:policy"] = (p) => ({ status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: false, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(p).args });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", out.result.reason);
+    assert.equal(out.result.stop_gate, "review");
+    assert.equal(out.result.stop_class, "judgment");
+    assert.match(out.result.reason, /R1 check "PR body \/ check"/);
+    assert.ok(out.labels.includes("infra:ci-watch:body-v2"), out.labels.join(", "));
+  });
+}
+
+test("8.9.15 R2: a relayed wait that is not the program's stops (safety)", async () => {
+  const out = await run(Object.assign(confirmBase(), { "infra:ci-watch:body-v2": (p) => ({ status: "ok", reason: "watched", state: "green", checks: [], failed: [], required: true, head: "a".repeat(40), elapsed_s: 1, error: null, args: ["x"] }) }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_class, "safety");
 });
 
 test("8.9.15 #131 confirm: a body finding v2 flags again keeps the 8.9.9 stop (still flagged), not the confirm stop", async () => {
@@ -272,4 +300,122 @@ test("8.9.15 #130: a passing body gets no rewrite; no body convention, no read",
   assert.ok(!out.labels.some((l) => /^role:fleet-pr-opener:body/.test(l)));
   const none = await run(happy(), ARGS);
   assert.ok(!none.labels.some((l) => /^infra:pr-body/.test(l)), none.labels.join(", "));
+});
+
+// review of d9ae4c6 (R8, B2): the template warning and the repo's body checker before the review
+test("8.9.15 R8: a template the read cannot find gets a warning gate line", async () => {
+  const s = conv(happy(), BC);
+  s["infra:pr-body:open"] = BODY({ template_read: false });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.gate_log.some((l) => /infra:pr-body:open: warning: the PR template \.github\/pull_request_template\.md could not be read on the default branch/.test(l)), out.result.gate_log.join("\n"));
+});
+
+const BCK = (checker) => Object.assign({}, BC, { checker });
+test("8.9.15 B2: a checker of this repo runs at the plan base; a non-zero exit gets the one rewrite with its exit code and stderr only", async () => {
+  const s = conv(happy(), BCK("o/r/.github/scripts/pr_body_check.py"));
+  s["infra:pr-body:open"] = BODY({ checker: { ran: true, exit: 1, timed_out: false, excerpt: "## Breaking? must open with yes or no", reason: null } });
+  s["role:fleet-pr-opener:body"] = OPEN7;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const sp = specOf(out, "infra:pr-body:open");
+  assert.equal(sp.checker.path, ".github/scripts/pr_body_check.py");
+  assert.match(sp.checker.base, /^[0-9a-f]{7,40}$/);
+  assert.notEqual(sp.checker.base, inputsOf(call(out, "infra:pr-body:open").prompt).args[4], "the plan base, not the PR head");
+  assert.equal(sp.checker.worktree, inputsOf(call(out, "role:pr-review:v1").prompt).worktree);
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener:body").prompt).retry_reason, 'the PR body misses the repo\'s PR template or body rules: the repo\'s body checker exited 1 (stderr: "## Breaking? must open with yes or no"); write each missing heading as its own line, meet the checker\'s rule, and keep every other section');
+  assert.equal(out.labels.filter((l) => /^role:fleet-pr-opener:body/.test(l)).length, 1);
+});
+
+test("8.9.15 B2: a header miss and a checker miss share the one rewrite; a second miss goes on", async () => {
+  const s = conv(happy(), BCK("O/R/check.py"));
+  const bad = { headers_missing: ["## Testing"], checker: { ran: true, exit: 2, timed_out: false, excerpt: null, reason: null } };
+  s["infra:pr-body:open"] = BODY(bad);
+  s["infra:pr-body:open:body"] = BODY(bad);
+  s["role:fleet-pr-opener:body"] = OPEN7;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.labels.filter((l) => /^role:fleet-pr-opener:body/.test(l)).length, 1);
+  assert.match(inputsOf(call(out, "role:fleet-pr-opener:body").prompt).retry_reason, /"## Testing"; the repo's body checker exited 2;/);
+  assert.ok(out.result.gate_log.some((l) => /infra:pr-body:open:body: the PR body still misses .*the review sees it/.test(l)));
+});
+
+for (const [name, checker] of [
+  ["another repo's checker", "q/actions/pr-body-convention/pr_body_check.py"],
+  ["a workflow path (the checker was not readable)", "o/r:.github/workflows/pr_body.yml"],
+  ["a path with ..", "o/r/../x.py"],
+]) {
+  test("8.9.15 B2: " + name + " is not run: a gate line, no checker in the read", async () => {
+    const s = conv(happy(), BCK(checker));
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", out.result.reason);
+    assert.equal(specOf(out, "infra:pr-body:open").checker, null);
+    assert.ok(out.result.gate_log.some((l) => l.startsWith("infra:pr-body:open: the repo's body checker ") && l.endsWith("is not a script of o/r at the plan base; not run")), out.result.gate_log.join("\n"));
+  });
+}
+
+test("8.9.15 B2: a checker the sandbox could not run is skipped with a gate line (no rewrite)", async () => {
+  const s = conv(happy(), BCK("o/r/check.py"));
+  s["infra:pr-body:open"] = BODY({ checker: { ran: false, exit: null, timed_out: false, excerpt: null, reason: "sandbox unavailable: bwrap is not on PATH" } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.some((l) => /^role:fleet-pr-opener:body/.test(l)));
+  assert.ok(out.result.gate_log.some((l) => /the repo's body checker did not run \(sandbox unavailable: bwrap is not on PATH\); skipped/.test(l)));
+});
+
+// review of d9ae4c6 (B1): the body route's state survives a resume
+async function bodyBuilt() {
+  const F = Object.assign({}, CLAIM, { body_quote: "the empty-input path returns 200" });
+  const states = {};
+  const s = fixture({ "role:pr-review:v1": REV("changes_requested", [F]), "infra:pr-body:route:v1": BODY({ quotes: [true] }), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": { status: "failed", reason: "stop here", verdict: null, findings: null, touches_gate: null, checked: null } });
+  s["infra:state:pr_open:body-v1"] = (prompt) => {
+    states.body = stateJsonOf(prompt);
+    return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+  };
+  const plan = await runOne(s, ARGS);
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" };
+  await runOne(s, bargs);
+  assert.ok(states.body, "the body-only route writes a pr_open run-state after the body update");
+  const x = states.body;
+  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: x.approved_sha, commits_since: [{ sha: x.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+  s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: x.approved_sha, message: JSON.stringify(x), head: x.approved_sha, head_tree: x.code_tree, clean: true };
+  const h = JSON.parse(JSON.stringify(HASHES));
+  h.git["fleetref:refs/fleet/l42/freeze"] = "T1";
+  s["hasher:resume"] = { status: "ok", fingerprint: { head: x.approved_sha, tree: x.code_tree }, hashes: h };
+  return { s, x, F, bargs };
+}
+
+test("8.9.15 B1: the body-only route saves the body state; a resume confirms the persisted fact (still holds: J_PR)", async () => {
+  const { s, x, bargs } = await bodyBuilt();
+  assert.equal(x.last_gate, "pr_open");
+  assert.equal(x.body_fixes, 1);
+  assert.deepEqual(x.body_check, [{ id: "R1", kind: "quote", value: "the empty-input path returns 200" }]);
+  s["role:pr-review:v2"] = APPROVE;
+  s["infra:pr-body:confirm:v2"] = BODY({ quotes: [true] });
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_class, "judgment");
+  assert.match(out.result.reason, /review v2: PR body finding\(s\) R1 count as resolved after the body update/);
+});
+
+test("8.9.15 B1: a resume keeps the cap of one body update (a body finding again stops; no second update)", async () => {
+  const { s, F, bargs } = await bodyBuilt();
+  s["role:pr-review:v2"] = REV("changes_requested", [F]);
+  s["infra:pr-body:route:v2"] = BODY({ quotes: [true] });
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /PR body finding still flagged after one body update/);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener:body-v2"), out.labels.join(", "));
+});
+
+test("8.9.15 B1: a run-state with a malformed or partial body state is refused (resume)", async () => {
+  for (const bad of [{ body_check: [{ id: "R1", kind: "guess", value: "x" }] }, { body_fixes: "1" }, { body_demoted: undefined }]) {
+    const { s, x, bargs } = await bodyBuilt();
+    const y = Object.assign({}, x, bad);
+    if ("body_demoted" in bad) delete y.body_demoted;
+    s["infra:read-state"] = Object.assign({}, s["infra:read-state"], { message: JSON.stringify(y) });
+    const out = await runOne(s, bargs);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
+    assert.match(out.result.reason, /run-state mismatch: body route state/);
+  }
 });

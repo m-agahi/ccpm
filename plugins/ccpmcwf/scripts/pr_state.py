@@ -92,14 +92,26 @@ except Exception:
 #     and stats blocks and every heading line are removed. checks: for each
 #     name, the bucket of the PR head's checks of that name (or "<workflow> /
 #     <name>"): fail if any fails, else pending, else pass, else missing.
+#     8.9.15 review of d9ae4c6: a quote matches within one segment only (the
+#     text between removed blocks and heading lines), never across them (R4);
+#     Unicode format characters (Cf: zero-width, bidi) are dropped from the
+#     body and the quote first (R5). checker {worktree, base, path} (B2): the
+#     repo's body checker, <path> read from the commit <base> of <worktree>
+#     (never its working tree), runs once in sandbox.py (pinned sha256; no
+#     network, the worktree and HOME hidden, / read-only, a fresh overlay)
+#     with a 60 s deadline: `python3 -I <checker.py> <body.md>`, env
+#     PR_BODY_FILE and GITHUB_EVENT_PATH ({"pull_request": {"body": ...}}), no
+#     test DSN. checker: {ran, exit, timed_out, excerpt (stderr, control and
+#     format characters dropped, whitespace collapsed, the last 300
+#     characters), reason}; null with no checker.
 #     Prints {mode, head, body_sha256, headers_missing, short, quotes, checks,
-#     template_read, error, args, program, digest}.
+#     template_read, checker, error, args, program, digest}.
 #   rerun <gh> <owner/repo> <run_ids_json>: `gh run rerun <id> --failed` each.
 #     Prints {mode, rerun, error, args, program, digest}.
 #   cleanup <repo> <worktree> <branch>: removes the fleet's own worktree
 #     (<repo>/.claude/worktrees/fleet-<key>/main) and local branch fleet/<key>.
 #     Prints {mode, removed, deleted, error, args, program, digest}.
-import base64, hashlib, json, os, re, subprocess, sys, time
+import base64, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile, time, unicodedata
 def lift():
     # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
     for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
@@ -185,13 +197,82 @@ def checks(req=True):
     raise Fail('gh pr checks: ' + err[-300:])
 
 
+SANDBOX_SHA256 = '6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43'
+SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
+
+
+def body_checker(ck, body):
+    # 8.9.15 review of d9ae4c6 (B2): the repo's body checker, read at <base>, run once in the sandbox
+    res = {'ran': False, 'exit': None, 'timed_out': False, 'excerpt': None, 'reason': None}
+    try:
+        with open(SBX, 'rb') as fh:
+            if hashlib.sha256(fh.read()).hexdigest() != SANDBOX_SHA256:
+                res['reason'] = 'sandbox unavailable: sandbox.py does not hash to its pinned sha256'
+                return res
+    except OSError as e:
+        res['reason'] = 'sandbox unavailable: ' + str(e)[:200]
+        return res
+    wt = ck['worktree']
+    scratch = os.path.join(os.path.dirname(wt), 'scratch')
+    if not os.path.isdir(scratch):
+        res['reason'] = 'no scratch dir next to the worktree'
+        return res
+    g = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt, 'cat-file', 'blob', ck['base'] + ':' + ck['path']], capture_output=True, timeout=60)
+    if g.returncode != 0:
+        res['reason'] = 'the checker ' + ck['path'] + ' is not a file at ' + ck['base']
+        return res
+    tmp = tempfile.mkdtemp(prefix='bodychk-', dir=scratch)
+    sd = tempfile.mkdtemp(prefix='bodychk-spec-', dir=scratch)
+    try:
+        for n, data in (('checker.py', g.stdout), ('body.md', body.encode('utf-8')), ('event.json', json.dumps({'pull_request': {'body': body}}).encode('utf-8'))):
+            with open(os.path.join(tmp, n), 'wb') as fh:
+                fh.write(data)
+        os.mkdir(os.path.join(tmp, 'home'))
+        env = {'PATH': _o.environ.get('PATH', ''), 'HOME': os.path.join(tmp, 'home'), 'LANG': 'C.UTF-8', 'PR_BODY_FILE': os.path.join(tmp, 'body.md'), 'GITHUB_EVENT_PATH': os.path.join(tmp, 'event.json'), 'GITHUB_EVENT_NAME': 'pull_request'}
+        spec = {'worktree': wt, 'cwd': tmp, 'copy': tmp, 'argv': [os.path.realpath(sys.executable), '-I', os.path.join(tmp, 'checker.py'), os.path.join(tmp, 'body.md')], 'env': env, 'git': False, 'check': True, 'result': os.path.join(sd, 'res.json')}
+        with open(os.path.join(sd, 'spec.json'), 'w') as fh:
+            json.dump(spec, fh)
+        with tempfile.TemporaryFile() as err:
+            p = subprocess.Popen([sys.executable, '-I', SBX, 'run', os.path.join(sd, 'spec.json')], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, preexec_fn=lift, start_new_session=True)
+            try:
+                p.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                res['timed_out'] = True
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            err.seek(0)
+            text = err.read(1 << 16).decode('utf-8', 'replace')
+        if res['timed_out']:
+            res['reason'] = 'the checker ran out of time (60 s)'
+            return res
+        try:
+            with open(spec['result']) as fh:
+                rr = json.load(fh)
+        except (OSError, ValueError):
+            rr = {'started': False, 'reason': 'sandbox.py gave no result'}
+        if not rr.get('started'):
+            res['reason'] = 'sandbox unavailable: ' + str(rr.get('reason'))[:200]
+            return res
+        res['ran'] = True
+        res['exit'] = rr.get('exit') if isinstance(rr.get('exit'), int) else None
+        clean = ' '.join(''.join(c if unicodedata.category(c) not in ('Cc', 'Cf') else ' ' for c in text).split())
+        res['excerpt'] = clean[-300:] or None
+        return res
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(sd, ignore_errors=True)
+
+
 KEYS = {
     'ready': ('was_draft', 'is_draft', 'head', 'state'),
     'merge': ('merged', 'auto_enabled', 'method', 'merge_sha', 'blocked', 'merge_state', 'head', 'branch_deleted'),
     'update': ('updated', 'head', 'base', 'overlap'),
     'view': ('state', 'head', 'merge_sha'),
     'logs': ('head', 'logs'),
-    'body': ('head', 'body_sha256', 'headers_missing', 'short', 'quotes', 'checks', 'template_read'),
+    'body': ('head', 'body_sha256', 'headers_missing', 'short', 'quotes', 'checks', 'template_read', 'checker'),
     'rerun': ('rerun',),
     'cleanup': ('removed', 'deleted'),
     'fetch': ('head', 'tree'),
@@ -351,6 +432,9 @@ try:
             raise Fail('bad body spec')
         if tp is not None and not (isinstance(tp, dict) and isinstance(tp.get('repo'), str) and SLUG.match(tp['repo']) and isinstance(tp.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}$', tp['path']) and '..' not in tp['path'].split('/') and (tp.get('ref') is None or (isinstance(tp.get('ref'), str) and SHA.match(tp['ref'])))):
             raise Fail('bad template in the body spec')
+        ck = sp.get('checker')
+        if ck is not None and not (isinstance(ck, dict) and isinstance(ck.get('worktree'), str) and os.path.isabs(ck['worktree']) and ck['worktree'] == os.path.normpath(ck['worktree']) and isinstance(ck.get('base'), str) and re.match(r'^[0-9a-f]{7,40}$', ck['base']) and isinstance(ck.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}\.py$', ck['path']) and '..' not in ck['path'].split('/') and not ck['path'].startswith('/')):
+            raise Fail('bad checker in the body spec')
         v = view('body,headRefOid,state')
         out['head'] = v.get('headRefOid')
         open_at(v, sha)
@@ -370,11 +454,14 @@ try:
         lines = set(x.strip() for x in b.split('\n'))
         out['headers_missing'] = [h for i, h in enumerate(heads) if h.strip() not in lines and h not in heads[:i]]
         out['short'] = None if mc is None else len(b.strip()) < mc
-        # the quote text: no script-written block, no heading line
-        t = re.sub(r'<!-- ccpm-fleet-tests -->.*?<!-- /ccpm-fleet-tests -->', '\n', b, flags=re.S)
-        t = re.sub(r'<details><summary>Built with (?:ccpm fleet|ccpmcwf).*?<!-- ccpm-fleet-stats -->', '\n', t, flags=re.S)
-        t = ' '.join(HEAD.sub('\n', t).split())
-        out['quotes'] = [len(' '.join(q.split())) >= 12 and ' '.join(q.split()) in t for q in sp['quotes']]
+        # the quote text: no script-written block, no heading line; each segment between them on its own (R4),
+        # format characters dropped (R5), whitespace runs collapsed, no case folding
+        norm = lambda x: ' '.join(''.join(c for c in x if unicodedata.category(c) != 'Cf').split())
+        t = re.sub(r'<!-- ccpm-fleet-tests -->.*?<!-- /ccpm-fleet-tests -->', '\0', b, flags=re.S)
+        t = re.sub(r'<details><summary>Built with (?:ccpm fleet|ccpmcwf).*?<!-- ccpm-fleet-stats -->', '\0', t, flags=re.S)
+        segs = [norm(x) for x in HEAD.sub('\0', t.replace('\0', '\n\0\n')).split('\0')]
+        out['quotes'] = [len(norm(q)) >= 12 and any(norm(q) in g for g in segs) for q in sp['quotes']]
+        out['checker'] = None if ck is None else body_checker(ck, b)
         out['checks'] = []
         if sp['checks']:
             r = subprocess.run([gh, 'pr', 'checks', args[3], '-R', slug, '--json', 'name,bucket,workflow'], capture_output=True, timeout=120, preexec_fn=lift)

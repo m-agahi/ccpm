@@ -8,7 +8,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, realpathSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SCRIPTS_SRC, spawnSync } from "./harness.mjs";
@@ -56,11 +57,11 @@ function setup(cfg) {
   chmodSync(f, 0o755);
   return { dir, bin };
 }
-function body(cfg, spec) {
+function body(cfg, spec, prog) {
   const e = setup(cfg);
   try {
     const sp = Object.assign({ headers: [], template: null, min_chars: null, quotes: [], checks: [] }, spec);
-    const r = spawnSync(PY, ["-I", PROG, "body", "gh", "o/r", "7", SHA, b64(JSON.stringify(sp))], { encoding: "utf8", env: { PATH: e.bin + ":/usr/bin:/bin", HOME: e.dir }, timeout: 60000 });
+    const r = spawnSync(PY, ["-I", prog || PROG, "body", "gh", "o/r", "7", SHA, b64(JSON.stringify(sp))], { encoding: "utf8", env: { PATH: e.bin + ":" + process.env.PATH, HOME: e.dir }, timeout: 120000 });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     const log = existsSync(join(e.dir, "log.jsonl")) ? readFileSync(join(e.dir, "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
@@ -130,4 +131,101 @@ test("8.9.15 pr_state body: a PR not OPEN at <sha>, or a bad spec, is an error w
     assert.match(o.error, /bad (body spec|template in the body spec)/, JSON.stringify(bad));
     assert.equal(o.quotes, null);
   }
+});
+
+// review of d9ae4c6 (R4): a quote matches within one segment, never across a removed heading or block
+test("8.9.15 R4: a quote that spans a heading line is not in the body; one inside a segment is", () => {
+  const b = "The parser is fixed\n## Testing\nall cases pass";
+  const { o } = body({ body: b }, { quotes: ["is fixed all cases pass", "The parser is fixed", "fixed\nall cases pass"] });
+  assert.equal(o.error, null);
+  assert.deepEqual(o.quotes, [false, true, false]);
+  const t = "before the block\n<!-- ccpm-fleet-tests -->\nx\n<!-- /ccpm-fleet-tests -->\nafter the block";
+  assert.deepEqual(body({ body: t }, { quotes: ["before the block after the block", "after the block"] }).o.quotes, [false, true]);
+});
+
+// review of d9ae4c6 (R5): format characters (Cf: zero-width, bidi) are dropped from both sides; no case folding
+test("8.9.15 R5: zero-width and bidi characters do not hide or fake a quote; case still counts", () => {
+  const b = "The pa​rser is ‮fixed now";
+  const { o } = body({ body: b }, { quotes: ["The parser is fixed now", "The parser⁦ is fixed now", "the parser is fixed now"] });
+  assert.equal(o.error, null);
+  assert.deepEqual(o.quotes, [true, true, false]);
+});
+
+// review of d9ae4c6 (B2): the repo's body checker, read at the base commit, run in the sandbox
+const GITP = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+const BWRAP = spawnSync("sh", ["-c", "command -v bwrap"], { encoding: "utf8" }).stdout.trim();
+const NO_SBX = !BWRAP ? "bwrap is not on PATH (CI has none): the sandboxed checker run skips" : false;
+function repo(files) {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), "fleet-8915-ck-")));
+  const wt = join(d, "main");
+  mkdirSync(join(d, "scratch"));
+  const env = { PATH: process.env.PATH, HOME: d, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
+  const g = (...a) => {
+    const r = spawnSync(GITP, a, { cwd: existsSync(wt) ? wt : d, encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  g("init", "-q", "-b", "master", wt);
+  for (const [p, t] of Object.entries(files)) {
+    mkdirSync(join(wt, p, ".."), { recursive: true });
+    writeFileSync(join(wt, p), t);
+  }
+  g("add", "-A");
+  g("commit", "-qm", "base");
+  return { d, wt, base: g("rev-parse", "HEAD"), done: () => rmSync(d, { recursive: true, force: true }) };
+}
+const CHECK = [
+  "import json, os, sys",
+  "b = open(sys.argv[1]).read()",
+  "e = json.load(open(os.environ['GITHUB_EVENT_PATH']))['pull_request']['body']",
+  "assert b == e == open(os.environ['PR_BODY_FILE']).read()",
+  "if '## Breaking?\\nno' not in b:",
+  "    sys.stderr.write('\\x1b[31m## Breaking? must open with yes or no\\u202e\\x07\\n' + 'x' * 400 + 'END')",
+  "    sys.exit(3)",
+].join("\n");
+
+test("8.9.15 B2: the checker at the base runs sandboxed on the body; a miss gives its exit code and a clean 300-character stderr tail", { skip: NO_SBX }, () => {
+  const x = repo({ "check.py": CHECK });
+  try {
+    // the working tree's copy is never run: only the base commit's
+    writeFileSync(join(x.wt, "check.py"), "import sys\nsys.exit(0)\n");
+    const ck = { worktree: x.wt, base: x.base, path: "check.py" };
+    const miss = body({ body: "## Breaking?\nmaybe" }, { checker: ck }).o;
+    assert.equal(miss.error, null);
+    assert.equal(miss.checker.ran, true, miss.checker.reason);
+    assert.equal(miss.checker.exit, 3);
+    assert.equal(miss.checker.excerpt.length, 300);
+    assert.ok(miss.checker.excerpt.endsWith("xxxEND"));
+    assert.ok(!/[\u0000-\u001f\u007f‮]/.test(miss.checker.excerpt));
+    const ok = body({ body: "## Breaking?\nno" }, { checker: ck }).o;
+    assert.deepEqual([ok.checker.ran, ok.checker.exit, ok.checker.excerpt], [true, 0, null]);
+    assert.deepEqual(readdirSync(join(x.d, "scratch")), [], "the run leaves nothing in scratch");
+  } finally {
+    x.done();
+  }
+});
+
+test("8.9.15 B2: a checker the sandbox cannot run (sandbox.py off its pin, or no file at the base) does not run", () => {
+  const x = repo({ "other.py": "pass\n" });
+  const d = realpathSync(mkdtempSync(join(tmpdir(), "fleet-8915-pin-")));
+  try {
+    const ck = { worktree: x.wt, base: x.base, path: "check.py" };
+    const none = body({ body: "b" }, { checker: ck }).o;
+    assert.deepEqual([none.checker.ran, none.checker.reason], [false, "the checker check.py is not a file at " + x.base]);
+    writeFileSync(join(d, "pr_state.py"), readFileSync(PROG));
+    writeFileSync(join(d, "sandbox.py"), readFileSync(join(SCRIPTS_SRC, "sandbox.py"), "utf8") + "\n# changed\n");
+    const off = body({ body: "b" }, { checker: Object.assign({}, ck, { path: "other.py" }) }, join(d, "pr_state.py")).o;
+    assert.deepEqual([off.checker.ran, off.checker.reason], [false, "sandbox unavailable: sandbox.py does not hash to its pinned sha256"]);
+    assert.equal(body({ body: "b" }, {}).o.checker, null);
+    for (const bad of [{ worktree: "rel", base: x.base, path: "c.py" }, { worktree: x.wt, base: "zz", path: "c.py" }, { worktree: x.wt, base: x.base, path: "../c.py" }, { worktree: x.wt, base: x.base, path: "c.sh" }])
+      assert.match(body({ body: "b" }, { checker: bad }).o.error, /bad checker in the body spec/, JSON.stringify(bad));
+  } finally {
+    x.done();
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("8.9.15 B2: pr_state.py pins sandbox.py's sha256 as the other sandbox callers do", () => {
+  const sha = createHash("sha256").update(readFileSync(join(SCRIPTS_SRC, "sandbox.py"))).digest("hex");
+  assert.match(readFileSync(PROG, "utf8"), new RegExp("\\nSANDBOX_SHA256 = '" + sha + "'\\n"));
 });

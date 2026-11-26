@@ -581,7 +581,7 @@ export async function runOne(script, args0) {
       const a = inputsOf(prompt).args;
       const sp = JSON.parse(Buffer.from(a[5], "base64").toString("utf8"));
       const after = /^infra:pr-body:confirm:/.test(label);
-      return { status: "ok", reason: "read", mode: "body", head: a[4], body_sha256: "2".repeat(64), headers_missing: [], short: sp.min_chars === null ? null : false, quotes: sp.quotes.map(() => !after), checks: sp.checks.map((name) => ({ name, bucket: "pass" })), template_read: sp.template ? true : null, error: null, args: a };
+      return { status: "ok", reason: "read", mode: "body", head: a[4], body_sha256: "2".repeat(64), headers_missing: [], short: sp.min_chars === null ? null : false, quotes: sp.quotes.map(() => !after), checks: sp.checks.map((name) => ({ name, bucket: "pass" })), template_read: sp.template ? true : null, checker: sp.checker ? { ran: true, exit: 0, timed_out: false, excerpt: null, reason: null } : null, error: null, args: a };
     }
     if (!(label in script) && /^infra:pr-fetch/.test(label)) {
       const a = inputsOf(prompt).args;

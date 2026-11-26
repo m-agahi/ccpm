@@ -8676,7 +8676,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = PROGRAM_BODIES;
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "calendar", "socket", "resource", "ast", "base64", "secrets", "signal", "tokenize", "threading"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "calendar", "socket", "resource", "ast", "base64", "secrets", "signal", "tokenize", "threading", "unicodedata"]);
   for (const [name, p] of progs) {
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
       for (const mod of m[1].split(",").map((x) => x.trim().split(" ")[0].split(".")[0]))
