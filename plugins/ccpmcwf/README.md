@@ -844,20 +844,28 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
 - Stats from the first PR open (8.9.8 (yaadgaar `#124`), Max's ruling: option a): the block is
   also written right after the first PR open (`infra:pr-stats:open`, after the `pr_open`
   run-state), and refreshed after every later pr-opener call: `infra:pr-stats:open:p<k>` (the PR
-  step after each later push), `infra:pr-stats:body-v<k>` and `infra:pr-stats:notes:v<k>`. A run
-  that stops after the PR opens (for example a coder `needs_human` after a review) still leaves
-  the block, with the counters at the time of the last write: the review is `not run` before the
-  first review, and the CI row is there only after a CI watch. The step-list `stats` step and the
-  run-end refresh stay. There is one write per PR step, not one per push, because every push is
-  followed by the PR step. Each write is one more tail agent (outside the agent cap): a typical
-  run adds 1 (the first open), plus 1 for an approve with nits, plus 1 per later code or body
-  round. Every write has the full checks of the stats step (relay digest and args, block sha,
-  the `### Unattended run` header of an unattended run). A mismatch stops `needs_human` at gate
-  `stats` (one regenerate on a block sha or program error, as before). A stop in a first-open
-  write comes after the `pr_open` run-state, so the re-run resumes at the review. No write runs on
-  a stop path, and the early writes add no run-state milestone or key. With an update-branch
-  merge the 6.1.0 refresh (`infra:pr-stats:p<k>`, before the run-state) stays as it was. Stats
-  writes do not count as gates passed. Policy `stats: false` logs its off line once per run.
+  step after each later push), `infra:pr-stats:body-v<k>` and `infra:pr-stats:notes:v<k>`. The
+  notes write comes after the `reviewed` run-state, so a stop there resumes past the review. A
+  review that sends findings to the coder or to a re-plan writes the block with its verdict
+  (`infra:pr-stats:review:v<k>`) just before that return, after every safety halt of the review
+  step (the `MAX_REVIEWS` and update-branch halts fire first). A run that resumes at the review,
+  write-back or CI step writes `infra:pr-stats:resume` after its test-block check; a resume at the
+  stats step does not, because that step writes the block next. A run that stops after the PR
+  opens (for example a coder `needs_human` after a review) still leaves the block, with the
+  counters at the time of the last write: the review is `not run` before the first review, and
+  the CI row is there only after a CI watch. The step-list `stats` step and the run-end refresh
+  stay. There is one write per PR step, not one per push, because every push is followed by the
+  PR step. Each write is one more tail agent (outside the agent cap): a typical run (review
+  approves) adds 1, the first open. Add 1 for an approve with nits, 2 for each review that sends
+  findings to the coder (its verdict write, then the next PR step's write), 1 for a re-plan, 1
+  for a body round, 1 for a CI-fix round, and 1 for a resumed run. Every write has the full
+  checks of the stats step (relay digest and args, block sha, the `### Unattended run` header of
+  an unattended run). A mismatch stops `needs_human` at gate `stats` (one regenerate on a block
+  sha or program error, as before). A stop in a first-open write comes after the `pr_open`
+  run-state, so the re-run resumes at the review. No write runs on a stop path, and the writes
+  add no run-state milestone or key. With an update-branch merge the 6.1.0 refresh
+  (`infra:pr-stats:p<k>`, before the run-state) stays as it was. Stats writes do not count as
+  gates passed. Policy `stats: false` logs its off line once per run.
 - Test block (`infra:pr-tests*`, `pr_test_block.py`, 7.1.0, L2145): after every accepted
   pr-opener call (labels `infra:pr-tests`, `:p<k>`, `:body-v<k>`, `:notes`), on every policy, the
   program writes one block between `<!-- ccpm-fleet-tests -->` and `<!-- /ccpm-fleet-tests -->`:

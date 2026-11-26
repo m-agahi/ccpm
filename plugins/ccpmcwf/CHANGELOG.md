@@ -21,8 +21,16 @@ the block.
 
 - Every early write has the full checks of the stats step. A mismatch stops `needs_human` at gate
   `stats`, as before; no write runs on a stop path. The update-branch refresh and its labels stay.
-- One write per PR step, not per push: a typical run adds 1 tail agent (2 with review nits, plus 1
-  per later code or body round).
+- One write per PR step, not per push: a typical run (review approves) adds 1 tail agent. Add 1
+  for review nits, 2 for each review that sends findings to the coder, 1 for a re-plan, 1 per body
+  or CI-fix round, and 1 for a resumed run.
+- Review of bb91e4a (Max): a review that sends findings to the coder or to a re-plan writes the
+  block with its verdict (`infra:pr-stats:review:v<k>`) before that return, after every safety
+  halt of the review step. So the #195 shape (review changes_requested, then a coder stop) leaves
+  a block with the review verdict, not `not run`. The notes write moves after the `reviewed`
+  run-state, so a stop there resumes past the review. A run that resumes at the review, write-back
+  or CI step writes `infra:pr-stats:resume` after its test-block check. The gates-passed test is
+  now behavioural.
 - Stats writes no longer count as "gates passed", and policy `stats: false` logs its off line once
   per run (it was logged at every stats call).
 

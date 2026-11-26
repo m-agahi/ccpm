@@ -3,6 +3,9 @@
 // so a run that stops after the PR opens still leaves a PR with the block. The step-list stats step
 // and the run-end refresh stay. One refresh per PR step: every push is followed by the pr step, so
 // no extra write per push.
+// Review of bb91e4a (Max): M1 a write with the review verdict before a coder round or a re-plan
+// (after every safety halt); L1 a behavioural gates-passed test; L2 the notes write after the
+// reviewed run-state; L3 a write on a resumed run (review, writeback or ci).
 //
 // Run: node --test plugins/ccpmcwf/tests/v898_stats_at_open.test.mjs
 
@@ -10,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARGS, CSHA, PB, HERE, happy, run, runOne, call, inputsOf, stateJsonOf, HASHES, sha256 } from "./harness.mjs";
+import { ARGS, CSHA, PB, PC, PSHA, HERE, happy, run, runOne, call, inputsOf, stateJsonOf, HASHES, sha256, commitStub } from "./harness.mjs";
 
 const README = readFileSync(join(HERE, "..", "README.md"), "utf8");
 const flat = (s) => s.replace(/\s+/g, " ");
@@ -61,6 +64,74 @@ test("8.9.8 #124: a run that stops after the review (coder needs_human) leaves t
   assert.ok(out.build.logs.some((l) => /^infra:pr-stats:open: stats block added in /.test(l)), out.build.logs.join("\n"));
 });
 
+test("8.9.8 review M1: the #195 shape: the PR block shows the review verdict changes_requested; the stop stays class safety at gate role", async () => {
+  const out = await run(stopAfterReview(), ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.reason, "fleet-coder returned needs_human: coder stuck");
+  assert.equal(out.result.stop_class, "safety");
+  assert.equal(out.result.stop_gate, "role");
+  const L = out.build.labels;
+  const i = L.indexOf("infra:pr-stats:review:v1");
+  assert.ok(i > L.indexOf("role:pr-review:v1") && i < L.indexOf("role:fleet-coder:r2"), L.join(", "));
+  // the last block written before the stop holds the review verdict
+  const last = L.filter((l) => /^infra:pr-stats/.test(l)).pop();
+  assert.equal(last, "infra:pr-stats:review:v1", L.join(", "));
+  assert.ok(blockOf(out, last).indexOf("| independent review | changes_requested (sweep: not triggered) |") >= 0, blockOf(out, last));
+});
+
+test("8.9.8 review M1: the review write comes after the MAX_REVIEWS halt (no write on review 2's stop)", async () => {
+  const s = happy();
+  const rs = s["hasher:pre-review:v1"];
+  const CODE2 = Object.assign({}, CODE, { id: "R5", summary: "still wrong" });
+  Object.assign(s, {
+    "role:pr-review:v1": REV("changes_requested", [CODE]),
+    "role:fleet-coder:r2": { status: "ok", reason: "done", changed_paths: ["src/x.py"], frozen_tests_red_at_start: true, suite_result: { command: "pytest", exit_code: 0 } },
+    "hasher:post-coder:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: HASHES },
+    "role:fleet-code-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
+    "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" } },
+    "infra:push:p2": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
+    "role:fleet-pr-opener:p2": OPEN7,
+    "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
+    "hasher:pre-review:v2": rs,
+    "hasher:fp-post:pr-review:v2": rs,
+    "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
+    "role:pr-review:v2": REV("changes_requested", [CODE2]),
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "review");
+  assert.match(out.result.reason, /^review round 2 requested changes again/);
+  const L = out.build.labels;
+  assert.ok(L.includes("infra:pr-stats:review:v1") && L.includes("infra:pr-stats:open:p2"), L.join(", "));
+  assert.ok(!L.includes("infra:pr-stats:review:v2"), L.join(", "));
+});
+
+// the re-plan steps (v740_test_conflict's replanStubs)
+function replanStubs(s) {
+  const PC2 = "0123456789ab";
+  return Object.assign(s, {
+    "infra:replan-worktree": [{ status: "ok", reason: "ok", head: PC }, { status: "ok", reason: "ok", head: PC2 }],
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: PSHA },
+    "infra:commit-plan:replan": [commitStub(s.__store, PC2, PSHA), commitStub(s.__store, "0123456789cd", PSHA)],
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }),
+    "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+  });
+}
+
+test("8.9.8 review M1: a plan-target review writes the block with its verdict before the re-plan", async () => {
+  const s = replanStubs(happy());
+  s["role:pr-review:v1"] = REV("changes_requested", [Object.assign({}, CODE, { target: "plan" })]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const L = out.labels;
+  const i = L.indexOf("infra:pr-stats:review:v1");
+  assert.ok(i > L.indexOf("role:pr-review:v1") && i < L.indexOf("infra:replan-reset"), L.join(", "));
+  assert.ok(blockOf(out, "infra:pr-stats:review:v1").indexOf("| independent review | changes_requested (") >= 0);
+});
+
 test("8.9.8 #124: a body-only review refreshes the block after the pr-opener body update", async () => {
   const s = happy();
   const rs = s["hasher:pre-review:v1"];
@@ -89,7 +160,24 @@ test("8.9.8 #124: an approve with nits refreshes the block after the notes pr-op
   assert.equal(out.result.status, "ok", out.result.reason);
   const L = out.build.labels;
   const i = L.indexOf("infra:pr-stats:notes:v1");
-  assert.ok(i > L.indexOf("role:fleet-pr-opener:notes") && i < L.indexOf("infra:state:reviewed:v1"), L.join(", "));
+  // 8.9.8 review (L2): after the reviewed run-state
+  assert.ok(i > L.indexOf("role:fleet-pr-opener:notes") && i > L.indexOf("infra:state:reviewed:v1") && i < L.indexOf("infra:yaadgaar-writeback"), L.join(", "));
+});
+
+test("8.9.8 review L2: a notes write refused twice stops at stats after the reviewed run-state (the re-run resumes past the review)", async () => {
+  const s = happy();
+  s["role:pr-review:v1"] = REV("approve", [NIT]);
+  s["role:fleet-pr-opener:notes"] = OPEN7;
+  s["infra:pr-stats:notes:v1"] = s["infra:pr-stats:notes:v1:regen"] = (p) => {
+    const a = inputsOf(p).args;
+    return { status: "ok", reason: "w", replaced: false, wall_s: 5, block_sha256: "0".repeat(64), body_sha256_before: null, body_sha256_after: null, headers_missing: [], error: null, args: a };
+  };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "stats");
+  assert.match(out.result.reason, /^infra:pr-stats:notes:v1:regen: /);
+  const L = out.build.labels;
+  assert.ok(L.includes("infra:state:reviewed:v1") && L.indexOf("infra:state:reviewed:v1") < L.indexOf("infra:pr-stats:notes:v1"), L.join(", "));
 });
 
 // a CI-fix round (the v600_s3 stubs): the push, then the pr step's opener and its block
@@ -192,10 +280,13 @@ test("8.9.8 #124: an unattended PR body with no Unattended run section stops at 
   } else assert.fail("the unattended run did not reach the first-open block: " + out.result.status + " " + out.result.reason);
 });
 
-test("8.9.8 #124: a resume at pr_open starts at the review: no pr-opener call, no first-open block; the step-list block is written", async () => {
-  const s = stopAfterReview();
+// a first build of the #195 shape that records its pr_open run-state; resume() scripts the re-run from it
+async function builtAtPrOpen() {
+  return builtAt(stopAfterReview(), "infra:state:pr_open:p1");
+}
+async function builtAt(s, stateLabel) {
   let st = null;
-  s["infra:state:pr_open:p1"] = (prompt) => {
+  s[stateLabel] = (prompt) => {
     st = stateJsonOf(prompt);
     return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
   };
@@ -203,30 +294,78 @@ test("8.9.8 #124: a resume at pr_open starts at the review: no pr-opener call, n
   const bargs = Object.assign({}, ARGS, { mode: "build", plan_ref: plan.result.plan_ref });
   delete bargs.input;
   const first = await runOne(s, bargs);
+  const resume = () => {
+    const x = st;
+    s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: x.approved_sha, commits_since: [{ sha: x.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+    s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: x.approved_sha, message: JSON.stringify(x), head: x.approved_sha, head_tree: x.code_tree, clean: true };
+    const h = JSON.parse(JSON.stringify(HASHES));
+    h.git["fleetref:refs/fleet/l42/freeze"] = "T1";
+    s["hasher:resume"] = { status: "ok", fingerprint: { head: x.approved_sha, tree: x.code_tree }, hashes: h };
+    return runOne(s, Object.assign({}, bargs, { run_nonce: "n2-0000002" }));
+  };
+  return { s, first, state: () => st, resume };
+}
+
+test("8.9.8 #124: a resume at pr_open starts at the review: no pr-opener call, no first-open block; the step-list block is written", async () => {
+  const { s, first, state, resume } = await builtAtPrOpen();
+  const st = state();
   assert.equal(first.result.status, "needs_human", first.result.reason);
   assert.ok(first.labels.includes("infra:pr-stats:open"), first.labels.join(", "));
   assert.ok(st && st.last_gate === "pr_open", "the first build wrote the pr_open run-state");
   // the early write adds no milestone and no run-state key
   assert.ok(!Object.keys(st).some((k) => /stats/.test(k)), Object.keys(st).join(", "));
-  const x = st;
   s["role:pr-review:v1"] = REV("approve", []);
-  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: x.approved_sha, commits_since: [{ sha: x.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
-  s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: x.approved_sha, message: JSON.stringify(x), head: x.approved_sha, head_tree: x.code_tree, clean: true };
-  const h = JSON.parse(JSON.stringify(HASHES));
-  h.git["fleetref:refs/fleet/l42/freeze"] = "T1";
-  s["hasher:resume"] = { status: "ok", fingerprint: { head: x.approved_sha, tree: x.code_tree }, hashes: h };
-  const r = await runOne(s, Object.assign({}, bargs, { run_nonce: "n2-0000002" }));
+  const r = await resume();
   assert.equal(r.result.status, "ok", r.result.reason);
   assert.equal(r.result.resumed_at, "review", r.result.reason);
   const L = r.labels;
   assert.ok(!L.some((l) => /^role:fleet-pr-opener/.test(l)), L.join(", "));
   assert.ok(!L.some((l) => /^infra:pr-stats:open/.test(l)), L.join(", "));
+  // 8.9.8 review (L3): the resume write, after the resume test-block check, before the review
+  assert.ok(L.indexOf("infra:pr-stats:resume") > L.indexOf("infra:pr-tests:resume") && L.indexOf("infra:pr-stats:resume") < L.indexOf("role:pr-review:v1"), L.join(", "));
   assert.ok(L.indexOf("infra:pr-stats") > L.indexOf("role:pr-review:v1"), L.join(", "));
 });
 
-test("8.9.8 #124: stats writes are not counted as gates passed", () => {
-  const src = readFileSync(join(HERE, "..", "src", "build-engine.js"), "utf8");
-  assert.ok(flat(src).indexOf('state.gateLog.filter((x) => !/^(warning:|model used:|fallback:|infra:pr-stats)/.test(x)).length') >= 0);
+test("8.9.8 review L3: a resume at pr_open that stops again after the review still leaves a block on the PR", async () => {
+  const { first, resume } = await builtAtPrOpen();
+  assert.equal(first.result.status, "needs_human", first.result.reason);
+  const r = await resume();
+  assert.equal(r.result.status, "needs_human", r.result.reason);
+  // the existing stop of a resumed run whose review needs a coder round (no freeze ref here)
+  assert.equal(r.result.stop_gate, "review", r.result.reason);
+  assert.match(r.result.reason, /^resumed run at review: the review gate needs a coder round/);
+  const L = r.labels;
+  assert.ok(L.includes("infra:pr-stats:resume") && L.includes("infra:pr-stats:review:v1"), L.join(", "));
+  assert.ok(L.indexOf("infra:pr-stats:resume") < L.indexOf("role:pr-review:v1"), L.join(", "));
+});
+
+test("8.9.8 review L3: a resume at the stats step (written_back) writes no extra resume block; the stats step writes one", async () => {
+  const { s, first, state, resume } = await builtAt(happy(), "infra:state:written_back");
+  assert.equal(first.result.status, "ok", first.result.reason);
+  assert.equal(state().last_gate, "written_back");
+  const r = await resume();
+  assert.equal(r.result.status, "ok", r.result.reason);
+  assert.equal(r.result.resumed_at, "stats", r.result.reason);
+  const L = r.labels;
+  assert.ok(L.includes("infra:pr-tests:resume") && L.includes("infra:pr-stats"), L.join(", "));
+  assert.ok(!L.includes("infra:pr-stats:resume"), L.join(", "));
+});
+
+const gatesOf = (out, label) => Number(/\| gates passed \| (\d+) \|/.exec(blockOf(out, label))[1]);
+
+test("8.9.8 review L1: gates passed in the step-list block equals the value of a run with no early write", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const logs = out.build.logs;
+  // the first-open block counts the gate log up to the pr_open run-state; no stats write came before it
+  const open = logs.findIndex((l) => /^run-state pr_open at /.test(l));
+  const end = logs.findIndex((l) => /^infra:pr-stats: stats block added in /.test(l));
+  assert.ok(open > 0 && end > open, logs.join("\n"));
+  const between = logs.slice(open + 1, end);
+  assert.ok(between.some((l) => /^infra:pr-stats:open: stats block added in /.test(l)), "the run had an early write: " + between.join("\n"));
+  // a run with no early write logs the same lines but the infra:pr-stats:<tag> ones
+  const want = gatesOf(out, "infra:pr-stats:open") + between.filter((l) => !/^(warning:|model used:|fallback:)/.test(l) && !/^infra:pr-stats:/.test(l)).length;
+  assert.equal(gatesOf(out, "infra:pr-stats"), want);
 });
 
 test("8.9.8 #124: the README names the first-open write and the refresh at each later PR step", () => {

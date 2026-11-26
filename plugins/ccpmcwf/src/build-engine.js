@@ -8098,6 +8098,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
       const own = await prTestsStep("infra:pr-tests:resume", targs, tb, pr.pr_url, supplied);
       if (own.length) halt(J_PR, "needs_human", stillClaims("infra:pr-tests:resume", own, pr.pr_url), "role");
+      // 8.9.8 review (L3): a resumed run that stops again still leaves a block (the stats step itself writes one next)
+      if (from !== "stats") await statsStep("resume");
     }
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
@@ -8193,6 +8195,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             halt(J_BASE, "needs_human", "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge; re-plan on the new base or fix by hand", "review");
           if (planF.length) {
             gate("review v" + reviews + ": changes_requested (" + planF.length + " plan-target) -> re-plan");
+            // 8.9.8 review (M1): the review verdict reaches the PR block before the re-plan (after every safety halt)
+            await statsStep("review:v" + reviews);
             return { gate: "review", plan: planF.map((f) => ({ target: "plan", criterion: null, finding: reviewFindingText(f) })) };
           }
           if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
@@ -8231,15 +8235,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             );
           reviewNotes = rv.nits;
           gate("review v" + reviews + ": changes_requested (" + codeF.length + " blocking) -> coder (fix_code)");
+          // 8.9.8 review (M1): the review verdict reaches the PR block before the coder round (after the MAX_REVIEWS halt)
+          await statsStep("review:v" + reviews);
           return { gate: "review", findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
         }
         // 6.1.0: a review of the update merge (base-author code) never writes its text to the PR body
         if (rv.nits.length && !upd) {
           reviewNotes = rv.nits;
           pr = await openPr("role:fleet-pr-opener:notes", state.bodyFixed ? { body_findings: state.bodyFixed } : null);
-          await statsStep("notes:v" + reviews);
         }
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
+        // 8.9.8 review (L2): after the reviewed run-state, so a stats stop here resumes past the review
+        if (rv.nits.length && !upd) await statsStep("notes:v" + reviews);
       } else if (step === "writeback") {
         // the update-branch re-review keeps the run's write-back
         if (skipWb) continue;
