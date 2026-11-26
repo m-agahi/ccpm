@@ -99,9 +99,16 @@ function callersScenario(fixture, relay) {
     fn: (r, prompt, label) => {
       if (/^infra:callers/.test(label)) {
         const i = inputsOf(prompt);
-        const p = spawnSync(PY, ["-I", CALLERS, fixture, i.plan_path, JSON.stringify(i.symbols), String(i.cap)], { encoding: "utf8" });
+        const p = spawnSync(PY, ["-I", CALLERS, fixture, i.plan_path, JSON.stringify(i.symbols), String(i.cap), JSON.stringify(i.runtime_docs)], { encoding: "utf8" });
         assert.equal(p.status, 0, p.stderr);
-        r = Object.assign({ status: "ok", reason: "grepped" }, JSON.parse(p.stdout), { file_sha256: programSha("callers") });
+        // 8.9.14 (yaadgaar #119): the program echoes its args; the fixture stands in for the prompt's worktree,
+        // so its echo is the prompt's path again, with the program's own digest over it
+        const o = JSON.parse(p.stdout);
+        assert.equal(o.args[0], fixture);
+        delete o.digest;
+        o.args[0] = i.worktree;
+        o.digest = sha256(canon(o));
+        r = Object.assign({ status: "ok", reason: "grepped" }, o, { file_sha256: programSha("callers") });
       }
       return relay ? promptRelay(label, r, prompt) : r;
     },
@@ -121,15 +128,15 @@ function callersFixture() {
 test("5.0.2 2006 repro (wf_00e4b130-011): the real callers.py output, relayed with only the keys the prompt names, passes", async () => {
   const fx = callersFixture();
   try {
-    const raw = JSON.parse(spawnSync(PY, ["-I", CALLERS, fx, "docs/plans/x.md", '["guard_verdict"]', "50"], { encoding: "utf8" }).stdout);
-    assert.deepEqual(Object.keys(raw).sort(), ["auto_dont_care", "capped", "digest", "doctest_md", "occurrences", "program"], "callers.py prints six keys");
+    const raw = JSON.parse(spawnSync(PY, ["-I", CALLERS, fx, "docs/plans/x.md", '["guard_verdict"]', "50", '["roles/**/*.md"]'], { encoding: "utf8" }).stdout);
+    assert.deepEqual(Object.keys(raw).sort(), ["args", "auto_dont_care", "capped", "digest", "doctest_md", "occurrences", "program"], "callers.py prints seven keys (8.9.14: args)");
     assert.deepEqual(raw.occurrences, { guard_verdict: ["chart/guards.py:10"] });
     const s = callersScenario(fx, true);
     const out = await runOne(s, ARGS);
     assert.ok(out.labels.includes("infra:callers"), "the caller grep ran");
     assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
     const c = out.calls.find((x) => x.label === "infra:callers");
-    for (const k of ["occurrences", "capped", "auto_dont_care", "doctest_md", "program", "file_sha256", "digest"])
+    for (const k of ["occurrences", "capped", "auto_dont_care", "doctest_md", "args", "program", "file_sha256", "digest"])
       assert.ok(returnKeys(c.prompt).includes(k), "the callers Return line names " + k + ": " + c.prompt.slice(c.prompt.lastIndexOf("Return {")));
     assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   } finally {

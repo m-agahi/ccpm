@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ARGS, SCRIPTS_SRC, happy, runOne, scratchRepo, sh, spawnSync, callersDisk } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 
 test("7.2.0 AC10: callers.py file mode refuses a summary over 4096 bytes; 4 long names fit", () => {
@@ -20,11 +23,11 @@ test("7.2.0 AC10: callers.py file mode refuses a summary over 4096 bytes; 4 long
     writeFileSync(join(wt, "src/f.py"), names.map((x) => x + "()\n").join(""));
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const big = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(names), "100", S], { encoding: "utf8" });
+    const big = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(names), "100", S, RD], { encoding: "utf8" });
     assert.notEqual(big.status, 0);
     assert.equal(big.stdout, "");
     assert.ok(big.stderr.startsWith("FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap ("), big.stderr);
-    const small = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(names.slice(0, 4)), "100", S], { encoding: "utf8" });
+    const small = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(names.slice(0, 4)), "100", S, RD], { encoding: "utf8" });
     assert.equal(small.status, 0, small.stderr);
     assert.ok(Buffer.byteLength(small.stdout) <= 4096);
     assert.equal(Object.keys(JSON.parse(small.stdout).symbols).length, 4);

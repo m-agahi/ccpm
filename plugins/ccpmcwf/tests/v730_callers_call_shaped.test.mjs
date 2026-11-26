@@ -14,6 +14,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SCRIPTS_SRC, SOURCE, ROLE_TEXT, spawnSync } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 function repoWith(files) {
   const repo = mkdtempSync(join(tmpdir(), "fleet-730c-"));
   const git = (...a) => assert.equal(spawnSync("git", ["-C", repo, ...a], { encoding: "utf8" }).status, 0, a.join(" "));
@@ -24,7 +27,7 @@ function repoWith(files) {
   return repo;
 }
 function callers(repo, syms, cap = "100") {
-  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "callers.py"), repo, "plan.md", JSON.stringify(syms), cap], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "callers.py"), repo, "plan.md", JSON.stringify(syms), cap, RD], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }

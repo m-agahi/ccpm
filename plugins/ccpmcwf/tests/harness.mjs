@@ -340,6 +340,11 @@ export function fillArgs(label, r, prompt) {
   // 7.4.0 (#9): push.py echoes the args the prompt passed it
   else if (/^infra:push(:p\d+)?$/.test(label) || /^infra:push-probe$/.test(label)) r.args = pushArgsOf(prompt);
   else if (/^infra:precommit-ids/.test(label)) r.args = [inputsOf(prompt).main_worktree, inputsOf(prompt).plan_commit];
+  // 8.9.14 (yaadgaar #119): an inline callers relay echoes its args (the runtime-doc list last)
+  else if (/^infra:callers(?!.*:(file|read)(:|$))/.test(label) && "occurrences" in r) {
+    const i = inputsOf(prompt);
+    r.args = [i.worktree, i.plan_path, JSON.stringify(i.symbols), String(i.cap), JSON.stringify(i.runtime_docs)];
+  }
   return r;
 }
 export function withRelayDigest(label, r) {
@@ -738,6 +743,11 @@ export async function runOne(script, args0) {
     if (/^infra:(branch-scan|verify-plan)$/.test(label) && !raw && r.status === "ok" && !("test_db" in r)) {
       const i = inputsOf(prompt);
       r.test_db = { decl: null, error: null, args: [i.main_worktree, i.default_branch] };
+    }
+    // 8.9.14 (yaadgaar #119): and no runtime-doc file
+    if (/^infra:(branch-scan|verify-plan)$/.test(label) && !raw && r.status === "ok" && !("runtime_docs" in r)) {
+      const i = inputsOf(prompt);
+      r.runtime_docs = { docs: null, error: null, args: [i.main_worktree, i.default_branch] };
     }
     // a run-state write moves its ref
     if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
@@ -1291,7 +1301,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.13/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.9.14/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1484,7 +1494,7 @@ export const PROGRAM_LABELS = [
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
   [/^infra:gh-identity:/, [[null, "gh_identity", K("gh_identity")]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
-  [/^infra:branch-scan$/, [[null, "branch_scan", K("branch_scan")], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan", K("branch_scan")], ["test_db", "test_db_decl", K("test_db_decl")], ["runtime_docs", "runtime_docs", PROGRAM_KEYS["runtime_docs"] || null]]],
   // 4.0.0 (1986)
   [/^infra:load-parked$/, [[null, "parked", K("parked:read")]]],
   // 7.3.0 (#42, #43): read lazily (the module imports while PROGRAM_KEYS lacks the entries)
@@ -1507,7 +1517,7 @@ export const PROGRAM_LABELS = [
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", K("plan_hash")], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", K("plan_hash")], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", K("plan_hash")], ["test_db", "test_db_decl", K("test_db_decl")], ["runtime_docs", "runtime_docs", PROGRAM_KEYS["runtime_docs"] || null]]],
   [/^infra:read-state$/, [[null, "read_state", K("read_state")]]],
   [/^infra:state:/, [[null, "state_write", K("state_write")]]],
   [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
@@ -2118,7 +2128,7 @@ export function callersFileStub(data, over) {
     const symbols = {};
     for (const s of i.symbols) if (data[s]) symbols[s] = callersEntry(data[s], data[s].summary);
     return Object.assign(
-      { status: "ok", reason: "summary", symbols, capped: [], doctest_md: [], file: callersFileOf(i.scratch_dir), args: [i.worktree, i.plan_path, JSON.stringify(i.symbols), String(i.cap), i.scratch_dir] },
+      { status: "ok", reason: "summary", symbols, capped: [], doctest_md: [], file: callersFileOf(i.scratch_dir), args: [i.worktree, i.plan_path, JSON.stringify(i.symbols), String(i.cap), i.scratch_dir, JSON.stringify(i.runtime_docs)] },
       typeof over === "function" ? over(i) : over || {},
     );
   };

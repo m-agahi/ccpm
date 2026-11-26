@@ -144,10 +144,12 @@ const SCENARIOS = {
 // 8.9.8 (yaadgaar #124): + infra:pr-stats:open (the stats block after the first PR open) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with that call dropped every pin is 8.9.7's
 // 8.9.9 (yaadgaar #122): the pr-review schema's category enum gains pr_body_format (the pr-review and the pr-opener role shas move, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.8's
 // 8.9.10 (yaadgaar #129): the pr-review schema's category enum gains pr_title (the pr-review role sha moves, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.9's (the #123 subject builder gives the fixture tldr the same subject)
+// 8.9.14 (yaadgaar #119): infra:branch-scan and infra:verify-plan run runtime_docs.py after test_db_decl.py (their prompts list the command and return runtime_docs, the schema gains the runtime_docs slot), and every callers prompt passes the runtime-doc list as its last argument (callers prompts name args); same call counts: the three plan/build pins move, probe unchanged. Checked: with src/build-engine.js, roles/scope-and-plan.md and scripts/callers.py at 8.9.13 (the version and the tests of this commit kept) the three old pins come back.
+// 8.9.14 review of 3d945e5: the plan ref seals plan_facts.runtime_docs (the plan-ref chunks the commit-plan prompt carries hold it); same call counts: the three plan/build pins move, probe unchanged. Checked: with only that plan_facts line dropped from src the 3d945e5 pins come back.
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "0f80094cf027aab7a5cf1cb74b70537437bcb7427274628bc4d4205a5f280862" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "79f917a5a2e115b0d85da9c3c550f58bb3813d361d81aeb6ca5014eff615539c" },
-  "short path (one test writer)": { calls: 90, sha256: "fbb095626a9bbaaee5deb05dd64dc2769739f535cc6cadf61a5415b82ccf8868" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "d93db47066a663efe0a5c26c2dc95bc37bdfa1b0612f390ddced8199773d3ad1" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "9d078ca20131d59cfe663b2a2ee65862d6bebf86c7eae514536ad270277a5f80" },
+  "short path (one test writer)": { calls: 90, sha256: "47cc9b825436c8482964bc46f97a2a2888664947dfbe55cce93b0675a3e2f4be" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

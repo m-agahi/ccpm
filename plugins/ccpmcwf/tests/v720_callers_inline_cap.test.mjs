@@ -7,9 +7,12 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { SCRIPTS_SRC, scratchRepo, sh, spawnSync } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 const SYMS = Array.from({ length: 30 }, (_, i) => "sym_name_" + i + "_long_identifier");
-const run = (wt, syms) => spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), "100"], { encoding: "utf8" });
+const run = (wt, syms) => spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), "100", RD], { encoding: "utf8" });
 
 function repo50() {
   const wt = scratchRepo("fleet-720-inline-");
@@ -38,7 +41,7 @@ test("7.2.0 AC1: inline output over 8192 bytes prints nothing and exits with the
     const one = run(wt, SYMS.slice(0, 1));
     assert.equal(one.status, 0, one.stderr);
     const o = JSON.parse(one.stdout);
-    assert.deepEqual(Object.keys(o).sort(), ["auto_dont_care", "capped", "digest", "doctest_md", "occurrences", "program"]);
+    assert.deepEqual(Object.keys(o).sort(), ["args", "auto_dont_care", "capped", "digest", "doctest_md", "occurrences", "program"]);
     assert.equal(o.occurrences.sym_name_0_long_identifier.length, 100);
     assert.ok(Buffer.byteLength(one.stdout) <= 8192, String(Buffer.byteLength(one.stdout)));
   } finally {

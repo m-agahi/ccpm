@@ -8,6 +8,9 @@ import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { SCRIPTS_SRC, scratchRepo, sh, spawnSync } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 const py = (...a) => spawnSync("python3", ["-I", CALLERS, ...a], { encoding: "utf8" });
 
@@ -21,7 +24,7 @@ test("7.2.0 AC4: every refusal exits non-zero with empty stdout and FLEET_CALLER
     writeFileSync(join(wt, "README.md"), "x\nfoo\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const f = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S);
+    const f = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S, RD);
     assert.equal(f.status, 0, f.stderr);
     const F = JSON.parse(f.stdout).file;
     const bytes = readFileSync(F);

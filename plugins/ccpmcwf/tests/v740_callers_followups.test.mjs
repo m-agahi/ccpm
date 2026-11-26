@@ -12,6 +12,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ARGS, SCRIPTS_SRC, happy, runOne, scratchRepo, sh, spawnSync, callersDisk, call, inputsOf } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 
 test("7.4.0 #68 C1: one symbol with 90 .md doctest hits (a ~9 KB summary) passes; two symbols over 4096 still stop", () => {
@@ -23,12 +26,12 @@ test("7.4.0 #68 C1: one symbol with 90 .md doctest hits (a ~9 KB summary) passes
     for (let i = 0; i < 90; i++) writeFileSync(join(wt, "docs", "guide_" + "g".repeat(80) + "_" + String(i).padStart(3, "0") + ".md"), "use my_symbol here and other_symbol\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const one = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(["my_symbol"]), "100", S], { encoding: "utf8" });
+    const one = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(["my_symbol"]), "100", S, RD], { encoding: "utf8" });
     assert.equal(one.status, 0, one.stderr);
     const n = Buffer.byteLength(one.stdout);
     assert.ok(n > 8000 && n <= 16384, "summary bytes " + n);
     assert.equal(JSON.parse(one.stdout).doctest_md.length, 90);
-    const two = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(["my_symbol", "other_symbol"]), "100", S], { encoding: "utf8" });
+    const two = spawnSync("python3", ["-I", CALLERS, "file", wt, "docs/plans/x.md", JSON.stringify(["my_symbol", "other_symbol"]), "100", S, RD], { encoding: "utf8" });
     assert.notEqual(two.status, 0);
     assert.ok(two.stderr.startsWith("FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap ("), two.stderr);
   } finally {

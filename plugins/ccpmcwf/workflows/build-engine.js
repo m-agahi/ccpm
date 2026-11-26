@@ -110,7 +110,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.13";
+const FLEET_VERSION="8.9.14";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -611,6 +611,7 @@ remote_url:STR,
 remote_url_check:PROGRAM_OUTPUT,
 ref_target:STR,
 test_db:PROGRAM_OUTPUT,
+runtime_docs:PROGRAM_OUTPUT,
 sweep:PROGRAM_OUTPUT,
 up:PROGRAM_OUTPUT,
 down:PROGRAM_OUTPUT,
@@ -1533,7 +1534,7 @@ return typeof r.digest==="string"&&SHA256_RE.test(r.digest)&&sha256Hex(canonical
 const PROGRAM_SHA256 = {
 "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
 "build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
-"callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
+"callers": "8aee44358efd7a7b1de4965c0043d83b37bb7a27712d9e0de89ef1b0ee9ee039",
 "changed_defs": "dea1b316f0294f9db3cb7860148e20a944836e84231cb2a76c5597b4c9ef07fb",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "cover_diff": "9b03ab47e911b44586a5283a44b34e331f37e2f4289794e862ecaadef3424660",
@@ -1572,6 +1573,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "37fb467c0f9208ddd1b798cbba209cbf9732923bcd0bc25a407fbd2f3c46475b",
+"runtime_docs": "a302940e60db2a040bd185b57ebef0912d2416605e7c228a9c87a433e241bd32",
 "sandbox": "6ef231433b0333775fc85b0762caff74edd2ae862a3a1bd4b5a73264cfb3fd43",
 "scratch_copy": "f5e0a7bc1b20ac3188cad8bd100436958fd825813667b894fa8af52742793046",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
@@ -1599,7 +1601,7 @@ const ROLE_SHA256 = {
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c0f127b29b246a6274c73a404d4aa484dbafde43c7b8bb385bfbaa7d7ac6c07c",
 "pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
-"scope-and-plan": "16a353c6182b1f54c54fd1fae8131d77c7482939ed43a8cfcfe67657a9a3e209"
+"scope-and-plan": "5e6ac229b3c7bb1ebbf870569e2fb7279818c3a1abec9f937994ae0bfcba1bf3"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1667,7 +1669,7 @@ const PROGRAM_SLOTS=[
 [/^workspace$/,[["remote_url_check","remote_url"],["gh_check","gh_identity"],["exclude","exclude_add"]]],
 [/^infra:gh-identity:/,[[null,"gh_identity"]]],
 [/^hasher:/,[[null,"hasher"]]],
-[/^infra:branch-scan$/,[[null,"branch_scan"],["test_db","test_db_decl"]]],
+[/^infra:branch-scan$/,[[null,"branch_scan"],["test_db","test_db_decl"],["runtime_docs","runtime_docs"]]],
 [/^infra:load-parked(:|$)/,[[null,"parked"]]],
 [/^infra:fleet-branch/,[[null,"fleet_branch"]]],
 [/^infra:run-lock/,[[null,"parked"]]],
@@ -1679,7 +1681,7 @@ const PROGRAM_SLOTS=[
 [/^infra:commit-plan/,[[null,"plan_ref_write"],["retire","parked"]]],
 [/^infra:verify-plan-commit/,[["plan_files","plan_files"],["plan_hash","plan_hash"],["plan_ref","plan_ref"]]],
 [/^infra:load-ref/,[[null,"plan_ref"]]],
-[/^infra:verify-plan(?!-commit)/,[[null,"verify_since"],["plan_hash","plan_hash"],["test_db","test_db_decl"]]],
+[/^infra:verify-plan(?!-commit)/,[[null,"verify_since"],["plan_hash","plan_hash"],["test_db","test_db_decl"],["runtime_docs","runtime_docs"]]],
 [/^infra:read-state$/,[[null,"read_state"]]],
 [/^infra:policy(:plan)?$/,[[null,"policy"]]],
 [/^infra:pr-stats/,[[null,"pr_body_block"]]],
@@ -1724,6 +1726,7 @@ const PROGRAM_KEYS={
 "hasher:base":["fingerprint","hashes","changed","scripts"],
 "branch_scan":["head","commits","refs","plan_tip_time"],
 "test_db_decl":["decl","error","args"],
+"runtime_docs":["docs","error","args"],
 "parked:read":["parked","args"],
 "parked:part":["part","chunks","args"],
 "fleet_branch":["slugs","owned","args"],
@@ -1750,7 +1753,7 @@ const PROGRAM_KEYS={
 "remote_head":["head","args"],
 "fleet_scan":["diff","commits"],
 "fleet_scan:base":["diff","commits","base"],
-"callers":["occurrences","capped","auto_dont_care","doctest_md"],
+"callers":["occurrences","capped","auto_dont_care","doctest_md","args"],
 "callers:file":["symbols","capped","doctest_md","file","args"],
 "callers:read":["part","page","hits","args"],
 "changed_defs":["defs","excluded","unclassified","unattributed","generated"],
@@ -1830,6 +1833,7 @@ plan_tip_time:INT_OR_NULL,
 digest:STR,
 },
 test_db_decl:{decl:{type:["object","null"]},error:STR_OR_NULL,args:STRS,digest:STR},
+runtime_docs:{docs:STRS_OR_NULL,error:STR_OR_NULL,args:STRS,digest:STR},
 parked:{
 parked:{type:["object","null"],properties:{run:STR,plan_path:STR_OR_NULL,payload_sha256:STR,part_count:INT}},
 part:{type:"object",properties:{index:INT,count:INT,sha256:STR}},
@@ -2473,6 +2477,8 @@ inputsLine(inputs)+
 "Return {status, reason, tried, relay: {kind, text}, brief: {title, description, sources: [{kind, ref, url, body, id, project}], repo, plan_path}}. tried is [] when no ledger tool was called. id and project are null except on a yaadgaar source. plan_path is null when no plan was ingested."
 );
 }
+const RUNTIME_DOCS_CMD=(inputs)=>
+progCmd("runtime_docs",[inputs.main_worktree,inputs.default_branch])+"\n"+PRINTS_ONE+printsKeys("runtime_docs")+": "+relayAs("runtime_docs")+FAIL_STDERR;
 function branchScanPrompt(inputs){
 return(
 INFRA_STEP+"list the commits the fleet branch carries"+READ_ONLY_NO+"reset, no push.\n"+
@@ -2484,7 +2490,8 @@ PRINTS_ONE+printsKeys("branch_scan")+' (names, hashes and checks only; no messag
 "Then run this one"+AS_WRITTEN+":\n"+
 progCmd("test_db_decl",[inputs.main_worktree,inputs.default_branch])+
 "\n"+PRINTS_ONE+printsKeys("test_db_decl")+": "+relayAs("test_db")+FAIL_STDERR+
-'Return {status: "ok", reason, '+returnKeys("branch_scan")+', test_db}.'
+"Then run this one"+AS_WRITTEN+":\n"+RUNTIME_DOCS_CMD(inputs)+
+'Return {status: "ok", reason, '+returnKeys("branch_scan")+', test_db, runtime_docs}.'
 );
 }
 function stagePlanPrompt(inputs){
@@ -2877,7 +2884,7 @@ return(
 INFRA_STEP+"list every occurrence of the changed symbols"+READ_ONLY_NO+"fetch, no push"+ONE_CMD+".\n"+
 inputsLine(inputs)+
 RUN_EXACT+
-progCmd("callers",[inputs.worktree,inputs.plan_path,JSON.stringify(inputs.symbols),String(inputs.cap)])+
+progCmd("callers",[inputs.worktree,inputs.plan_path,JSON.stringify(inputs.symbols),String(inputs.cap),JSON.stringify(inputs.runtime_docs)])+
 "\n"+
 PRINTS_ONE+printsKeys("callers")+'. Return {status: "ok", reason, '+returnKeys("callers")+'} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). '+
 'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
@@ -2888,7 +2895,7 @@ return(
 INFRA_STEP+"write the occurrences of the changed symbols to a file in the run scratch and relay its summary. Read only in the worktree: no edits, no commits, no checkout, no fetch, no push; the program writes only under the scratch dir"+ONE_CMD+".\n"+
 inputsLine(inputs)+
 RUN_EXACT+
-progCmd("callers",["file",inputs.worktree,inputs.plan_path,JSON.stringify(inputs.symbols),String(inputs.cap),inputs.scratch_dir])+
+progCmd("callers",["file",inputs.worktree,inputs.plan_path,JSON.stringify(inputs.symbols),String(inputs.cap),inputs.scratch_dir,JSON.stringify(inputs.runtime_docs)])+
 "\n"+
 PRINTS_ONE+printsKeys("callers:file")+'. Return {status: "ok", reason, '+returnKeys("callers:file")+'} with those values copied exactly: every key and every value, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). '+
 'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
@@ -2923,7 +2930,8 @@ PRINTS_ONE+printsKeys("verify_since")+". "+COPY_ALL+": every entry in order, not
 "5. Run this"+AS_WRITTEN+":\n"+
 progCmd("test_db_decl",[inputs.main_worktree,inputs.default_branch])+
 "\n"+PRINTS_ONE+printsKeys("test_db_decl")+": "+relayAs("test_db")+FAIL_STDERR+
-"Return {status, reason, plan_hash, "+returnKeys("verify_since")+", test_db}."
+"6. Run this"+AS_WRITTEN+":\n"+RUNTIME_DOCS_CMD(inputs)+
+"Return {status, reason, plan_hash, "+returnKeys("verify_since")+", test_db, runtime_docs}."
 );
 }
 function replanWorktreePrompt(inputs){
@@ -4758,17 +4766,88 @@ const AUTO_DONT_CARE="auto: non-code file";
 const DOC_FILE_RE=/^.*\.(md|rst|adoc)$/i;
 const NOTE_FILE_RE=/^(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?$/i;
 const LOCK_FILES=["Cargo.lock","uv.lock","package-lock.json","yarn.lock","pnpm-lock.yaml","poetry.lock","Gemfile.lock","go.sum"];
-function docOrLockFile(p){
+const RUNTIME_DOCS_FILE=".fleet-runtime-docs.json";
+const RUNTIME_DOCS_DEFAULT=["roles/**/*.md"];
+const RD_ENTRY_RE=/^[A-Za-z0-9._+@*\/-]{1,200}$/;
+function runtimeDocsProblem(rd){
+if(!Array.isArray(rd)||rd.length>64)return"runtime_docs must be a list of at most 64 globs";
+for(let i=0;i<rd.length;i++){
+const g=rd[i];
+const segs=typeof g==="string"&&RD_ENTRY_RE.test(g)?g.split("/"):[""];
+if(segs.some((x)=>x===""||x==="."||x===".."))return"runtime_docs entry "+i+" must be a relative path of segments [A-Za-z0-9._+@-] and *, with no leading or trailing /";
+if(segs.some((x,k)=>(x.indexOf("**")>=0&&x!=="**")||(x==="**"&&segs[k+1]==="**"))||segs.filter((x)=>x==="**").length>4)
+return"runtime_docs entry "+i+": ** is a whole segment, at most 4 of them and never two in a row";
+}
+if(new Set(rd).size!==rd.length)return"runtime_docs lists an entry twice";
+return null;
+}
+function rdSeg(g,s){
+const parts=g.split("*");
+if(parts.length===1)return g===s;
+const end=s.length-parts[parts.length-1].length;
+if(end<parts[0].length||!s.startsWith(parts[0])||!s.endsWith(parts[parts.length-1]))return false;
+let i=parts[0].length;
+for(const m of parts.slice(1,-1)){
+const j=s.indexOf(m,i);
+if(j<0||j+m.length>end)return false;
+i=j+m.length;
+}
+return true;
+}
+function rdMatch(ps,xs){
+if(!ps.length)return!xs.length;
+if(ps[0]==="**"){
+for(let k=0;k<=xs.length;k++)if(rdMatch(ps.slice(1),xs.slice(k)))return true;
+return false;
+}
+return xs.length>0&&rdSeg(ps[0],xs[0])&&rdMatch(ps.slice(1),xs.slice(1));
+}
+function runtimeDoc(p,rd){
+const xs=String(p).split("/");
+return rd.some((g)=>rdMatch(g.split("/"),xs));
+}
+function runtimeDocsSealed(sealed,rd,refName,defaultBranch){
+if(sealed===undefined){
+gate("plan ref sealed before the runtime-doc list: the build uses the list at origin/"+defaultBranch+" ("+rd.join(", ")+")");
+return rd;
+}
+const p=runtimeDocsProblem(sealed);
+if(p)halt("s","needs_human","plan ref "+refName+": the sealed runtime-doc list is refused: "+p,"callers");
+const gone=sealed.filter((g)=>rd.indexOf(g)<0);
+if(gone.length)
+halt("s","needs_human","plan ref "+refName+": "+RUNTIME_DOCS_FILE+" at origin/"+defaultBranch+" no longer lists the sealed runtime-doc glob(s) "+gone.join(", ")+"; restore them on "+defaultBranch+", or run plan again","callers");
+return rd;
+}
+function docOrLockFile(p,rd){
+if(!Array.isArray(rd))throw new Error("docOrLockFile: no runtime-doc list");
 const b=String(p).split("/").pop();
-return DOC_FILE_RE.test(b)||NOTE_FILE_RE.test(b)||LOCK_FILES.indexOf(b)>=0;
+return!runtimeDoc(p,rd)&&(DOC_FILE_RE.test(b)||NOTE_FILE_RE.test(b)||LOCK_FILES.indexOf(b)>=0);
+}
+function runtimeDocsStep(t,label,wt,defaultBranch){
+if(!t||typeof t!=="object")halt("s","failed",label+": no runtime_docs relay (the "+RUNTIME_DOCS_FILE+" read)","callers");
+requireProgram(t,"runtime_docs",label+" (runtime_docs)","failed","callers");
+if(!relayDigestOk(t,progKeys("runtime_docs"),"runtime_docs")||canonical(t.args)!==canonical([wt,defaultBranch]))
+halt("s","failed",label+": the relayed "+RUNTIME_DOCS_FILE+" read"+NOT_DIGEST+" or arguments","callers");
+const at=RUNTIME_DOCS_FILE+" at origin/"+defaultBranch;
+if(t.error!==null)halt("s","needs_human",at+" refused: "+t.error,"callers");
+const cfg=t.docs===null?[]:t.docs;
+const room=64-RUNTIME_DOCS_DEFAULT.length;
+if(Array.isArray(cfg)&&cfg.length>room)
+halt("s","needs_human",at+" refused: it lists "+cfg.length+" globs; at most "+room+" (64 with the default "+RUNTIME_DOCS_DEFAULT.join(", ")+")","callers");
+const rd=Array.isArray(cfg)?RUNTIME_DOCS_DEFAULT.concat(cfg.filter((g)=>RUNTIME_DOCS_DEFAULT.indexOf(g)<0)):null;
+const p=runtimeDocsProblem(cfg)||runtimeDocsProblem(rd);
+if(p)halt("s","needs_human",at+" refused: "+p,"callers");
+if(cfg.length)gate(at+": "+cfg.length+" runtime-doc glob(s) (code, not docs): "+cfg.join(", "));
+return rd;
 }
 function uniqSorted(xs){
 return Array.from(new Set(xs)).sort(codePointCompare);
 }
 const isStrList=(x)=>Array.isArray(x)&&x.every((v)=>typeof v==="string");
-async function callerGrep(label,names,worktree,planPath,phaseName,expected,level){
+async function callerGrep(label,names,worktree,planPath,phaseName,expected,level,rd){
+if(!Array.isArray(rd))throw new Error(label+": no runtime-doc list");
 const all={occurrences:{},capped:[],auto_dont_care:{},doctest_md:[],unread:{},paths:{},auto_unlisted:{}};
-const disk={expected:expected&&typeof expected==="object"?expected:{},pathLevel:level==="path",left:CALLER_READ_BUDGET,worktree,planPath,phaseName};
+const disk={expected:expected&&typeof expected==="object"?expected:{},pathLevel:level==="path",left:CALLER_READ_BUDGET,worktree,planPath,phaseName,rd};
 const per=CALLER_BATCH_SYMBOLS;
 const queue=[];
 for(let i=0;i<names.length;i+=per)queue.push({part:names.slice(i,i+per),disk:false});
@@ -4781,7 +4860,8 @@ if(q.disk){
 queue.unshift(...(await callerDisk(lb,part,disk,all)));
 continue;
 }
-const r=await dispatch(lb,callersPrompt({worktree,plan_path:planPath,symbols:part,cap:MAX_SYMBOL_HITS}),{schema:INFRA_SCHEMA,phase:phaseName,agentType:JUDGE_AGENT,digest:"callers"});
+const args=[worktree,planPath,JSON.stringify(part),String(MAX_SYMBOL_HITS),JSON.stringify(rd)];
+const r=await dispatch(lb,callersPrompt({worktree,plan_path:planPath,symbols:part,cap:MAX_SYMBOL_HITS,runtime_docs:rd}),{schema:INFRA_SCHEMA,phase:phaseName,agentType:JUDGE_AGENT,digest:"callers",args});
 if(r.status!=="ok"&&String(r.reason).indexOf(CALLERS_CAP_MARK)>=0){
 if(part.length===1){
 autoDecide("relay-size","page",lb+": the occurrences of "+part[0]+" are over the 65536-byte relay cap; on-disk handoff");
@@ -4807,6 +4887,7 @@ halt("s","failed",lb+" returned no occurrence list for "+n);
 requireProgram(r,"callers",lb);
 if(!relayDigestOk(r,progKeys("callers"),"callers"))
 halt("s","failed",lb+": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+if(canonical(r.args)!==canonical(args))halt("s","failed",lb+": "+OTHER_ARGS+" ("+JSON.stringify(r.args===undefined?null:r.args)+")");
 const adc=r.auto_dont_care&&typeof r.auto_dont_care==="object"&&!Array.isArray(r.auto_dont_care)?r.auto_dont_care:{};
 for(const n of part){
 all.occurrences[n]=occ[n];
@@ -4826,8 +4907,8 @@ else if(all.doctest_md)for(const d of doctest)if(all.doctest_md.indexOf(d)<0)all
 async function callerDisk(lb,part,disk,all){
 const fl=lb+":file";
 const scratch=scratchOf(disk.worktree);
-const args=[disk.worktree,disk.planPath,JSON.stringify(part),String(MAX_SYMBOL_HITS),scratch];
-const r=await dispatch(fl,callersFilePrompt({worktree:disk.worktree,plan_path:disk.planPath,symbols:part,cap:MAX_SYMBOL_HITS,scratch_dir:scratch}),{schema:INFRA_SCHEMA,phase:disk.phaseName,agentType:JUDGE_AGENT,digest:"callers:file",args});
+const args=[disk.worktree,disk.planPath,JSON.stringify(part),String(MAX_SYMBOL_HITS),scratch,JSON.stringify(disk.rd)];
+const r=await dispatch(fl,callersFilePrompt({worktree:disk.worktree,plan_path:disk.planPath,symbols:part,cap:MAX_SYMBOL_HITS,scratch_dir:scratch,runtime_docs:disk.rd}),{schema:INFRA_SCHEMA,phase:disk.phaseName,agentType:JUDGE_AGENT,digest:"callers:file",args});
 if(r.status!=="ok"&&String(r.reason).indexOf(CALLERS_CAP_MARK)>=0){
 if(part.length===1)halt(J_SYMS(part[0]),"needs_human",fl+": the caller summary of "+part[0]+" is over the "+CALLER_SUMMARY_CAP_ONE+"-byte summary cap; the caller check cannot relay it","callers");
 gate(fl+": "+part.length+" symbols are over the summary cap; split in two");
@@ -4861,7 +4942,7 @@ const doctest=r.doctest_md.map(normPath);
 const P={};
 const differ=[];
 for(const s of live){
-P[s]=uniqSorted(want(s).map((x)=>normPath(String(x))).filter((p)=>p&&!(docOrLockFile(p)&&doctest.indexOf(p)<0)));
+P[s]=uniqSorted(want(s).map((x)=>normPath(String(x))).filter((p)=>p&&!(docOrLockFile(p,disk.rd)&&doctest.indexOf(p)<0)));
 if(P[s].length===sm[s].code_path_count&&sha256Hex(canonical(P[s]))===sm[s].code_paths_sha256)all.paths[s]=P[s];
 else differ.push(s);
 }
@@ -4905,7 +4986,7 @@ if(H.length!==sm[s].count||sha256Hex(canonical(H))!==sm[s].sha256)
 halt("s","failed",lb+":read:all: the read occurrences of "+s+" do not match the summary count or sha256");
 const auto=H.filter((h)=>{
 const p=h.slice(0,h.lastIndexOf(":"));
-return docOrLockFile(p)&&doctest.indexOf(normPath(p))<0;
+return docOrLockFile(p,disk.rd)&&doctest.indexOf(normPath(p))<0;
 });
 if(auto.length!==sm[s].auto_count)halt("s","failed",lb+":read:all: the auto hits of "+s+" do not match the summary auto_count");
 all.occurrences[s]=H;
@@ -4945,11 +5026,11 @@ for(const s of sorted)if(hits[s])out[s]=(out[s]||[]).concat(hits[s]);
 }
 return out;
 }
-async function callerCheck(label,symbols,worktree,planPath){
+async function callerCheck(label,symbols,worktree,planPath,rd){
 const names=symbols.map((s)=>s.symbol);
 const expected={};
 for(const s of symbols)expected[s.symbol]=s.occurrences.map((o)=>o.at);
-const r=await callerGrep(label,names,worktree,planPath,"Plan",expected,"line");
+const r=await callerGrep(label,names,worktree,planPath,"Plan",expected,"line",rd);
 const occ=r.occurrences;
 const doctest=Array.isArray(r.doctest_md)?r.doctest_md.filter((x)=>typeof x==="string").map(normPath):null;
 const adc=doctest&&r.auto_dont_care&&typeof r.auto_dont_care==="object"&&!Array.isArray(r.auto_dont_care)?r.auto_dont_care:{};
@@ -4959,7 +5040,7 @@ auto[n]=[];
 if(r.unread[n])continue;
 for(const h of Array.isArray(adc[n])?adc[n]:[]){
 const p=typeof h==="string"?h.slice(0,h.lastIndexOf(":")):"";
-if(typeof h!=="string"||occ[n].indexOf(h)<0||!docOrLockFile(p)||doctest.indexOf(normPath(p))>=0)
+if(typeof h!=="string"||occ[n].indexOf(h)<0||!docOrLockFile(p,rd)||doctest.indexOf(normPath(p))>=0)
 halt("s","failed",label+": the program listed "+JSON.stringify(h)+" as auto dont_care for "+n+", which the script's doc and lock file list refuses");
 auto[n].push(h);
 }
@@ -5366,6 +5447,7 @@ repo_obligations:stripHeldOut(obligations),
 commands:commandsOf(plan.test_cmd,obligations,criteria),
 changed_symbols:cs.clean,
 remote_url:validRemoteUrl(ctx.remoteUrl)?ctx.remoteUrl:null,
+runtime_docs:ctx.runtimeDocs,
 merge_after:typeof plan.merge_after==="string"&&plan.merge_after.trim()?plan.merge_after.trim():null,
 };
 gate(
@@ -5422,7 +5504,7 @@ let autoDontCare=null;
 let autoUnlisted=null;
 let symbolMap=cs.clean;
 if(cs.clean.length){
-const cc=await callerCheck("infra:callers"+sfx,cs.clean,ctx.common.worktree,planPath);
+const cc=await callerCheck("infra:callers"+sfx,cs.clean,ctx.common.worktree,planPath,ctx.runtimeDocs);
 if(cc.findings.length)return planFindingsStop("j",ctx,planPath,"changed_symbols misses or misplaces occurrences",cc.findings,plan.changed_symbols,plan);
 callerOcc=cc.occurrences;
 autoDontCare=cc.auto;
@@ -5771,7 +5853,7 @@ const names=["."+IAC_TF+"rc","."+IAC_TF+"-version",".open"+"to"+"fu-version","."
 if(names.indexOf(b)>=0||/\.tfrc$/.test(b))return true;
 return new RegExp("^"+"dig"+"ger\\.ya?ml$").test(b);
 }
-const FENCED_FILES=[".fleet-test-db.json"];
+const FENCED_FILES=[".fleet-test-db.json",".fleet-runtime-docs.json"];
 function fencePathProblem(p){
 const q=normPath(p);
 const segs=q.split("/");
@@ -6187,6 +6269,7 @@ const src=sha256Hex(canonical([raw,brief.sources.map((x)=>[x.kind,x.ref,String(x
 const ck=parkedBad?null:resumeOf(parked,input.checkpoint,scan.head,src);
 const carry=ck||(parked&&parked.src===src&&!parked.ckpt?parked:null);
 if(carry&&(carry.round||carry.fp))gate("parked round "+carry.round+" and findings fingerprint "+carry.fp+" carried");
+const runtimeDocs=runtimeDocsStep(scan.runtime_docs,"infra:branch-scan",lay.mainWt,ws.defaultBranch);
 await testDbStep(scan.test_db,"infra:branch-scan",lay.mainWt,ws.defaultBranch,"Workspace",["plan","audit"],names.taskId);
 phase("Plan");
 let draft=null;
@@ -6251,7 +6334,7 @@ const one=new Set((it.tried||[]).filter((t)=>t&&t.error===null).map((t)=>t.ledge
 let p,pc,blockers,runGates,decided;
 try{
 p=await planAndAudit({
-common,brief,date,baseRef:ws.baseRef,remoteSlug:ws.remoteSlug,remoteUrl:ws.remoteUrl,onPlanPath:(x)=>(draft=x),
+common,brief,date,baseRef:ws.baseRef,remoteSlug:ws.remoteSlug,remoteUrl:ws.remoteUrl,runtimeDocs,onPlanPath:(x)=>(draft=x),
 priorDraft:parked&&!ck?parked.priorDraft:null,
 priorRound:ck?ck.prior:parked?parked.priorRound:null,
 resume:ck,
@@ -6882,6 +6965,7 @@ state.path=shortPath?"short":"full";
 const maxTestRounds=shortPath?MAX_SHORT_TEST_ROUNDS:MAX_TEST_ROUNDS;
 const testable=testableOf(criteria);
 const writerDbs=shortPath?["w_short"]:testable.map((c)=>"w_"+c.id);
+const runtimeDocs=runtimeDocsSealed(pf.runtime_docs,runtimeDocsStep(v.runtime_docs,"infra:verify-plan",mainWt,defaultBranch),ref.plan_ref,defaultBranch);
 await testDbStep(v.test_db,"infra:verify-plan",mainWt,defaultBranch,"Verify",writerDbs.concat(["plan","audit","tjudge","coder","cjudge","review","hooks","hrun","gates"]),names.taskId);
 const frozenFiles=[];
 for(const c of testable)for(const f of c.test_files)frozenFiles.push(f);
@@ -7592,9 +7676,9 @@ if(syms.length){
 const at=(k)=>normPath(String(k).slice(0,String(k).lastIndexOf(":")));
 const sealedPaths={};
 for(const x of syms)sealedPaths[x.symbol]=(x.occurrences||[]).map((o)=>at(occurrenceKey(o.at)||o.at));
-const g=await callerGrep("infra:callers:u1",syms.map((x)=>x.symbol),mainWt,ref.plan_path,"Review",sealedPaths,"path");
+const g=await callerGrep("infra:callers:u1",syms.map((x)=>x.symbol),mainWt,ref.plan_path,"Review",sealedPaths,"path",runtimeDocs);
 const dt=Array.isArray(g.doctest_md)?g.doctest_md.map(normPath):null;
-const docHit=(p)=>!!dt&&docOrLockFile(p)&&dt.indexOf(p)<0;
+const docHit=(p)=>!!dt&&docOrLockFile(p,runtimeDocs)&&dt.indexOf(p)<0;
 for(const x of syms)sealedPaths[x.symbol]=(x.occurrences||[]).filter((o)=>!(o&&o.dont_care===AUTO_DONT_CARE&&docHit(at(o.at)))).map((o)=>at(occurrenceKey(o.at)||o.at));
 if(g.capped.length)return"the occurrences of "+g.capped.join(", ")+" cannot be listed at the update merge (more than "+MAX_SYMBOL_HITS+" call-shaped occurrences)";
 const unread=Object.keys(g.unread).sort(codePointCompare);
@@ -8007,7 +8091,7 @@ return roundOut;
 }
 function planWrong(source,findings,head,tree,testConflict){
 return replan({
-ref,brief,names,lay,common,date,history,remoteSlug,remoteUrl,source,input,ws,testConflict,
+ref,brief,names,lay,common,date,history,remoteSlug,remoteUrl,source,input,ws,testConflict,runtimeDocs,
 project:input.project||null,
 findings,
 expectedHead:head,
@@ -8656,7 +8740,7 @@ gate("review cleanup v"+k+" failed: "+String((e&&e.message)||e));
 }
 }
 async function replan(ctx){
-const{ref,brief,names,lay,common,date,history,remoteSlug,remoteUrl}=ctx;
+const{ref,brief,names,lay,common,date,history,remoteSlug,remoteUrl,runtimeDocs}=ctx;
 const who=ctx.source||"code-judge";
 if(!ctx.findings.length)halt("s","needs_human",who+" verdict plan_wrong without a plan finding");
 const proposed=proposedChanges(ctx.findings,gate);
@@ -8691,6 +8775,7 @@ date,
 baseRef:ref.plan_commit,
 remoteSlug,
 remoteUrl,
+runtimeDocs,
 suffix:":replan",
 maxRounds:0,
 });

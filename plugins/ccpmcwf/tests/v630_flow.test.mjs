@@ -16,6 +16,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
 import {
   ARGS, PC, PB, FP_TESTS, SOURCE, SCRIPTS_SRC, happy, run, runOne, call, inputsOf, noUnscripted, criteria, commitStub,
   planRefFor, buildArgs, ghIdOut, scratchRepo, sh, spawnSync,
@@ -112,7 +115,7 @@ test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped sym
 // callers.py run for real
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 function callersRun(wt, syms) {
-  const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(SYMBOL_HITS)], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(SYMBOL_HITS), RD], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   return { text: r.stdout, out: JSON.parse(r.stdout) };
 }
@@ -153,11 +156,11 @@ test("6.3.0 A1 (ADR-1195 measure): 4 symbols x 100 hits and a full batch of 30 x
     }
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const four = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms.slice(0, 4)), String(per)], { encoding: "utf8" });
+    const four = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms.slice(0, 4)), String(per), RD], { encoding: "utf8" });
     assert.notEqual(four.status, 0);
     assert.equal(four.stdout, "");
     assert.match(four.stderr, /^FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap \(\d+ bytes; symbols: sym_name_0_long_identifier, /);
-    const full = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(per)], { encoding: "utf8" });
+    const full = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(per), RD], { encoding: "utf8" });
     assert.notEqual(full.status, 0);
     assert.match(full.stderr, /^FLEET_CALLERS_ON_DISK: .*\(\d+ bytes; symbols: sym_name_0_long_identifier/);
   } finally {
@@ -411,7 +414,7 @@ test("6.3.0 A1 (review M1): callers.py prints no output over the inline cap: it 
     for (let f = 0; f < 100; f++) writeFileSync(join(d, "m" + String(f).padStart(3, "0") + "_" + "x".repeat(60) + ".py"), "huge_symbol()\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(["huge_symbol"]), String(SYMBOL_HITS)], { encoding: "utf8" });
+    const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(["huge_symbol"]), String(SYMBOL_HITS), RD], { encoding: "utf8" });
     assert.notEqual(r.status, 0);
     assert.equal(r.stdout, "");
     assert.match(r.stderr, /^FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap \(\d+ bytes; symbols: huge_symbol\)/);

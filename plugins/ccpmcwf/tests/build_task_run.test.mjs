@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.9\.13 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.9\.14 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6346,7 +6346,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.9\.13; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.9\.14; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6572,10 +6572,10 @@ function extractCanonical() {
 // symbol, mapped to a criterion or to dont_care with a reason. The script
 // checks the map and diffs it against a word-boundary git grep.
 
-// The caller-grep program's output for {symbol: ["<path>:<line>", ...]}, with its digest.
+// The caller-grep program's output for {symbol: ["<path>:<line>", ...]}; 8.9.14 (yaadgaar #119): the harness adds
+// the args the prompt passed and the digest
 function callersOut(occ, capped) {
-  const o = { occurrences: occ, capped: capped || [], auto_dont_care: {}, doctest_md: [] };
-  return { status: "ok", reason: "grepped", ...o, digest: sha256(canon(o)) };
+  return { status: "ok", reason: "grepped", occurrences: occ, capped: capped || [], auto_dont_care: {}, doctest_md: [] };
 }
 
 const GV_DEF = { at: "chart/guards.py:10", criterion: "AC1", dont_care: null };
@@ -6743,8 +6743,11 @@ test("2.1.6 a symbol over the grep cap is refused, never silently cut", async ()
 test("2.1.6 a grep result whose relayed lists do not match the program's digest fails", async () => {
   const s = callerPlan([GV_DEF, GV_RENDER]);
   // the relay dropped the prestop line: the digest is still the program's
-  const full = callersOut(GV_HITS);
-  s["infra:callers"] = { ...full, occurrences: { guard_verdict: ["chart/guards.py:10", "chart/render.py:42"] } };
+  s["infra:callers"] = (p) => {
+    const full = fillArgs("infra:callers", callersOut(GV_HITS), p);
+    full.digest = sha256(canon({ occurrences: full.occurrences, capped: full.capped, auto_dont_care: full.auto_dont_care, doctest_md: full.doctest_md, args: full.args }));
+    return { ...full, occurrences: { guard_verdict: ["chart/guards.py:10", "chart/render.py:42"] } };
+  };
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /infra:callers.*digest/);
@@ -6794,7 +6797,7 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     sh(wt, "git", "commit", "-qm", "i");
     writeFileSync(join(wt, "untracked.py"), "guard_verdict()\n");
     const prog = extractPy("CALLERS_PY_BEGIN", "CALLERS_PY_END", "CALLERS_PY");
-    const r = spawnSync("python3", ["-I", "-", wt, "docs/plans/x.md", JSON.stringify(["guard_verdict", "nohit", "z"]), "5"], { input: prog, encoding: "utf8" });
+    const r = spawnSync("python3", ["-I", "-", wt, "docs/plans/x.md", JSON.stringify(["guard_verdict", "nohit", "z"]), "5", '["roles/**/*.md"]'], { input: prog, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.occurrences.guard_verdict, ["chart/guards.py:1", "chart/render.py:1", "chart/render.py:2", "chart/render.py:5", "x y.py:1"].sort());
@@ -6803,7 +6806,9 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     assert.deepEqual(o.capped, ["z"]);
     assert.deepEqual(o.occurrences.z, []);
     // 4.0.0 (1989): the digest covers the auto dont_care map and the doctest list too
-    const dig = { occurrences: o.occurrences, capped: o.capped, auto_dont_care: o.auto_dont_care, doctest_md: o.doctest_md, program: o.program };
+    // 8.9.14 (yaadgaar #119): and the args (the runtime-doc list last)
+    assert.deepEqual(o.args, [wt, "docs/plans/x.md", JSON.stringify(["guard_verdict", "nohit", "z"]), "5", '["roles/**/*.md"]']);
+    const dig = { occurrences: o.occurrences, capped: o.capped, auto_dont_care: o.auto_dont_care, doctest_md: o.doctest_md, args: o.args, program: o.program };
     assert.equal(o.digest, sha256(canon(dig)));
     // the workflow accepts this digest
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
@@ -6946,6 +6951,8 @@ test("2.1.6 plan_wrong re-plan greps the detached re-plan worktree at the old pl
   const g = inputsOf(call(out, "infra:callers:replan").prompt);
   assert.equal(g.worktree, inputsOf(call(out, "infra:replan-worktree").prompt).worktree);
   assert.match(g.worktree, /\/replan-1$/);
+  // 8.9.14 (yaadgaar #119): the re-plan's caller check runs with the build's runtime-doc list
+  assert.deepEqual(g.runtime_docs, ["roles/**/*.md"]);
   const l = out.labels;
   assert.ok(l.indexOf("role:scope-and-plan:replan") < l.indexOf("infra:callers:replan"));
   assert.ok(l.indexOf("infra:callers:replan") < l.indexOf("role:plan-audit:replan"));
@@ -7049,7 +7056,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.13\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.9\.13 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.14\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.9\.14 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8761,7 +8768,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.9\.13/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.9\.14/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
