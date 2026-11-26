@@ -241,11 +241,14 @@ test("8.0.0 G1-4: a malformed or digest-failed census never stops the run and ma
   for (const [what, fn] of Object.entries(BROKEN)) {
     const out = await runOne(brokenCensus(fn), ARGS);
     assert.equal(out.result.status, base.result.status, what + ": " + out.result.reason);
-    // 8.9.11 (#125): one retry, one extra agent, right after preflight
+    // 8.9.11 (#125, Max ruled): an object relay that fails a check (a mis-copy) gets one retry, one extra agent,
+    // right after preflight; a null or non-object relay (the program did not run) gets none
+    const ran = what !== "no relay" && what !== "a string";
     const want = base.labels.slice();
-    want.splice(want.indexOf("preflight") + 1, 0, "infra:gate-tools:preflight:relay-retry");
-    assert.deepEqual(out.labels, want, what + ": one retry, one extra agent");
-    assert.ok(out.logs.some((l) => l.startsWith("gate census unusable (no digest-checked gate_tools after one retry): no gate tool available")), what);
+    if (ran) want.splice(want.indexOf("preflight") + 1, 0, "infra:gate-tools:preflight:relay-retry");
+    assert.deepEqual(out.labels, want, what + (ran ? ": one retry, one extra agent" : ": no retry"));
+    const line = ran ? "gate census unusable (no digest-checked gate_tools after one retry): no gate tool available" : "gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool available";
+    assert.ok(out.logs.some((l) => l.startsWith(line)), what);
     assert.ok(!out.logs.some((l) => /^gate census (python|node|go|rust|other|security):/.test(l)), what + ": no tool claimed");
     const probe = await runOne(brokenCensus(fn), PROBE);
     assert.equal(probe.result.status, "ok", what);

@@ -4062,22 +4062,23 @@ return true;
 const GATE_TOOLS_SCHEMA={type:"object",required:["status","reason"],properties:{status:STATUS_PROP,reason:STR,gate_tools:PROGRAM_OUTPUT}};
 function agentReason(r){
 const t=r&&typeof r==="object"&&typeof r.reason==="string"&&r.reason?r.reason:"no reason";
-return JSON.stringify(Array.from(t).map((c)=>(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(c)?" ":c)).slice(0,200).join(""));
+return JSON.stringify(Array.from(t).map((c)=>(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(c)?" ":c)).slice(0,200).join(""));
 }
 async function censusStep(pre,repo){
-if(gateCensus(pre.gate_tools,repo))return;
+const g=pre.gate_tools;
+if(gateCensus(g,repo))return;
+const own="; the preflight agent's reason: "+agentReason(pre);
+if(!g||typeof g!=="object"||Array.isArray(g))
+return gate("gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool available"+own+"; if a permission denial blocked it, add the allow rule (README: Census retry)");
 const label="infra:gate-tools:preflight:relay-retry";
 const up=RETRY_UP[infraModel("preflight")];
-let why=", no retry: agent cap "+MAX_AGENTS+"): no gate tool available; preflight said "+agentReason(pre);
-if(capped()+1<=MAX_AGENTS){
-gate("preflight: no usable gate_tools; running the census once more on "+up+" ("+label+")");
+if(capped()+1>MAX_AGENTS)return gate("gate census unusable (no digest-checked gate_tools, no retry: agent cap "+MAX_AGENTS+"): no gate tool available"+own);
+gate("warning: preflight: the gate_tools relay does not check out (args or digest); running the census once more on "+up+" ("+label+")");
 state.agents++;
 const ic=infraCall(label,INFRA_STEP+"the gate tool census, again. Read only; no edits"+ONE_CMD+".\n"+inputsLine({repo})+RUN_600S+progCmd("gate_tools",[repo,AUDIT_IMAGE])+"\n"+PRINTS_ONE+printsKeys("gate_tools")+": "+relayAs("gate_tools")+". Non-zero exit or not run -> status failed, gate_tools null, the error or refusal in reason.\nReturn {status, reason, gate_tools}.",{schema:GATE_TOOLS_SCHEMA,agentType:JUDGE_AGENT,phase:"Preflight"});
 const r=await agentT(ic.prompt,agentOpts(ic.opts,label,up));
 if(gateCensus(r&&typeof r==="object"?r.gate_tools:null,repo))return;
-why=" after one retry): no gate tool available; preflight said "+agentReason(pre)+"; the retry said "+agentReason(r);
-}
-gate("gate census unusable (no digest-checked gate_tools"+why);
+gate("gate census unusable (no digest-checked gate_tools after one retry): no gate tool available"+own+"; the retry agent's reason: "+agentReason(r));
 }
 function censusCoverTier(){
 const g=state.gateTools;

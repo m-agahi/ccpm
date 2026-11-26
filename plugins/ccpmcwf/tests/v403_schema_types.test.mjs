@@ -397,7 +397,12 @@ const READS = {
     "g.container.present boolean": "prog:gate_tools:container.present",
   },
   // 8.9.11 (#125): the census retry's result (null with no result), and an agent's reason for the gate line only
-  censusStep: { "r object": "parsed: the census retry's result; a non-object relays no census" },
+  censusStep: {
+    "r object": "parsed: the census retry's result; a non-object relays no census",
+    // Max ruled: the retry decision reads the relay's shape (a script fact), never its reason text
+    "g object": "preflight:gate_tools",
+    "g array": "!preflight:gate_tools",
+  },
   agentReason: {
     "r object": "parsed: the preflight or census retry result; a non-object gives no reason",
     "r.reason string": "parsed: an agent's reason (preflight:reason, the retry's reason), log text only; a non-string gives no reason",
