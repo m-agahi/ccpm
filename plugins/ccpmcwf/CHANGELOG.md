@@ -1,5 +1,39 @@
 # Changelog
 
+## [8.9.8] - 2026-11-26
+
+ccpmcwf 8.9.8 (yaadgaar `#124`, Max's ruling: option a): the stats block is written at the first PR
+open and refreshed at every later PR step, so a run that stops after the PR opens still leaves
+the block.
+
+### Fixed
+
+- The stats block was written only by the step-list `stats` step (after review and write-back),
+  by the run-end refresh, and after a pr-opener call on the update-branch path. A run that stopped
+  after the PR opened (seen on a coder `needs_human` after review v1) left the PR with the test
+  block but no stats block. Now the block is also written after the first PR open
+  (`infra:pr-stats:open`, after the `pr_open` run-state) and after every later pr-opener call
+  (`infra:pr-stats:open:p<k>`, `infra:pr-stats:body-v<k>`, `infra:pr-stats:notes:v<k>`). The
+  counters are those at the time of the write (review `not run` before the first review, no CI
+  row before a CI watch).
+
+### Changed
+
+- Every early write has the full checks of the stats step. A mismatch stops `needs_human` at gate
+  `stats`, as before; no write runs on a stop path. The update-branch refresh and its labels stay.
+- One write per PR step, not per push: a typical run (review approves) adds 1 tail agent. Add 1
+  for review nits, 2 for each review that sends findings to the coder, 1 for a re-plan, 1 per body
+  or CI-fix round, and 1 for a resumed run.
+- Review of bb91e4a (Max): a review that sends findings to the coder or to a re-plan writes the
+  block with its verdict (`infra:pr-stats:review:v<k>`) before that return, after every safety
+  halt of the review step. So the #195 shape (review changes_requested, then a coder stop) leaves
+  a block with the review verdict, not `not run`. The notes write moves after the `reviewed`
+  run-state, so a stop there resumes past the review. A run that resumes at the review, write-back
+  or CI step writes `infra:pr-stats:resume` after its test-block check. The gates-passed test is
+  now behavioural.
+- Stats writes no longer count as "gates passed", and policy `stats: false` logs its off line once
+  per run (it was logged at every stats call).
+
 ## [8.9.7] - 2026-11-25
 
 ccpmcwf 8.9.7 (yaadgaar `#110`, Max's ruling: option a): the coverage gate runs coverage through

@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.7";
+const FLEET_VERSION="8.9.8";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -7170,6 +7170,7 @@ const notes=state.review&&Array.isArray(state.review.nits)?state.review.nits:[];
 const supplied=suppliedTexts({tldr:ref.tldr,criteria,notes,intent:intentForPr,unattended:state.unattended?unattendedSection():null,gatesNotRun:state.gatesNotRun});
 const own=await prTestsStep("infra:pr-tests:resume",targs,tb,pr.pr_url,supplied);
 if(own.length)halt(J_PR,"needs_human",stillClaims("infra:pr-tests:resume",own,pr.pr_url),"role");
+if(from!=="stats")await statsStep("resume");
 }
 for(let i=steps.indexOf(from);i<steps.length;i++){
 const step=steps[i];
@@ -7231,6 +7232,7 @@ state.bodyPending=null;
 pr=await openPr("role:fleet-pr-opener"+(prOpens>1?":p"+prOpens:""),state.bodyFixed?{body_findings:state.bodyFixed}:null);
 if(upd)await statsStep();
 await saveState("pr_open","infra:state:pr_open:p"+prOpens);
+if(!upd)await statsStep("open"+(prOpens>1?":p"+prOpens:""));
 }else if(step==="review"){
 if(!pr||!pr.pr_url||pr.pr_number==null)halt("s","needs_human","review: no PR to review (pr-opener returned no pr_url/pr_number)","review");
 budgetStop("the review v"+(reviews+1));
@@ -7251,6 +7253,7 @@ if(planF.length&&inUpd)
 halt(J_BASE,"needs_human","review v"+reviews+": a finding targets the plan after update-branch: no re-plan runs on the forge's merge; re-plan on the new base or fix by hand","review");
 if(planF.length){
 gate("review v"+reviews+": changes_requested ("+planF.length+" plan-target) -> re-plan");
+await statsStep("review:v"+reviews);
 return{gate:"review",plan:planF.map((f)=>({target:"plan",criterion:null,finding:reviewFindingText(f)}))};
 }
 if(bodyF.length&&(state.bodyFixes||0)>=MAX_BODY_FIXES)
@@ -7270,7 +7273,7 @@ state.bodyReviews=(state.bodyReviews||0)+1;
 state.bodyFixed=(state.bodyFixed||[]).concat(bodyF);
 if(!inUpd)reviewNotes=rv.nits;
 pr=await openPr("role:fleet-pr-opener:body-v"+reviews,{body_findings:state.bodyFixed});
-if(upd)await statsStep();
+await statsStep(upd?undefined:"body-v"+reviews);
 gate("review v"+reviews+": changes_requested ("+bodyF.length+" pr_body_claim) -> pr-opener body update");
 i--;
 continue;
@@ -7284,6 +7287,7 @@ halt(J_FIX,
 );
 reviewNotes=rv.nits;
 gate("review v"+reviews+": changes_requested ("+codeF.length+" blocking) -> coder (fix_code)");
+await statsStep("review:v"+reviews);
 return{gate:"review",findings:codeF.map((f)=>({target:"code",criterion:null,finding:reviewFindingText(f)}))};
 }
 if(rv.nits.length&&!upd){
@@ -7291,6 +7295,7 @@ reviewNotes=rv.nits;
 pr=await openPr("role:fleet-pr-opener:notes",state.bodyFixed?{body_findings:state.bodyFixed}:null);
 }
 await saveState("reviewed","infra:state:reviewed:v"+reviews);
+if(rv.nits.length&&!upd)await statsStep("notes:v"+reviews);
 }else if(step==="writeback"){
 if(skipWb)continue;
 phase("Write-back");
@@ -7619,15 +7624,16 @@ state.prReady=true;
 gate(label+": "+pr.pr_url+(r.was_draft?" marked ready for review":" was already ready")+" at "+approvedSha);
 }
 let statsRuns=0;
+let statsOff=false;
 async function statsStep(tag,again){
 if(!pr||pr.pr_number==null)return gate("stats block skipped: no PR");
-if(!policy.caps.stats)return gate("stats block off (policy stats false)"+(state.unattended?"; warning: the "+UNATT_HEAD+" section is not checked in the real body":""));
+if(!policy.caps.stats)return statsOff||((statsOff=true),gate("stats block off (policy stats false)"+(state.unattended?"; warning: the "+UNATT_HEAD+" section is not checked in the real body":"")));
 const g=ghCmd("stats block","stats");
 const rv=state.review;
 const tpl=statsBlock({
 criteria:criteria.length,tests:state.testsWritten||0,testRounds:state.rounds.tests,code:state.rounds.code,
 audits:typeof ref.history.audits==="number"?ref.history.audits:null,agents:history.agents+state.agents-opt.agentsBase,resumed:!!resume,
-gates:state.gateLog.filter((x)=>!/^(warning:|model used:|fallback:)/.test(x)).length,
+gates:state.gateLog.filter((x)=>!/^(warning:|model used:|fallback:|infra:pr-stats)/.test(x)).length,
 review:(rv?rv.verdict:"not run")+" (sweep: "+(rv&&rv.sweep?rv.sweep.verdict:"not triggered")+")",
 tokens:tokOn()?TOK:null,
 ci:state.ci?{verdict:state.ci.verdict,fixRounds:state.rounds.ci||0,waitS:state.ciWaitS||0}:null,
