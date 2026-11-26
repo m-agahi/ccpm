@@ -15,7 +15,7 @@ const BODY2 = { id: "R4", severity: "blocking", category: "pr_body_claim", file:
 const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
 const REV = (fs) => ({ status: "ok", reason: "x", verdict: "changes_requested", findings: fs, touches_gate: false, checked: [] });
 const OPEN7 = { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true };
-const CAP = "PR body claim still flagged after one body update";
+const CAP = "PR body finding still flagged after one body update";
 
 function fixture(script) {
   const F = happy();

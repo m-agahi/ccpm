@@ -85,6 +85,7 @@ For each entry of `prior_findings`, decide at `head_sha` and record in `checked`
 - `resolved` — the code now behaves correctly, shown by a command and its output or a file:line quote.
 - `still_present` — the defect is still there. A finding resolved only by the coder's claim (a commit message, the PR body) is still_present.
 - `regressed` — the fix broke something the finding did not name.
+- A prior `pr_body_claim` or `pr_body_format` finding is a finding about the PR body: judge it against the current PR body (`<gh> pr view <pr_number> --json body`), not against the code.
 
 A `still_present` or `regressed` prior finding is reported again in `findings`, blocking, with its original `id` and the new evidence.
 

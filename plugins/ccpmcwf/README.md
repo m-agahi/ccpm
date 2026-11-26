@@ -2509,10 +2509,13 @@ to the PR body text: a template section, a body convention, a repo obligation or
 reads the body (seen on yadgarhq/iam-db#195: `## Breaking?` must open with `no` alone, reported
 as `obligation`, sent to the coder, and the run stopped). The pr-opener gets it in
 `body_findings` and changes the body to meet the rule. The one-body-update cap, the review cap
-and the update-branch stops are unchanged, and review text still never goes into the body. A
-`pr_body_format` finding whose `file` is one of the program-listed changed paths is a code finding
-and goes to the coder. The code-judge guard drops a review-shaped `[pr_body_format]` finding as it
-drops a `[pr_body_claim]` one. The PR title comes from the workflow, so a title finding is a nit.
+and the update-branch stops are unchanged, and review text still never goes into the body. Only
+a `pr_body_format` finding with no `file` (null or absent) takes the body route; one with any
+`file` is a code finding and goes to the coder. The code-judge guard stays on `[pr_body_claim]`
+only: a `[pr_body_format]` finding reaches the code judge only when the workflow sent it to the
+coder, so a `fix_code` on it stays `fix_code`. A prior body finding is judged against the current
+PR body. The halt text is "PR body finding still flagged after one body update". The PR title
+comes from the workflow, so a title finding is a nit.
 
 ### Judge separation
 

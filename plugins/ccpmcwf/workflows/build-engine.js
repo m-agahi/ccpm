@@ -187,7 +187,6 @@ const MAX_REVIEWS=2;
 const MAX_UPDATE_REVIEWS=2;
 const MAX_BODY_FIXES=1;
 const BODY_TAG="[pr_body_claim]";
-const BODY_TAGS=[BODY_TAG,"[pr_body_format]"];
 const FINDING_SEVERITIES=["blocking","nit"];
 const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","pr_body_format","test_quality","obligation","other"];
 const GATE_PATH_RE=/(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
@@ -1597,7 +1596,7 @@ const ROLE_SHA256 = {
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-"pr-review": "461b33f1f58776c15481e75eedbe08cc0bcae128683fe04f04cd45767b77a03e",
+"pr-review": "87d7050a7fec336baa66a6ac7d7bb2ba68bed4786a7820bb8c0fb03cac89d6b2",
 "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -3890,7 +3889,7 @@ if(!(opts&&opts.allowNotOk))requireOk(role,r);
 if(role==="fleet-code-judge"&&r.verdict==="fix_code"){
 const isTag=(f)=>
 !!f&&f.target==="code"&&f.criterion==null&&typeof f.finding==="string"&&f.finding.startsWith("review ")&&
-f.finding.indexOf(" ",7)>7&&f.finding.slice(7,f.finding.indexOf(" ",7)).indexOf("[")<0&&BODY_TAGS.some((t)=>f.finding.slice(f.finding.indexOf(" ",7)+1).startsWith(t+" "));
+f.finding.indexOf(" ",7)>7&&f.finding.slice(7,f.finding.indexOf(" ",7)).indexOf("[")<0&&f.finding.slice(f.finding.indexOf(" ",7)+1).startsWith(BODY_TAG+" ");
 const rest=(r.routed_findings||[]).filter((f)=>!isTag(f));
 const sr=r.suite_result||{};
 const failing=!(Number.isInteger(sr.exit_code)&&sr.exit_code===0)||(sr.failed!=null&&sr.failed!==0)||(sr.errors!=null&&sr.errors!==0);
@@ -7246,7 +7245,7 @@ priorFindings:state.review&&Array.isArray(state.review.blocking)?state.review.bl
 });
 state.review={verdict:rv.verdict,blocking:rv.blocking,nits:rv.nits,rounds:reviews,sweep:rv.sweep,model:rv.model};
 if(rv.blocking.length){
-const isBody=(f)=>f.category==="pr_body_claim"||(f.category==="pr_body_format"&&!(typeof f.file==="string"&&rv.changed.indexOf(normPath(f.file))>=0));
+const isBody=(f)=>f.category==="pr_body_claim"||(f.category==="pr_body_format"&&f.file==null);
 const bodyF=rv.blocking.filter(isBody);
 const codeF=rv.blocking.filter((f)=>!isBody(f));
 const inUpd=upd||(state.update&&state.update.head===approvedSha);
@@ -7259,7 +7258,7 @@ await statsStep("review:v"+reviews);
 return{gate:"review",plan:planF.map((f)=>({target:"plan",criterion:null,finding:reviewFindingText(f)}))};
 }
 if(bodyF.length&&(state.bodyFixes||0)>=MAX_BODY_FIXES)
-halt(J_PR,"needs_human","review v"+reviews+": PR body claim still flagged after one body update: "+bodyF.map((f)=>(f.id||"-")+" "+(f.file||"")+": "+f.summary).join("; "),"review");
+halt(J_PR,"needs_human","review v"+reviews+": PR body finding still flagged after one body update: "+bodyF.map((f)=>(f.id||"-")+" "+(f.file||"")+": "+f.summary).join("; "),"review");
 if(codeF.length&&inUpd){
 const no=upd?await updRefusal():"the update record is from an earlier run";
 if(no)
@@ -7276,7 +7275,7 @@ state.bodyFixed=(state.bodyFixed||[]).concat(bodyF);
 if(!inUpd)reviewNotes=rv.nits;
 pr=await openPr("role:fleet-pr-opener:body-v"+reviews,{body_findings:state.bodyFixed});
 await statsStep(upd?undefined:"body-v"+reviews);
-gate("review v"+reviews+": changes_requested ("+bodyF.length+" pr_body_claim) -> pr-opener body update");
+gate("review v"+reviews+": changes_requested ("+bodyF.length+" PR body finding(s)) -> pr-opener body update");
 i--;
 continue;
 }

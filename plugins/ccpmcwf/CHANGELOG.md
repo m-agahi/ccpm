@@ -21,17 +21,22 @@ the coder.
   PR title finding is a nit (the workflow writes the title).
 - The review split routes `pr_body_format` with `pr_body_claim`: body-only reviews get one
   pr-opener body update and a re-review with no code round; in a mixed review the code findings go
-  to the coder and the next PR-step pr-opener call fixes the body. A `pr_body_format` finding whose
-  `file` is a program-listed changed path stays a code finding (the check only moves findings
-  toward the coder). The one-body-update cap (the same stop text), the review cap and the
+  to the coder and the next PR-step pr-opener call fixes the body. Only a `pr_body_format` finding
+  with no `file` (null or absent) takes the body route; one with any `file` stays a code finding,
+  whatever its spelling (fails toward the coder). The one-body-update cap, the review cap and the
   update-branch stops are unchanged.
-- The code-judge guard drops a review-shaped `[pr_body_format]` finding as it drops a
-  `[pr_body_claim]` one.
+- The code-judge guard stays on `[pr_body_claim]` only: a `[pr_body_format]` finding reaches the
+  code judge only when the workflow sent it to the coder, so its `fix_code` stays `fix_code`.
 - The pr-opener role: a `pr_body_format` entry of `body_findings` names a body rule; change the body
   to meet it. Never copy a finding's summary or evidence into the body.
+- The pr-review role: a prior `pr_body_claim` or `pr_body_format` finding is judged against the
+  current PR body, not the code.
+- Wording: the one-body-update halt says "PR body finding still flagged after one body update"
+  (was "PR body claim"), and the body-only gate line says "(n PR body finding(s))". The stop gate
+  (`review`) and class are unchanged.
 - The pr-review schema's category enum gains `pr_body_format`: the three plan/build prompt-snapshot
   pins move (probe unchanged); with that enum entry dropped every pin is 8.9.8's. The pr-review
-  and pr-opener role pins move; with the two role edits reverted the role pins are 8.9.8's.
+  and pr-opener role pins move; with the role edits reverted the role pins are 8.9.8's.
 
 ## [8.9.8] - 2026-11-26
 

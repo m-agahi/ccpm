@@ -932,8 +932,6 @@ const READS = {
     // 8.9.3 (#117 i): + the body_decided default of a run-state before 8.9.3
     "resume.auto_decisions array": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
-    // 8.9.9 (#122): a pr_body_format finding with a changed path as its file goes to the coder
-    "f.file string": "role:pr-review:findings[].file",
     // 8.9.5 (yaadgaar #112): R5 leaves out an inline grep's auto hit only with a doctest list
     "g.doctest_md array": "prog:callers:doctest_md",
     "g.auto_dont_care[n] array": "prog:callers:auto_dont_care.*",

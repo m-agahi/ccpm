@@ -88,15 +88,29 @@ test("8.9.9 #122 ex2: a mixed code + pr_body_format review: the coder gets the c
   assert.equal(out.result.rounds.code, 2);
 });
 
-test("8.9.9 #122 ex3: a pr_body_format finding whose file is a changed path is a code finding and goes to the coder", async () => {
-  const MIS = Object.assign({}, FMT, { file: "src/x.py", line: 3 });
-  const out = await run(fixture(Object.assign({ "role:pr-review:v1": REV("changes_requested", [MIS]) }, CODE_ROUND)), ARGS);
+// 8.9.9 review of a175cf9 (M1): the body route takes a pr_body_format finding only with no file
+// (null or absent); any file, a changed path or not, in any spelling, goes to the coder
+for (const file of ["src/x.py", "lib/caller.py", "/src/x.py", "src//x.py", "SRC/x.py", "src/x.py:3", "PR body"]) {
+  test("8.9.9 #122 ex3: a pr_body_format finding with file " + JSON.stringify(file) + " is a code finding and goes to the coder", async () => {
+    const MIS = Object.assign({}, FMT, { file, line: 3 });
+    const out = await run(fixture(Object.assign({ "role:pr-review:v1": REV("changes_requested", [MIS]) }, CODE_ROUND)), ARGS);
+    assert.equal(out.result.status, "ok", out.result.reason);
+    const rf = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+    assert.equal(rf.length, 1);
+    assert.ok(rf[0].finding.startsWith("review R1 [pr_body_format] " + file + ":3: "), rf[0].finding);
+    assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-pr-opener:body-v")));
+    assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).body_findings, undefined);
+  });
+}
+
+test("8.9.9 #122 ex3b: a pr_body_format finding with no file key at all takes the body route", async () => {
+  const NOFILE = Object.assign({}, FMT);
+  delete NOFILE.file;
+  const F = fixture({ "role:pr-review:v1": REV("changes_requested", [NOFILE]), "role:fleet-pr-opener:body-v1": OPEN7, "role:pr-review:v2": APPROVE });
+  const out = await run(F, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
-  const rf = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
-  assert.equal(rf.length, 1);
-  assert.ok(rf[0].finding.startsWith("review R1 [pr_body_format] src/x.py:3: "), rf[0].finding);
-  assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-pr-opener:body-v")));
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).body_findings, undefined);
+  assert.deepEqual(inputsOf(call(out, "role:fleet-pr-opener:body-v1").prompt).body_findings, [NOFILE]);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
 });
 
 test("8.9.9 #122 ex4: a pr_body_format finding still flagged after the one body update stops at the review", async () => {
@@ -104,19 +118,25 @@ test("8.9.9 #122 ex4: a pr_body_format finding still flagged after the one body 
   const out = await run(F, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "review");
-  assert.match(out.result.reason, /PR body claim still flagged after one body update/);
+  assert.match(out.result.reason, /PR body finding still flagged after one body update/);
   assert.ok(!out.labels.includes("role:fleet-coder:r2"));
 });
 
-test("8.9.9 #122 ex5: a code-judge fix_code on a review-shaped [pr_body_format] finding only, suite passed, becomes approve", async () => {
-  const TAGF = { target: "code", criterion: null, finding: "review R1 [pr_body_format] -: the PR body's ## Breaking? section opens with 'no. ...' (evidence: ci / template failed)" };
-  const F = happy({
-    script: {
-      "role:fleet-code-judge:r1": { status: "ok", reason: "good", verdict: "fix_code", routed_findings: [TAGF], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
-    },
+// 8.9.9 review of a175cf9 (B1): a [pr_body_format] finding reaches the code judge only when the
+// script routed it to the coder; the judge guard must not flip that fix_code to approve
+test("8.9.9 #122 ex5: a pr_body_format finding routed to the coder and quoted by a judge fix_code gets another coder round", async () => {
+  const MIS = Object.assign({}, FMT, { file: "src/x.py", line: 3 });
+  const TAGF = { target: "code", criterion: null, finding: "review R1 [pr_body_format] src/x.py:3: " + FMT.summary + " (evidence: " + FMT.evidence + ")" };
+  const script = Object.assign({ "role:pr-review:v1": REV("changes_requested", [MIS]) }, CODE_ROUND, {
+    "role:fleet-code-judge:r2": { status: "ok", reason: "not fixed", verdict: "fix_code", routed_findings: [TAGF], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
+    "role:fleet-coder:r3": CODER2,
+    "hasher:post-coder:r3": { status: "ok", fingerprint: { head: CSHA(1), tree: "K3" }, hashes: HASHES },
+    "role:fleet-code-judge:r3": JUDGE2,
+    "hasher:fp-post:code-judge:r3": { status: "ok", fingerprint: { head: CSHA(1), tree: "K3" } },
   });
-  const out = await run(F, ARGS);
+  const out = await run(fixture(script), ARGS);
+  assert.ok(!out.result.gate_log.some((l) => /fix_code -> approve/.test(l)), out.result.gate_log.join("\n"));
+  assert.ok(out.labels.includes("role:fleet-coder:r3"), out.labels.join(", "));
+  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r3").prompt).routed_findings, [TAGF]);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
-  assert.ok(out.labels.includes("infra:commit:r1"));
 });
