@@ -68,7 +68,7 @@ SH_FUNC = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)')
 C_FUNC = re.compile(r'^\s*(?:[A-Za-z_][\w<>\[\],.*&:?]*\s+)+[*&]?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*$')
 # 8.9.13 (yaadgaar #121): a generic Rust impl header (impl<T> X<T>, impl<T: Into<U>> Trait for X<T>)
 # is named like a plain one: the first name after the generics
-RS_IMPL = re.compile(r'^\s*(?:unsafe\s+)?impl\s*<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>\s*(?:!\s*)?([A-Za-z_][A-Za-z0-9_]*)')
+RS_IMPL = re.compile(r'^\s*(?:unsafe\s+)?impl\s*<(?:[^<>-]|<(?:[^<>-]|<[^<>-]*>)*>)*>\s*(?:!\s*)?(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Za-z_][A-Za-z0-9_]*)')
 # 8.9.13: a comment-only line; never a Rust #[attr], a #! line or a C #include
 COMMENT = {'py': re.compile(r'^\s*#(?![!\[])'), 'sh': re.compile(r'^\s*#(?!!)'), 'js': re.compile(r'^\s*//'), 'kw': re.compile(r'^\s*//'), 'c': re.compile(r'^\s*//')}
 def defname(lang, line):
@@ -466,7 +466,16 @@ for status, path, newpath in entries:
         # Lines that only close a block are skipped.
         start = a - 2 if b > 0 else a - 1
         cur, pending, notes = None, [], []
-        note = COMMENT.get(lang)
+        note = None if os.path.splitext(path)[1].lower() in ('.rb', '.pl', '.pm', '.lua') else COMMENT.get(lang)
+        # review r129: the base line after the hunk must end a member (a definition, decorator,
+        # comment or close-only line); else a new member may take over existing lines (a body
+        # tail, string text) and the shipped attribution applies
+        # (comment lines are stepped over: a comment then a body tail is a body tail)
+        nq = next((q for q in range(a - 1 + b if b > 0 else a, len(lines)) if lines[q].strip() and not (note and note.match(lines[q]))), None)
+        nb = lines[nq] if nq is not None else None
+        ok = nb is None or bool(dn(nb) or deco(nb) or CLOSE_ONLY.match(nb))
+        if not ok:
+            note = None
         for t in added:
             if not t.strip():
                 continue
@@ -475,7 +484,7 @@ for status, path, newpath in entries:
                 # the body of a new definition: a column-0 one is an addition;
                 # a nested one already named its enclosing definition
                 continue
-            if cur is not None and cur[2] and ind == cur[0] and SIG_CLOSE.match(t) and parens(t) < 0:
+            if ok and cur is not None and cur[2] and ind == cur[0] and SIG_CLOSE.match(t) and parens(t) < 0:
                 # 8.9.13 (yaadgaar #121): the closing line of the new definition's
                 # multi-line signature (") -> T {") is part of that definition
                 cur = (cur[0], cur[1], False) if opens_block(t) else None
@@ -491,7 +500,7 @@ for status, path, newpath in entries:
             if deco(t):
                 pending.append(t)
                 continue
-            if note and ind > 0 and note.match(t):
+            if note and ind > 0 and note.match(t) and not t.rstrip().endswith('\\'):
                 # 8.9.13: an indented comment above a plain new member of a container
                 # belongs to that addition; anywhere else it counts as a changed line,
                 # as before. A column-0 comment (a coding cookie, a pragma) always counts
@@ -509,10 +518,14 @@ for status, path, newpath in entries:
                     e = enclosing(start, ind)
                     # a plain new member of a class-like container is an addition;
                     # a decorated one, or a new nested container, changes the class
-                    skip = e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending
+                    skip = ok and e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending and not (lang == 'kw' and re.match(r'^\s*(?:pub(?:\([^)]*\))?\s+)?type\b', t))
                     if not skip:
                         for x in pending + notes + [t]:
                             attribute(start, indent(x), max(a, 1))
+                    else:
+                        for x in notes:
+                            if indent(x) != ind:
+                                attribute(start, indent(x), max(a, 1))
                 pending, notes = [], []
                 cur = (ind, skip, parens(t) > 0) if opens_block(t) else None
                 continue

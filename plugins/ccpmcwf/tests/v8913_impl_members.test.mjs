@@ -128,6 +128,78 @@ test("8.9.13 (#121): a column-0 comment always counts as a changed line (a codin
   assert.deepEqual(defsOf("k.py", K, K + "    # tail\n\n\ndef g():\n    return 2\n").defs, ["A@k.py:1"]);
 });
 
+// review of 4e69dc0 (ADR-0645 sweep): inputs the shipped gate refused and 4e69dc0 accepted
+test("8.9.13 review B1: in Ruby, Perl and Lua a // line is code, never a deferred comment", { skip: !HAVE_PY }, () => {
+  const RB = "class Foo\n  def a\n    1\n  end\nend\n";
+  assert.deepEqual(defsOf("a.rb", RB, "class Foo\n  def a\n    1\n  end\n  //; system('evil')\n  def b = 2\nend\n").defs, ["Foo@a.rb:1"]);
+  const PM = "package Foo;\nclass Foo {\n    sub a {\n        1\n    }\n}\n";
+  assert.deepEqual(defsOf("a.pm", PM, "package Foo;\nclass Foo {\n    sub a {\n        1\n    }\n    // evil();\n    sub b {\n        2\n    }\n}\n").defs, ["Foo@a.pm:2"]);
+  const PL = "class Foo {\n    sub a {\n        1\n    }\n}\n";
+  assert.deepEqual(defsOf("a.pl", PL, "class Foo {\n    sub a {\n        1\n    }\n    // evil();\n    sub b { 2 }\n}\n").defs, ["Foo@a.pl:1"]);
+  const LUA = "local M = {}\nclass M {\n  function a() end\n}\n";
+  assert.deepEqual(defsOf("a.lua", LUA, "local M = {}\nclass M {\n  function a() end\n  // 2\n  function b() end\n}\n").defs, ["M@a.lua:2"]);
+});
+
+test("8.9.13 review B2: a new member inserted in the middle of an existing method body does not take over its tail", { skip: !HAVE_PY }, () => {
+  const PY = "class A:\n    def x(self):\n        a = 1\n        return evil_tail()\n";
+  const steal = (mid) => "class A:\n    def x(self):\n        a = 1\n" + mid + "        return evil_tail()\n";
+  // a multi-line signature, a comment, and (already open in the shipped gate) a plain one-line member
+  for (const [what, mid] of [
+    ["multi-line signature", "    def y(\n        self,\n    ):\n"],
+    ["comment", "    # c\n    def y(self):\n"],
+    ["plain one-line member", "    def y(self):\n"],
+  ]) assert.notDeepEqual(defsOf("k.py", PY, steal(mid)).defs, [], "python " + what);
+  const RS = "impl X {\n    fn a(&self) -> i32 {\n        let v = 1;\n        evil_tail()\n    }\n}\n";
+  const rs = (mid) => "impl X {\n    fn a(&self) -> i32 {\n        let v = 1;\n" + mid + "        evil_tail()\n    }\n}\n";
+  for (const [what, mid] of [
+    ["multi-line signature", "    }\n    fn b(\n        &self,\n    ) -> i32 {\n"],
+    ["doc comment", "    }\n    /// b\n    fn b(&self) -> i32 {\n"],
+    ["plain one-line member", "    }\n    fn b(&self) -> i32 {\n"],
+  ]) assert.notDeepEqual(defsOf("a.rs", RS, rs(mid)).defs, [], "rust " + what);
+  const JS = "export class C {\n  a() {\n    const v = 1;\n    return evilTail();\n  }\n}\n";
+  assert.notDeepEqual(defsOf("c.js", JS, "export class C {\n  a() {\n    const v = 1;\n  }\n  // b\n  b() {\n    return evilTail();\n  }\n}\n").defs, []);
+  // a comment base line before the tail does not open the guard
+  const PYC = "class A:\n    def x(self):\n        a = 1\n        # why\n        return evil_tail()\n";
+  assert.notDeepEqual(defsOf("k.py", PYC, "class A:\n    def x(self):\n        a = 1\n    def y(self):\n        # why\n        return evil_tail()\n").defs, []);
+});
+
+test("8.9.13 review B3: a Rust generic impl with -> in its generics fails closed", { skip: !HAVE_PY }, () => {
+  const h = "impl<F: Fn() -> Output> X<F> {\n";
+  const base = "use x;\n\n" + h + A + "}\n";
+  const o = defsOf("a.rs", base, "use x;\n\n" + h + A + "    const Z: i32 = evil();\n}\n");
+  assert.ok(!o.defs.some((d) => d.startsWith("Output@")), JSON.stringify(o));
+  assert.deepEqual(o.unattributed, ["a.rs:6"]);
+});
+
+test("8.9.13 review B4: a generic impl of a path trait is named by its last segment", { skip: !HAVE_PY }, () => {
+  const p = "impl<T> fmt::Display for X<T> {\n";
+  const pb = "use x;\n\n" + p + A + "}\n";
+  assert.deepEqual(defsOf("a.rs", pb, "use x;\n\n" + p + A + "    const Z: i32 = evil();\n}\n").defs, ["Display@a.rs:3"]);
+});
+
+test("8.9.13 review B5: a comment and a member-shaped line inside an existing multi-line string name the enclosing definition", { skip: !HAVE_PY }, () => {
+  const PY = 'class A:\n    s = """\n    """\n    def x(self):\n        return 1\n';
+  assert.deepEqual(defsOf("k.py", PY, 'class A:\n    s = """\n    # inj\n    def y(self):\n    """\n    def x(self):\n        return 1\n').defs, ["A@k.py:1"]);
+  const RS = 'impl X {\n    const S: &str = r#"\n    "#;\n    fn a(&self) {}\n}\n';
+  assert.deepEqual(defsOf("a.rs", RS, 'impl X {\n    const S: &str = r#"\n    // inj\n    fn b(&self) {}\n    "#;\n    fn a(&self) {}\n}\n').defs, ["X@a.rs:1"]);
+  const JS = "export class C {\n  static t = `\n  `;\n  a() {\n    return 1;\n  }\n}\n";
+  assert.deepEqual(defsOf("c.js", JS, "export class C {\n  static t = `\n  // inj\n  b() {\n  }\n  `;\n  a() {\n    return 1;\n  }\n}\n").defs, ["C@c.js:1"]);
+});
+
+test("8.9.13 review B6: a type item added to a Rust impl names the impl", { skip: !HAVE_PY }, () => {
+  for (const h of ["impl<T> Trait for X<T> {\n", "impl Trait for X {\n"]) {
+    const base = "use x;\n\n" + h + A + "}\n";
+    assert.deepEqual(defsOf("a.rs", base, "use x;\n\n" + h + A + "    type Output = Evil;\n}\n").defs, ["Trait@a.rs:3"], h);
+  }
+});
+
+test("8.9.13 review minor: a comment ending in a backslash, or at another indent than the member, still counts", { skip: !HAVE_PY }, () => {
+  const CPP = "class K {\n  int a() {\n    return 1;\n  }\n};\n";
+  assert.deepEqual(defsOf("k.cpp", CPP, "class K {\n  int a() {\n    return 1;\n  }\n  // c \\\n  int b() {\n    return 2;\n  }\n};\n").defs, ["K@k.cpp:1"]);
+  const RS = "impl X {\n" + A + "}\n";
+  assert.deepEqual(defsOf("a.rs", RS, "impl X {\n" + A + "        // deeper\n    fn b(&self) -> i32 {\n        2\n    }\n}\n").defs, ["X@a.rs:1"]);
+});
+
 test("8.9.13 (#121): the planner and plan-audit roles state the impl rule the program applies", () => {
   const plan = readFileSync(join(HERE, "..", "roles", "scope-and-plan.md"), "utf8");
   const audit = readFileSync(join(HERE, "..", "roles", "plan-audit.md"), "utf8");

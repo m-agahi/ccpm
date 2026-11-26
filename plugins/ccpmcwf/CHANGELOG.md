@@ -33,6 +33,22 @@ longer counts as a change to its Rust impl block or class.
   in it was unattributed, and passed only when its file was listed. A header split by a `where`
   clause is still no definition (known limit, fail closed).
 - With the fix, the same trees give only `insert_user` (identity.rs:18), which the plan mapped.
+- Review of 4e69dc0 (gate non-weakening sweep): every input the shipped gate refused is refused
+  again.
+  - In `.rb`, `.pl`, `.pm` and `.lua` a `//` line is code (a Ruby regex, Perl defined-or, Lua
+    floor division), so it is never deferred as a comment.
+  - Hunk guard: the first non-blank, non-comment base line after a hunk must be a definition, a
+    decorator or a close-only line, or the end of the file. Else a new member may take over
+    existing lines (the tail of a method it was inserted into, the rest of a multi-line string),
+    and the hunk gets the shipped attribution: no comment deferral, no signature closer, and no
+    plain-new-member skip. The last one also closes a hole in the shipped gate: a plain new member
+    inserted mid-body named nothing.
+  - A generic impl with `->` in its generics (`impl<F: Fn() -> T> X<F>`) is no definition (fail
+    closed) instead of being named `T`. A path trait in a generic impl is named by its last
+    segment (`impl<T> fmt::Display for X<T>` is `Display`, was `fmt`).
+  - A `type` item added to an impl names the impl; it is never a plain new member.
+  - A comment that ends in `\` (a C continuation) is never deferred, and a deferred comment at
+    another indent than the member is attributed.
 
 ### Changed
 
@@ -44,14 +60,15 @@ longer counts as a change to its Rust impl block or class.
   impl block, or changes a field or an item line directly in it, with that class missing from
   `changed_symbols` is a `plan_defect` (a refusal). A plain new method needs no entry. The
   existing planner-quality findings stay advisory.
-- PROGRAM_SHA256 `changed_defs` moves (`b104493b…` to `cc0aed14…`). ROLE_SHA256 `plan-audit`
+- PROGRAM_SHA256 `changed_defs` moves (`b104493b…` to `fdfe00d2…`). ROLE_SHA256 `plan-audit`
   (`c69c8861…` to `ad9539d0…`) and `scope-and-plan` (`25b7fa90…` to `5b7d0d31…`) move. The v5010
   prompt-snapshot pins do not move (the role sha and the version are masked).
 - Tests: `v8913_impl_members` runs the program on Rust trees for `impl X`, `impl Trait for X` and
   two generic forms, with the incident's shape, and on Python; it pins what still names the impl
   (a `#[attr]` member, an item line after the new method, a lone comment, a comment in a method
   body, code between `/* */` blocks in Rust and JS, a column-0 coding cookie, pragma or doc
-  comment) and the role text. Version pins move to 8.9.13.
+  comment) and the role text. Review tests B1 to B6 and the minor cases pin each input of the
+  review of 4e69dc0. Version pins move to 8.9.13.
 
 ### Not changed
 
@@ -59,9 +76,10 @@ longer counts as a change to its Rust impl block or class.
   name `Trait`, so it names every base `impl Trait for ...` header in the file. Filed as yaadgaar
   `#134`; changing the name needs a ruling on what the caller map should grep.
 - No in-run repair of the caller check (ADR-1406).
+- A plain (non-generic) `impl a::B for X` is still named `a` (yaadgaar `#135`).
 - Known limits (fail closed, they still stop the build): a new Rust method whose signature closes
-  with `) -> T` then a `where` clause and a `{` line still names the impl (the closing line opens
-  no block); a new multi-line TS or JS method (`b(` on its own line) is no definition pattern, so it
+  with `) -> T` and has `where` on a line of its own still names the impl (the closing line opens
+  no block; an inline `) -> T where … {` opens one and names nothing); a new multi-line TS or JS method (`b(` on its own line) is no definition pattern, so it
   still names the class.
 
 ## [8.9.12] - 2026-11-26

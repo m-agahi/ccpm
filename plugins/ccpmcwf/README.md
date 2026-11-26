@@ -344,8 +344,12 @@ never `#[`, `#!`, `#include` or a `/* */` block; a column-0 comment always count
 at the member's indent) belong to that addition; before, both named the class or impl. A Rust
 `impl` block is named by the first name after `impl` and its generics (`impl<T> X<T>` is `X`;
 `impl Trait for X` is `Trait`); a header split over lines by a `where` clause is no definition
-(known limit: its new members stay unattributed). A `#[...]` attribute on a new method is a
-decorator. A rename onto an excluded path (a
+(known limit: its new members stay unattributed), and so is one with `->` in its generics. A
+`#[...]` attribute on a new method, and a new `type` item, name the impl. In `.rb`, `.pl`, `.pm`
+and `.lua` files no line is a deferred comment. When the first non-blank, non-comment base line
+after a hunk is not a definition, a decorator, a close-only line or the end of the file, a new
+member there may take over existing lines (a method's tail, string text): that hunk gets no
+comment deferral, no signature closer and no plain-new-member skip. A rename onto an excluded path (a
 criterion test, the plan doc) is checked as a deletion of the old file. JS
 `X.y = function` and `X.y = (...) =>` are definitions. A renamed file is diffed old blob against
 new blob at the base path, so only its real changes count. Each definition is printed as
