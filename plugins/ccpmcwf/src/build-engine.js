@@ -1726,7 +1726,7 @@ const PROGRAM_SHA256 = {
   "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
   "build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
   "callers": "e4306e776ed74709ae65388784278b4679aadc9760ed17bf80740d5e7679dbc0",
-  "changed_defs": "fdfe00d240ccc6ab1840dada47778eb51d3724951be266a41485fbf8859fb9fc",
+  "changed_defs": "039a964f20108054145058a211e013255243e40f3b64c906279fae1a20fa69a6",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "cover_diff": "9b03ab47e911b44586a5283a44b34e331f37e2f4289794e862ecaadef3424660",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
@@ -1791,9 +1791,9 @@ const ROLE_SHA256 = {
   "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
   "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
   "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
-  "plan-audit": "ad9539d0da7332deb33b0ab97477cff6fe527119c7356afae1126ccb2d8fd564",
+  "plan-audit": "c0f127b29b246a6274c73a404d4aa484dbafde43c7b8bb385bfbaa7d7ac6c07c",
   "pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
-  "scope-and-plan": "5b7d0d312859354f9815ce4a984f95a4bdfda5481a7df271b1b7ffa385321221"
+  "scope-and-plan": "16a353c6182b1f54c54fd1fae8131d77c7482939ed43a8cfcfe67657a9a3e209"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN

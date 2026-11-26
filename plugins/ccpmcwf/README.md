@@ -338,18 +338,21 @@ decorator line belongs to the definition after it; a line that only closes a blo
 Any other removed line names the innermost definition above it. A multi-line signature (`def f(`
 ... `) -> T:`, Go `func F(` ... `) T {`, a TS method) counts from its opening line, and an
 Allman brace on its own line is stepped over to the signature above it. A decorated new member,
-and a new nested class or struct, name the enclosing class. Since 8.9.13 (yaadgaar `#121`) an
-indented line comment above a plain new member of a container (`//`, a Rust `///`, a Python `#`;
-never `#[`, `#!`, `#include` or a `/* */` block; a column-0 comment always counts) and the closing line of that member's multi-line signature (`) -> T {`
-at the member's indent) belong to that addition; before, both named the class or impl. A Rust
-`impl` block is named by the first name after `impl` and its generics (`impl<T> X<T>` is `X`;
-`impl Trait for X` is `Trait`); a header split over lines by a `where` clause is no definition
-(known limit: its new members stay unattributed), and so is one with `->` in its generics. A
-`#[...]` attribute on a new method, and a new `type` item, name the impl. In `.rb`, `.pl`, `.pm`
-and `.lua` files no line is a deferred comment. When the first non-blank, non-comment base line
-after a hunk is not a definition, a decorator, a close-only line or the end of the file, a new
-member there may take over existing lines (a method's tail, string text): that hunk gets no
-comment deferral, no signature closer and no plain-new-member skip. A rename onto an excluded path (a
+and a new nested class or struct, name the enclosing class. Since 8.9.13 (yaadgaar `#121`), in `.rs` files only, an
+indented `//`, `///` or `//!` comment above a plain new member of an impl and the rustfmt closing
+line of that member's multi-line signature (`) -> T {` at the member's indent) belong to that
+addition, when the member cannot take over existing lines: the base line after the hunk
+(comments stepped over) is a definition, a decorator, a close-only line or the end of the file
+and is not deeper than the member, and the base line before the hunk ends a member. In every
+other language comments and signature closers count as before. The plain-new-member skip has
+the same indent and neighbour guard in every language, so a new member inserted inside an
+existing method body (before its tail, or before a deeper nested definition or decorator) names
+the class. A Rust `impl` block is named by the first name after `impl` and its generics
+(`impl<T> X<T>` is `X`; `impl Trait for X` and `impl<T> fmt::Display for X<T>` name the trait);
+a header split by a `where` clause, or with `->` in its generics, is no definition (known limit,
+fail closed). A `#[...]` attribute on a new method, and a new `type` item, name the impl. Known
+limit (ADR-0645 exception, Max 2026-11-26): a Rust raw string (`r#"…"#`) or normal string that
+already holds fn-shaped lines on both sides of an insertion. A rename onto an excluded path (a
 criterion test, the plan doc) is checked as a deletion of the old file. JS
 `X.y = function` and `X.y = (...) =>` are definitions. A renamed file is diffed old blob against
 new blob at the base path, so only its real changes count. Each definition is printed as

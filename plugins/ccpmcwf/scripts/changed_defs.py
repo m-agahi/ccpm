@@ -69,8 +69,9 @@ C_FUNC = re.compile(r'^\s*(?:[A-Za-z_][\w<>\[\],.*&:?]*\s+)+[*&]?([A-Za-z_][A-Za
 # 8.9.13 (yaadgaar #121): a generic Rust impl header (impl<T> X<T>, impl<T: Into<U>> Trait for X<T>)
 # is named like a plain one: the first name after the generics
 RS_IMPL = re.compile(r'^\s*(?:unsafe\s+)?impl\s*<(?:[^<>-]|<(?:[^<>-]|<[^<>-]*>)*>)*>\s*(?:!\s*)?(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Za-z_][A-Za-z0-9_]*)')
-# 8.9.13: a comment-only line; never a Rust #[attr], a #! line or a C #include
-COMMENT = {'py': re.compile(r'^\s*#(?![!\[])'), 'sh': re.compile(r'^\s*#(?!!)'), 'js': re.compile(r'^\s*//'), 'kw': re.compile(r'^\s*//'), 'c': re.compile(r'^\s*//')}
+# 8.9.13: a Rust line comment (//, ///, //!). Comment deferral and the signature closer apply to
+# .rs files only; every other language keeps the attribution of 8.9.12
+RS_COMMENT = re.compile(r'^\s*//')
 def defname(lang, line):
     first = line.split()[0] if line.strip() else ''
     for rx in ([KEYWORD_DEF, JS_ARROW, JS_MEMBER_FN, JS_METHOD] if lang == 'js' else [SH_FUNC, KEYWORD_DEF] if lang == 'sh'
@@ -466,14 +467,23 @@ for status, path, newpath in entries:
         # Lines that only close a block are skipped.
         start = a - 2 if b > 0 else a - 1
         cur, pending, notes = None, [], []
-        note = None if os.path.splitext(path)[1].lower() in ('.rb', '.pl', '.pm', '.lua') else COMMENT.get(lang)
-        # review r129: the base line after the hunk must end a member (a definition, decorator,
-        # comment or close-only line); else a new member may take over existing lines (a body
-        # tail, string text) and the shipped attribution applies
-        # (comment lines are stepped over: a comment then a body tail is a body tail)
+        rust = os.path.splitext(path)[1].lower() == '.rs'
+        note = RS_COMMENT if rust else None
+        # review r129: a new member must not take over existing lines (the tail of the method it
+        # was inserted into, string text). The base line after the hunk (comments stepped over)
+        # must not be deeper than the member, and the base line before it must end a member
+        # (a close, a definition, a decorator, or a deeper body line): near(i). A Rust comment or
+        # signature closer is skipped only when, in addition, the base line after the hunk is a
+        # definition, a decorator, a close-only line or the end of the file: okat(i).
+        # Accepted residual (ADR-0645 exception, Max 2026-11-26): a Rust raw string (r#"..."#) or
+        # normal string that already holds fn-shaped lines on both sides of an insertion.
         nq = next((q for q in range(a - 1 + b if b > 0 else a, len(lines)) if lines[q].strip() and not (note and note.match(lines[q]))), None)
         nb = lines[nq] if nq is not None else None
+        pq = next((q for q in range(min(start, len(lines) - 1), -1, -1) if lines[q].strip() and not (note and note.match(lines[q]))), None)
+        pb = lines[pq] if pq is not None else None
         ok = nb is None or bool(dn(nb) or deco(nb) or CLOSE_ONLY.match(nb))
+        near = lambda i: (nb is None or indent(nb) <= i) and (pb is None or indent(pb) > i or bool(dn(pb) or deco(pb) or CLOSE_ONLY.match(pb)))
+        okat = lambda i: rust and ok and near(i)
         if not ok:
             note = None
         for t in added:
@@ -484,7 +494,7 @@ for status, path, newpath in entries:
                 # the body of a new definition: a column-0 one is an addition;
                 # a nested one already named its enclosing definition
                 continue
-            if ok and cur is not None and cur[2] and ind == cur[0] and SIG_CLOSE.match(t) and parens(t) < 0:
+            if cur is not None and cur[2] and ind == cur[0] and okat(cur[0]) and SIG_CLOSE.match(t) and parens(t) < 0:
                 # 8.9.13 (yaadgaar #121): the closing line of the new definition's
                 # multi-line signature (") -> T {") is part of that definition
                 cur = (cur[0], cur[1], False) if opens_block(t) else None
@@ -518,7 +528,7 @@ for status, path, newpath in entries:
                     e = enclosing(start, ind)
                     # a plain new member of a class-like container is an addition;
                     # a decorated one, or a new nested container, changes the class
-                    skip = ok and e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending and not (lang == 'kw' and re.match(r'^\s*(?:pub(?:\([^)]*\))?\s+)?type\b', t))
+                    skip = (okat(ind) if notes else near(ind)) and e is not None and bool(CONTAINER.match(lines[e[1]])) and not CONTAINER.match(t) and not pending and not (lang == 'kw' and re.match(r'^\s*(?:pub(?:\([^)]*\))?\s+)?type\b', t))
                     if not skip:
                         for x in pending + notes + [t]:
                             attribute(start, indent(x), max(a, 1))

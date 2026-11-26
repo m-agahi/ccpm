@@ -95,12 +95,20 @@ test("8.9.13 (#121): what the program still names in a Rust impl block (fail clo
   assert.deepEqual(defsOf("a.rs", "use x;\n\n" + w + A + "}\n", "use x;\n\n" + w + A + NEW["a one-line signature"] + "}\n").unattributed, ["a.rs:9"]);
 });
 
-test("8.9.13 (#121): the same two fixes in Python: a black-style or commented new method records neither the class nor its neighbour", { skip: !HAVE_PY }, () => {
+test("8.9.13 review of c137fc9: outside Rust, a commented or multi-line new method keeps the 8.9.12 attribution (names its class)", { skip: !HAVE_PY }, () => {
   const BASE = "class A:\n    def x(self):\n        return 1\n";
-  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    def y(\n        self,\n    ) -> int:\n        return 2\n"), { defs: [], unattributed: [] });
-  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    # y is two\n    def y(self):\n        return 2\n"), { defs: [], unattributed: [] });
+  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    def y(\n        self,\n    ) -> int:\n        return 2\n").defs, ["A@k.py:1", "x@k.py:2"]);
+  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    # y is two\n    def y(self):\n        return 2\n").defs, ["A@k.py:1"]);
+  const J = "export class C {\n  a() {\n    return 1;\n  }\n}\n";
+  assert.deepEqual(defsOf("c.js", J, "export class C {\n  a() {\n    return 1;\n  }\n\n  // b\n  b() {\n    return 2;\n  }\n}\n").defs, ["C@c.js:1"]);
+  assert.deepEqual(defsOf("c.ts", J, "export class C {\n  a() {\n    return 1;\n  }\n\n  b(\n    x: number,\n  ): number {\n    return x;\n  }\n}\n").defs, ["C@c.ts:1"]);
+  // a plain new last method before column-0 code names nothing, as in 8.9.12 (no false stop)
+  const P = "class A:\n    def x(self):\n        return 1\n\nif __name__ == '__main__':\n    main()\n";
+  assert.deepEqual(defsOf("k.py", P, P.replace("        return 1\n", "        return 1\n    def y(self):\n        return 2\n")).defs, []);
+  const P2 = "class A:\n    def x(self):\n        return 1\n\napp.register(A)\n";
+  assert.deepEqual(defsOf("k.py", P2, P2.replace("        return 1\n", "        return 1\n    def y(self):\n        return 2\n")).defs, []);
   // a class-body statement after the new method's signature still names the class
-  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    def y(\n        self,\n    ) -> int:\n        return 2\n    z = sabotage()\n").defs, ["A@k.py:1"]);
+  assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    def y(\n        self,\n    ) -> int:\n        return 2\n    z = sabotage()\n").defs, ["A@k.py:1", "x@k.py:2"]);
   // a comment above a decorated new method names the class, as the decorator does
   assert.deepEqual(defsOf("k.py", BASE, BASE + "\n    # y\n    @sabotage\n    def y(self):\n        return 2\n").defs, ["A@k.py:1"]);
   // a #! line is no comment: at column 0 it is module level, as before
@@ -163,6 +171,28 @@ test("8.9.13 review B2: a new member inserted in the middle of an existing metho
   assert.notDeepEqual(defsOf("k.py", PYC, "class A:\n    def x(self):\n        a = 1\n    def y(self):\n        # why\n        return evil_tail()\n").defs, []);
 });
 
+test("8.9.13 review of c137fc9: a new member inserted before a deeper nested definition or decorator does not take over the tail", { skip: !HAVE_PY }, () => {
+  const ins = (base, after, text) => base.replace(after + "\n", after + "\n" + text);
+  const FORMS_PY = [["plain", "    def y(self):\n"], ["comment", "    # c\n    def y(self):\n"], ["multi-line", "    def y(\n        self,\n    ):\n"]];
+  for (const [kind, base] of [
+    ["nested def", "class A:\n    def x(self):\n        a = 1\n        def inner():\n            return 2\n        return tail(inner)\n"],
+    ["decorator", "class A:\n    def x(self):\n        a = 1\n        @dec\n        def inner():\n            return 2\n        return tail(inner)\n"],
+  ])
+    for (const [form, text] of FORMS_PY) assert.deepEqual(defsOf("k.py", base, ins(base, "        a = 1", text)).defs, ["A@k.py:1"], "python " + kind + ", " + form);
+  const FORMS_RS = [["plain", "    fn b(&self) {\n"], ["doc comment", "    /// d\n    fn b(&self) {\n"], ["multi-line", "    fn b(\n        &self,\n    ) {\n"]];
+  for (const [kind, base] of [
+    ["nested fn", "impl X {\n    fn a(&self) {\n        let v = 1;\n        fn inner() {}\n        tail(inner);\n    }\n}\n"],
+    ["attribute", "impl X {\n    fn a(&self) {\n        let v = 1;\n        #[inline]\n        fn inner() {}\n        tail(inner);\n    }\n}\n"],
+  ])
+    for (const [form, text] of FORMS_RS) assert.deepEqual(defsOf("a.rs", base, ins(base, "        let v = 1;", text)).defs, ["X@a.rs:1"], "rust " + kind + ", " + form);
+});
+
+test("8.9.13 review of c137fc9: the accepted Rust residual (ADR-0645 exception)", { skip: !HAVE_PY }, () => {
+  // a Rust raw string (r#"..."#) or normal string that already holds fn-shaped lines on both sides of an insertion
+  const RSS = 'impl X {\n    const S: &str = r#"\n    fn p(&self) {}\n    fn q(&self) {}\n    "#;\n    fn a(&self) {}\n}\n';
+  assert.deepEqual(defsOf("a.rs", RSS, RSS.replace("    fn p(&self) {}\n", "    fn p(&self) {}\n    /// inj\n    fn b(&self) {}\n")).defs, []);
+});
+
 test("8.9.13 review B3: a Rust generic impl with -> in its generics fails closed", { skip: !HAVE_PY }, () => {
   const h = "impl<F: Fn() -> Output> X<F> {\n";
   const base = "use x;\n\n" + h + A + "}\n";
@@ -205,13 +235,15 @@ test("8.9.13 (#121): the planner and plan-audit roles state the impl rule the pr
   const audit = readFileSync(join(HERE, "..", "roles", "plan-audit.md"), "utf8");
   for (const k of [
     "A Rust `impl` block counts as the class, named by the first name after `impl` and its generics (the trait in `impl Trait for X`)",
-    "A comment or doc comment above a new member and the closing line of its multi-line signature are part of that addition",
+    "In Rust only, a comment or doc comment above a new member and the closing line of its multi-line signature are part of that addition",
+    "In every other language, a comment line above a new method, or the closing line of its multi-line signature, names the CLASS (and can name the method above it): map them, or the build stops.",
+    "In every language, a new method inserted inside an existing method's body names the class.",
     "A `#[...]` attribute on a new Rust method is a decorator",
   ]) assert.ok(plan.includes(k), "scope-and-plan: " + k);
   assert.ok(
     audit.includes(
-      "A plan step that adds a decorated method (`@...`, Rust `#[...]`) or a nested class to an existing class or `impl` block, or that changes a field or an item line directly in it, changes that class: the class (for `impl Trait for X`, the trait) missing from the map → `plan_defect`. A plain new method, with or without a doc comment, is an addition and needs no entry.",
+      "A plan step that adds a decorated method (`@...`, Rust `#[...]`) or a nested class to an existing class or `impl` block, or that changes a field or an item line directly in it, changes that class: the class (for `impl Trait for X`, the trait) missing from the map → `plan_defect`. A plain new method is an addition and needs no entry; in Rust a doc comment or a multi-line signature on it does not change that. In other languages, a plan step that adds a commented or multi-line-signature method to an existing class, with the class missing from the map → a routed finding that starts with `advisory:`",
     ),
-    "plan-audit: the impl rule is a refusal",
+    "plan-audit: the impl rule is a refusal; the non-Rust stop is advisory",
   );
 });
