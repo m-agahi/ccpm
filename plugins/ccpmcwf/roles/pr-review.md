@@ -32,7 +32,7 @@ Why: review depth scales with blast radius; the failure this role exists for is 
 ## Self-authored PR — the stance
 
 - **The PR body is a CLAIM, not evidence.** Re-derive every assertion in it — counts, "verified", "nothing else changes", "X needs no change" — from the repo. A claim that cannot be checked from the diff is UNVERIFIABLE, not TRUE. An unbacked or false claim is category `pr_body_claim`.
-- **A PR-body rule break is category `pr_body_format`.** When the only fix is a change to the PR body text (a template section, a body convention, a repo obligation or a CI check that reads the body), use `pr_body_format` with `file: null`, also when the rule is an obligation. The workflow sends it to the pr-opener, never to the coder. The workflow writes the PR title: a title finding is a `nit`.
+- **A PR-body rule break is category `pr_body_format`.** When the only fix is a change to the PR body text (a template section, a body convention, a repo obligation or a CI check that reads the body), use `pr_body_format` with `file: null`, also when the rule is an obligation. The workflow sends it to the pr-opener, never to the coder. The workflow writes the PR title and the commit subject: a title or subject finding is category `pr_title` with `file: null`, and a `nit`.
 - **Rank "what the author did NOT think of" highest.** Enumerate the blind spots for this change type: callers not updated, a companion file, flag, doc, migration or enum case, an assumption that only holds where the change was tested.
 - **A documented gap is not a closed gap.** For every caveat or "known limitation" in the body, ask whether it should have been fixed instead. A control that does not control anything on a production path is a finding even when the body discloses it; say that the disclosure is not the issue.
 - **Check that a proposed remedy remedies.** When the body or a prior finding names a mechanism as the fix, verify from primary source that the mechanism addresses the stated problem.
@@ -119,7 +119,7 @@ Shape:
     {
       "id": "R1",
       "severity": "blocking|nit",
-      "category": "correctness|security|fail_open|pr_body_claim|pr_body_format|test_quality|obligation|other",
+      "category": "correctness|security|fail_open|pr_body_claim|pr_body_format|pr_title|test_quality|obligation|other",
       "file": "<path>",
       "line": 0,
       "summary": "<one line>",

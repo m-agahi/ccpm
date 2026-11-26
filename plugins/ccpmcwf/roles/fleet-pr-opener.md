@@ -80,7 +80,7 @@ Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_temp
     On an update run, replace the earlier intent lines instead of appending a second set. For `source_ref`, write the kind of source (for example `task body`), not its id.
 - **No internal ids** — decision-record numbers, ledger or task ids, memory ids, workflow run ids. This applies to text copied from the plan and from gate reasons too. Grep the body file before submitting.
 - **Body convention:** the body holds every heading in `body_convention.required_sections` and at least `body_convention.min_chars` characters. These rules apply on top of the template rule.
-- No `Co-Authored-By:`. Title: exactly `title`, never your own; it never carries an internal id. Pass it in single quotes as below (the workflow checks that it holds no quote or shell character); never in double quotes.
+- No `Co-Authored-By:`. Title: exactly `title`, never your own; it never carries an internal id. Pass it in single quotes as below (the workflow checks that it holds only lowercase letters, digits, spaces and `. , _ : ( ) # > / -`: no quote, `$`, backquote, backslash, `!` or control character; each of those characters is inert in single quotes); never in double quotes.
 
 Write the body to a file, then:
 

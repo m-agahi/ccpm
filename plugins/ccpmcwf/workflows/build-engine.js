@@ -109,7 +109,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.9";
+const FLEET_VERSION="8.9.10";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -188,7 +188,7 @@ const MAX_UPDATE_REVIEWS=2;
 const MAX_BODY_FIXES=1;
 const BODY_TAG="[pr_body_claim]";
 const FINDING_SEVERITIES=["blocking","nit"];
-const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","pr_body_format","test_quality","obligation","other"];
+const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","pr_body_format","pr_title","test_quality","obligation","other"];
 const GATE_PATH_RE=/(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
 const PRECOMMIT_CMD_RE=/^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 const FENCE_COMMAND_RE=/\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
@@ -225,7 +225,8 @@ const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
 const NONCE_RE=/^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE=/^[0-9a-f]{7,40}$/;
 const COMPONENT_RE=/^[a-z][a-z0-9-]{0,19}$/;
-const SUBJECT_RE=/^[a-z][a-z0-9-]{0,19}\([a-z][a-z0-9-]{0,19}(, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA))?\): [a-z0-9 ]{1,60}$/;
+const SUBJECT_RE=/^[a-z][a-z0-9-]{0,19}\([a-z][a-z0-9-]{0,19}(, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA))?\): (?!.* {2})[a-z0-9]([a-z0-9 .,_:()#>\/-]{0,58}[a-z0-9)])?$/;
+const SUBJECT_MAX=72;
 const CC_TYPES=["feat","fix","perf","revert","chore","refactor","docs","style","test","build","ci"];
 const SHA256_RE=/^[0-9a-f]{64}$/;
 const BRANCH_RE=/^fleet\/[a-z0-9][a-z0-9-]*$/;
@@ -1591,12 +1592,12 @@ const ROLE_SHA256 = {
 "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-"fleet-pr-opener": "da31c5fed3d8059b605d75dbd07d3f9736bab762262daa7bfe2232020e351d73",
+"fleet-pr-opener": "ed1c45ae5248914375b34dbb396885e56e4ce1b5d2c0f63d0178f74ea973545d",
 "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-"pr-review": "87d7050a7fec336baa66a6ac7d7bb2ba68bed4786a7820bb8c0fb03cac89d6b2",
+"pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
 "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -3476,7 +3477,7 @@ const TAIL_RE=/^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:flee
 function tailWriter(l){
 return state.tailWriters===true&&(l.indexOf("infra:state-chunks:")===0||/^infra:state:(pr_open|reviewed|written_back|ready|committed|pushed)(:|$)/.test(l));
 }
-const RUN_BUDGET=600000;
+const RUN_BUDGET=1500000;
 function budgetStop(at){
 const n=Object.values(TOK).reduce((a,b)=>a+b,0);
 const cap=state.runBudget||RUN_BUDGET;
@@ -6531,6 +6532,44 @@ INFRA_STEP+"watch the CI checks of the fleet's own PR. READ ONLY: never rerun, c
 'Return {status: "ok", reason, '+returnKeys("ci_watch")+"}."
 );
 }
+const SUMMARY_STOP=["and","or","the","a","to","in","of","for","with"];
+function subjectSummary(text,drop,max){
+const unkeyed=(w)=>{
+const p=w.split(/([#()])/);
+for(let i=0;i<p.length;i++)
+if(p[i]&&drop.indexOf(slugify(p[i],1e4))>=0){
+p[i]="";
+if(p[i-1]==="#")p[i-1]="";
+}
+return p.join("");
+};
+const words=String(text==null?"":text).split(/[\r\n]/)[0].normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase()
+.replace(/['’]/g,"").replace(/[^a-z0-9 .,_:()#>\/-]+/g," ").split(" ")
+.filter((w)=>w&&!/(^|[^a-z0-9._-])\//.test(w)).map(unkeyed).filter((w)=>w&&!/^[#()]+$/.test(w));
+const paired=(x)=>{
+const a=x.split("");
+const open=[];
+for(let i=0;i<a.length;i++){
+if(a[i]==="(")open.push(i);
+else if(a[i]===")"){
+if(open.length)open.pop();
+else a[i]="";
+}
+}
+for(const i of open)a[i]="";
+return a.join("").replace(/ {2,}/g," ");
+};
+const trim=(x)=>x.replace(/^[^a-z0-9]+/,"").replace(/[ .,_:(#>\/-]+$/,"");
+const clean=(x)=>trim(paired(trim(paired(x))));
+let s=clean(words.join(" "));
+if(s.length>max){
+const i=s.lastIndexOf(" ",max);
+s=i>0?s.slice(0,i):s.slice(0,max);
+for(let w=s.split(" ");w.length>1&&SUMMARY_STOP.indexOf(w[w.length-1])>=0;w=s.split(" "))s=w.slice(0,-1).join(" ");
+s=clean(s);
+}
+return s;
+}
 const KIND_TYPE={bug_fix:"fix",feature:"feat",refactor:"refactor",chore:"chore"};
 function subjectsOf(pf,brief,slug,taskId,tldr){
 const c=Object.assign({},pf.conventions.title);
@@ -6540,11 +6579,12 @@ const j=brief.sources.find((x)=>x.kind==="jira");
 const key=j&&/^[A-Z][A-Z0-9]+-[0-9]+$/.test(String(j.ref).toUpperCase())?String(j.ref).toUpperCase():"NOJIRA";
 const scope=c.style==="scoped-key"?pf.component+", "+key:pf.component;
 const head=(t)=>(c.types.indexOf(t)>=0?t:c.types.indexOf("chore")>=0?"chore":c.types[0])+"("+scope+"): ";
-let sl="-"+(slugify(String(tldr||"").split("\n")[0].replace(/(^|\s)\/\S*/g," "),80)||slug)+"-";
-for(const x of[taskId].concat(brief.sources.map((y)=>y.ref),brief.sources.map((y)=>"l"+y.ref)))for(const k=slugify(x);k&&sl.indexOf("-"+k+"-")>=0;)sl=sl.split("-"+k+"-").join("-");
-const main=(head(KIND_TYPE[pf.change_kind]||"feat")+(sl.replace(/^-+|-+$/g,"").replace(/-+/g," ")||"update")).slice(0,72).replace(/\s+$/,"");
+const drop=[taskId].concat(brief.sources.map((y)=>y.ref),brief.sources.map((y)=>"l"+y.ref)).map((x)=>slugify(x,1e4)).filter(Boolean);
+const h=head(KIND_TYPE[pf.change_kind]||"feat");
+const cap=Math.max(0,Math.min(60,SUBJECT_MAX-h.length));
+const main=h+(subjectSummary(tldr,drop,cap)||subjectSummary(String(slug||"").replace(/-/g," "),drop,cap)||"update");
 const fix=head("fix");
-return{main,fix:(n)=>fix+"code round "+n,isFleet:(x)=>x===main||new RegExp("^"+escapeRe(fix)+"code round [0-9]+$").test(x)};
+return{main,prefix:h,room:cap>0,fix:(n)=>fix+"code round "+n,isFleet:(x)=>x===main||new RegExp("^"+escapeRe(fix)+"code round [0-9]+$").test(x)};
 }
 async function buildMode(input,date){
 if(input.plan_ref&&typeof input.plan_ref==="object"&&"ref_path"in input.plan_ref)stop("s","needs_human",LEGACY_REF);
@@ -6734,7 +6774,9 @@ const brief=cleanBrief(ref.brief);
 const names={taskId:ref.task_id,slug:ref.slug};
 state.ownRefs=ownRefPrefixes(names,lay);
 const subj=subjectsOf(ref.plan_facts,brief,ref.slug,ref.task_id,ref.tldr);
-for(const x of[subj.main,subj.fix(1)])if(!SUBJECT_RE.test(x))halt("s","needs_human","plan ref "+tiny.plan_ref+": unsafe commit subject "+JSON.stringify(x)+"; re-run plan");
+if(!subj.room)
+halt("s","needs_human","plan ref "+tiny.plan_ref+": commit prefix too long ("+subj.prefix.length+" characters; a subject is at most "+SUBJECT_MAX+"): "+JSON.stringify(subj.prefix)+"; use a shorter component or Jira key, then re-run plan");
+for(const x of[subj.main,subj.fix(1)])if(!SUBJECT_RE.test(x)||x.length>SUBJECT_MAX)halt("s","needs_human","plan ref "+tiny.plan_ref+": unsafe commit subject "+JSON.stringify(x)+"; re-run plan");
 const history={
 runs:(ref.history.runs||0)+1,
 replans:ref.history.replans||0,
@@ -7246,8 +7288,10 @@ priorFindings:state.review&&Array.isArray(state.review.blocking)?state.review.bl
 state.review={verdict:rv.verdict,blocking:rv.blocking,nits:rv.nits,rounds:reviews,sweep:rv.sweep,model:rv.model};
 if(rv.blocking.length){
 const isBody=(f)=>f.category==="pr_body_claim"||(f.category==="pr_body_format"&&f.file==null);
+const isTitle=(f)=>f.category==="pr_title"&&f.file==null;
 const bodyF=rv.blocking.filter(isBody);
-const codeF=rv.blocking.filter((f)=>!isBody(f));
+const titleF=rv.blocking.filter(isTitle);
+const codeF=rv.blocking.filter((f)=>!isBody(f)&&!isTitle(f));
 const inUpd=upd||(state.update&&state.update.head===approvedSha);
 const planF=rv.blocking.filter((f)=>f.target==="plan");
 if(planF.length&&inUpd)
@@ -7268,6 +7312,8 @@ if(bodyF.length)state.bodyPending=bodyF;
 gate("review u"+upd.reviews+": changes_requested ("+codeF.length+" blocking); R1-R5 pass -> code rounds on the update merge "+upd.head+" (within the code-round cap)");
 return{gate:"review",update:true,findings:codeF.map((f)=>({target:"code",criterion:null,finding:reviewFindingText(f)}))};
 }
+if(!codeF.length&&!bodyF.length)
+halt(inUpd?J_BASE:J_FIX,"needs_human","review v"+reviews+": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): "+titleF.map((f)=>(f.id||"-")+": "+f.summary).join("; "),"review");
 if(!codeF.length){
 state.bodyFixes=(state.bodyFixes||0)+1;
 state.bodyReviews=(state.bodyReviews||0)+1;

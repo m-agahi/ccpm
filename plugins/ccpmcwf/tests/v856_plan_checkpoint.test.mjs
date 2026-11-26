@@ -219,11 +219,11 @@ const spending = (per) => {
 
 test("8.5.6 budget: a plan run over the budget stops between steps at gate budget with a checkpoint; the re-run resumes", async () => {
   const s = withDraft(happy());
-  s.__budget = spending(100000);
+  s.__budget = spending(250000);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "budget");
-  assert.match(out.result.reason, /^run budget: \d+ output tokens of 600000 spent before the plan commit/);
+  assert.match(out.result.reason, /^run budget: \d+ output tokens of 1500000 spent before the plan commit/);
   assert.ok(Array.isArray(out.result.options) && out.result.options.length === 3);
   assert.ok(!out.labels.includes("infra:stage-plan"), "no step after the budget stop");
   assert.ok(out.result.checkpoint, "the budget stop parks the checkpoint");
@@ -235,7 +235,7 @@ test("8.5.6 budget: a plan run over the budget stops between steps at gate budge
 test("8.5.6 budget: a re-plan round over the budget stops before the planner runs again", async () => {
   const s = happy();
   s["role:plan-audit"] = DEFECT;
-  s.__budget = spending(100000);
+  s.__budget = spending(250000);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.stop_gate, "budget", out.result.reason);
   assert.match(out.result.reason, /before re-plan round 1;/);
@@ -259,7 +259,7 @@ test("8.5.6 budget: a build over the budget stops after the freeze, before the c
   assert.equal(plan.result.status, "awaiting_confirmation");
   const bargs = Object.assign({}, ARGS, { mode: "build", plan_ref: plan.result.plan_ref });
   delete bargs.input;
-  s.__budget = spending(100000);
+  s.__budget = spending(250000);
   const b = await runOne(s, bargs);
   assert.equal(b.result.stop_gate, "budget", b.result.reason);
   assert.match(b.result.reason, /before the coder(;|$)/);
@@ -276,7 +276,7 @@ test("8.5.6 budget: a build over the budget stops after the freeze, before the c
 
 test("8.5.6 budget: the policy's run_budget replaces the default", async () => {
   const s = withDraft(happy());
-  s.__budget = spending(100000);
+  s.__budget = spending(250000);
   s["infra:policy:plan"] = (prompt) => {
     const i = inputsOf(prompt);
     return { status: "ok", reason: "read", profile: "p", file: "/c/fleet/policy.json", policy_sha256: "c".repeat(64), caps: { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none", run_budget: 100000000 }, matched: "profile p", error: null, now: 1, args: i.args || ["github.com", "o/r"] };

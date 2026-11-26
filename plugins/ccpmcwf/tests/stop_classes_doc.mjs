@@ -161,6 +161,8 @@ const JREASON = [
   [/stillClaims/, "the PR body still states test counts after one scripted rewrite: a human edits the body"],
   [/a finding targets the plan after update-branch/, "a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand"],
   [/PR body finding still flagged/, "a PR body finding is still flagged after one body update: a human edits the body"],
+  // 8.9.10 (#129)
+  [/PR title finding: /, "a blocking review finding on the PR title or commit subject the workflow builds from the tldr: re-plan or a human edits both"],
   [/re-review after update-branch/, "the re-review after update-branch requests changes: no coder round runs on the forge's merge"],
   [/requested changes again/, "the review rounds are spent: a human fixes or re-plans"],
   [/in a code round after update-branch/, "the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge"],
@@ -226,6 +228,8 @@ const TEXT_REASON = [
   [/test-count phrases than the program reports/, "a truncated claims list fails closed (8.7.0 keeps it a stop)"],
   [/^halt\("s", "needs_human", msg/, "per caller gate: ownership or hash (ownership rule)"],
   [/noPushText\(remoteSlug\), stopGate/, "push access is not known or is refused"],
+  // 8.9.10 review of a0cf2eb (F4)
+  [/commit prefix too long/, "the sealed type(scope) prefix leaves no room for a summary under the subject cap (a long Jira key)"],
   [/which a resumed run cannot start/, "a resumed run cannot start a coder round (run-state trust)"],
   [/augmentation round \(test round/, "a test writer broke the augmentation contract (role contract)"],
   [/^halt\("s", "needs_human", w\)$/, "the test judge broke its routing contract after one scripted retry"],
@@ -292,7 +296,7 @@ export function render(source) {
   for (const r of rows) for (const c of r.names.split(" / ")) count[c] = (count[c] || 0) + 1;
   const counts = ["safety", "judgment", "transient", "mechanical", "per caller"].map((c) => c + " " + (count[c] || 0)).join(", ");
   return [
-    "# Stop classes of build-engine.js (ccpmcwf 8.9.9)",
+    "# Stop classes of build-engine.js (ccpmcwf 8.9.10)",
     "",
     "yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in",
     "script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or",

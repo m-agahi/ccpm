@@ -1,5 +1,75 @@
 # Changelog
 
+## [8.9.10] - 2026-11-26
+
+ccpmcwf 8.9.10 (yaadgaar `#123`, `#129`, `#128`): an intact PR title and commit subject, a route
+for title findings, and a 1.5M default run budget.
+
+### Fixed
+
+- `#123`, yadgarhq/iam-db#195 (8.9.6 run wf_29ad47bb-640, pr-review nit R2): the commit subject
+  and the PR title read "feat(service): bump iam db proto version v1 27 0 v1 29 1 and re vendor
+  p". `subjectsOf` built the summary from `slugify(tldr)`: every character outside `a-z0-9`
+  became a dash, then a space, so the dots, the dash in `iam-db` and the `->` were lost. The
+  whole subject was then cut with `.slice(0, 72)`, mid-word. `SUBJECT_RE` allowed only
+  `[a-z0-9 ]` in the summary, so the gate pinned the bug.
+
+### Changed
+
+- One builder, `subjectSummary`, makes the summary of the commit subject and the PR title (the
+  same `subj.main` goes to the commit step and the pr-opener). It reads the first line of the plan
+  `tldr`, accents stripped (NFD), lowercased, apostrophes deleted (`don't` -> `dont`). It keeps
+  letters, digits, spaces and `. , _ : ( ) # > / -`, and turns every other character into a space
+  (quotes, `$`, backtick, backslash, `!` and control characters included: the commit step and the
+  pr-opener paste the text in single quotes, through an agent's shell, not argv). It drops absolute
+  paths and URLs. It splits each word on `#`, `(` and `)` and drops a part that is the task id or a
+  source ref, with the `#` before it, so a glued id goes too (`yaadgaar#123` -> `yaadgaar`,
+  `issue#123` -> `issue`); it never splits on `-` or `.`, so a ref `27` leaves `v1.27.0` whole. A
+  parenthesis left without its pair is removed. It cuts at the last space within
+  min(60, 72 - the prefix length), so no word is cut unless the first word alone is longer; a cut
+  that ends on a stop word (`and`, `or`, `the`, `a`, `to`, `in`, `of`, `for`, `with`) drops it
+  unless that empties the summary; it trims a leading or trailing separator. `+` is not kept (not in the safe list; the
+  #87 test's `a+b` still reads `a b`).
+- `SUBJECT_RE` allows exactly the builder's output: the summary starts with a letter or digit,
+  ends with one or `)`, holds no double space and at most 60 characters; the build-start check
+  also caps the whole subject at `SUBJECT_MAX` (72).
+- The branch slug is unchanged (`slugify(brief.title)`): branch names keep their own charset.
+- A `type(scope): ` prefix that leaves no room for a summary under the 72-character cap (a long
+  Jira key in scoped-key style) stops the build with "commit prefix too long (N characters; a
+  subject is at most 72)" (class safety). Before, the negative cap cut characters from the end of
+  the summary and the run stopped with "unsafe commit subject". A stop, not a clamp: no summary
+  fits, and a clamp would only move the failure.
+- A PR that 8.9.9 opened does not resume under 8.9.10 in most cases: the kept punctuation and the
+  word-boundary cut (within min(60, 72 - prefix), where 8.9.9 cut mid-word at 72) both changed, so
+  most sentence-length tldrs give a different subject than the one on the branch. Verify then stops
+  with "plan changed since approval: branch moved by a non-fleet commit" (fails closed, as after
+  #87 in 8.3.0). `isFleet` gets no legacy matching. Re-plan, or finish the PR by hand.
+- The pr-opener role names the title charset the workflow checks (it said "no quote or shell
+  character", which `>`, `(`, `)` and `#` now break). The pr-review role adds the `pr_title`
+  category; a title finding stays a nit.
+- `#129`: new review finding category `pr_title` (the pr-review schema enum and role). A blocking
+  `pr_title` finding with no `file` never goes to the coder or the pr-opener. With no code or body
+  finding left, the review stops with `needs_human` (`J_FIX` options: fix by hand, or re-plan with
+  the findings, which gives a new tldr and subject; after update-branch the `J_BASE` options, as the
+  plan-target stop there; gate `review`, class judgment). It fires only
+  when no plan, code or body finding is left, so it never preempts an existing halt or route
+  (plan-target re-plan, `MAX_BODY_FIXES`, the update-branch stops).
+  In a mixed review it stays out of the coder's findings; the next review judges it again. A
+  `pr_title` finding with any `file` is a code finding (fails toward the coder). The code-judge
+  guard stays on `[pr_body_claim]` only. Option (c) removes the cause; the halt replaces a coder
+  round that could only end in `needs_human`. A pr-opener title override (option a) was not taken:
+  the commit subject must equal the title, and the commit is already pushed. Demoting the finding
+  to a nit (option b) was not taken: nits go into the PR body.
+- `#128` (Max ruled): the default `RUN_BUDGET` is 1500000 output tokens (was 600000), about 3x the
+  p95 of the #104 re-measure (33 runs: p50 145k, p95 434k, max 586k). Policy `run_budget` still
+  replaces it. The budget tests spend per call scaled to stay over the new default.
+- Pins: the pr-review schema's category enum gains `pr_title`: the three plan/build
+  prompt-snapshot pins move (probe unchanged); with that enum entry dropped every pin is 8.9.9's.
+  The pr-review and fleet-pr-opener role pins move; with the two role edits reverted every role and
+  program pin is 8.9.9's.
+  No script changed. docs/stop-classes.md gains the two new sites (344 sites: safety 313,
+  judgment 29).
+
 ## [8.9.9] - 2026-11-26
 
 ccpmcwf 8.9.9 (yaadgaar `#122`): a pr-review finding about the PR body goes to the pr-opener, not

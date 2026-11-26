@@ -114,7 +114,7 @@ test("8.9.0: budget, agent cap, hook surface and relay mismatch stops are never 
     return { total: null, spent: () => (n += per), remaining: () => Infinity };
   };
   const b = happy();
-  b.__budget = spending(100000);
+  b.__budget = spending(250000);
   const ob = await runOne(b, ARGS);
   assert.equal(ob.result.stop_gate, "budget", ob.result.reason);
   const c = happy();

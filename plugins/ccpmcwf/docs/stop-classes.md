@@ -1,4 +1,4 @@
-# Stop classes of build-engine.js (ccpmcwf 8.9.9)
+# Stop classes of build-engine.js (ccpmcwf 8.9.10)
 
 yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in
 script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or
@@ -32,7 +32,7 @@ Rules:
 - 8.8.0 changes no behaviour except the hook_surface text above: no stop becomes a repair. Step 6
   (8.9.0: `recover` on every stop result and the skill re-run) keys on this class only.
 
-Counts of the call sites (a two-class site counts in both): safety 312, judgment 28, transient 5, mechanical 0, per caller 2; 342 sites. The
+Counts of the call sites (a two-class site counts in both): safety 313, judgment 29, transient 5, mechanical 0, per caller 2; 344 sites. The
 three stops that return without `halt` are listed after the table.
 
 <!-- prettier-ignore -->
@@ -232,154 +232,156 @@ three stops that return without `halt` are listed after the table.
 | 192 | `buildFromRef` | commands | safety | "plan ref " + tiny.plan_ref + ": test_cmd refused: " + refTc | command allowlist |
 | 193 | `buildFromRef` | commands | safety | "plan ref " + tiny.plan_ref + ": " + o.id + " check_cmd refused: " + pc.reason | command allowlist |
 | 194 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + " was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc wou | version or legacy ref |
-| 195 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan" | plan-ref trust: the sealed ref facts are refused |
-| 196 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan" | plan-ref trust: the sealed ref facts are refused |
-| 197 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then | repo or branch identity |
-| 198 | `buildFromRef` | - | safety | "infra:verify-plan returned no usable head" | relay contract: a required field is missing or malformed |
-| 199 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list" | relay contract: a required field is missing or malformed |
-| 200 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in th | relay digest or args mismatch: the copy may be altered |
-| 201 | `buildFromRef` | - | safety | "infra:verify-plan: " + OTHER_ARGS + " (" + JSON.stringify(v.args === undefined ? null : v.args) + ")" | relay digest or args mismatch: the copy may be altered |
-| 202 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed plan hash" + NOT_DIGEST + ", arguments or a full blob id" | relay digest or args mismatch: the copy may be altered |
-| 203 | `buildFromRef` | - | safety | "infra:verify-plan: no replace_refs list" | relay contract: a required field is missing or malformed |
-| 204 | `buildFromRef` | refs | safety | "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as;  | refs/replace could change what a sealed object id reads as |
-| 205 | `buildFromRef` | - | safety | "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", a | plan-ref trust: the approved plan is not what the branch holds |
-| 206 | `buildFromRef` | - | safety | "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase | plan-ref trust: the approved plan is not what the branch holds |
-| 207 | `buildFromRef` | - | safety | "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc neve | plan-ref trust: the approved plan is not what the branch holds |
-| 208 | `buildFromRef` | - | safety | "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finis | plan-ref trust: the approved plan is not what the branch holds |
-| 209 | `buildFromRef` | - | safety | "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject) | plan-ref trust: the approved plan is not what the branch holds |
-| 210 | `buildFromRef` | resume | safety | "run-state read did not complete: the relayed state" + NOT_DIGEST + " (" + stateRef + ")" | relay digest or args mismatch: the copy may be altered |
-| 211 | `buildFromRef` | resume | safety | "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the write | run-state or resume trust |
-| 212 | `buildFromRef` | resume | safety | "approved but unresumable: branch has build commits without run-state; push manually or delete branch" | run-state or resume trust |
-| 213 | `buildFromRef` | resume | safety | "frozen resume refused: " + what + " (" + freezeRefName + "); clean or stash the worktree by hand and build wi | run-state or resume trust |
-| 214 | `buildFromRef` | - | safety | LEGACY_REF | version or legacy ref |
-| 215 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + | IaC rule: an IaC change or an unshimmed IaC tool |
-| 216 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteU | IaC rule: an IaC change or an unshimmed IaC tool |
-| 217 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result" + NOT_DIG | relay digest or args mismatch: the copy may be altered |
-| 218 | `buildFromRef` | iac | safety | "IaC pre-push check stops: " + logPath(r.problems.join("; ")) + ". " + hints | IaC rule: an IaC change or an unshimmed IaC tool |
-| 219 | `buildFromRef` | iac-push | safety | "IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approv | IaC diffs never push automatically |
-| 220 | `buildFromRef` | scope | safety | "fleet internal files check did not complete: " + label + " returned no diff/commits lists" | a path outside the scope fence, or the plan doc in the diff (scope rule) |
-| 221 | `buildFromRef` | scope | safety | "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's dige | relay digest or args mismatch: the copy may be altered |
-| 222 | `buildFromRef` | scope | safety | "fleet internal files in PR diff: " + logPath(bad.join(", ")) | a path outside the scope fence, or the plan doc in the diff (scope rule) |
-| 223 | `buildFromRef` | scope | safety | "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships" | a path outside the scope fence, or the plan doc in the diff (scope rule) |
-| 224 | `buildFromRef` | push | safety | "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + ") | push access is not known or is refused |
-| 225 | `buildFromRef` | push | safety | "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)" | push access is not known or is refused |
-| 226 | `buildFromRef` | role | safety | "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch o | the pr-opener's PR is not the expected one (identity) |
-| 227 | `buildFromRef` | role | safety | "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number | the pr-opener's PR is not the expected one (identity) |
-| 228 | `buildFromRef` | role | judgment | w | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
-| 229 | `buildFromRef` | - | judgment | w | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
-| 230 | `buildFromRef` | role | safety | "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + first.pr_url + " (#" + first.pr_numb | the pr-opener's PR is not the expected one (identity) |
-| 231 | `buildFromRef` | role | judgment | w2 | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
-| 232 | `buildFromRef` | role | judgment | stillClaims(tl + ":counts", left, r.pr_url) | the PR body still states test counts after one scripted rewrite: a human edits the body |
-| 233 | `buildFromRef` | - | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | a step reported failed or needs_human; cause unknown |
-| 234 | `buildFromRef` | - | safety | label + ": the relayed head and state object do not match the program's digest" | relay digest or args mismatch: the copy may be altered |
-| 235 | `buildFromRef` | - | safety | label + ": the run-state landed on " + r.head + ", not " + approvedSha | run-state landed on another head (run-state trust) |
-| 236 | `buildFromRef` | - | safety | label + " returned no usable state_sha" | relay contract: a required field is missing or malformed |
-| 237 | `buildFromRef` | role | judgment | stillClaims("infra:pr-tests:resume", own, pr.pr_url) | the PR body still states test counts after one scripted rewrite: a human edits the body |
-| 238 | `buildFromRef` | - | safety | pushLabel + ": the relayed push result" + NOT_DIGEST + " or arguments (push_result " + JSON.stringify(push.pus | relay digest or args mismatch: the copy may be altered |
-| 239 | `buildFromRef` | - | safety | pushLabel + ": the relayed hook_rejected result is not the program's (exit_code " + JSON.stringify(push.exit_c | relay digest or args mismatch: the copy may be altered |
-| 240 | `buildFromRef` | - | safety | pushLabel + ": push_result " + JSON.stringify(push.push_result \|\| null) + " after " + push.attempts + " atte | push did not land the approved commit |
-| 241 | `buildFromRef` | - | safety | "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha | repo or branch identity |
-| 242 | `buildFromRef` | review | safety | "review: no PR to review (pr-opener returned no pr_url/pr_number)" | the review state does not match the pushed head, or a review role broke its contract |
-| 243 | `buildFromRef` | review | judgment | "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge | a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand |
-| 244 | `buildFromRef` | review | judgment | "review v" + reviews + ": PR body finding still flagged after one body update: " + bodyF.map((f) => (f.id \|\| | a PR body finding is still flagged after one body update: a human edits the body |
-| 245 | `buildFromRef` | review | judgment | "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id \|\| "-")).join(", ") | the re-review after update-branch requests changes: no coder round runs on the forge's merge |
-| 246 | `buildFromRef` | review | judgment | "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id \|\| "-") + " " + (f.f | the review rounds are spent: a human fixes or re-plans |
-| 247 | `buildFromRef` | stopGate | safety | where + ": " + noPushText(remoteSlug) | push access is not known or is refused |
-| 248 | `buildFromRef` | merge | safety | "orchestrator PR: needs Max (" + pr.pr_url + "; CI " + ci.verdict + (ci.checks.length ? ": " + ci.checks.map(( | work-owner merge rule: a merge is Max's |
-| 249 | `buildFromRef` | ci | safety | wl + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 250 | `buildFromRef` | ci | safety | wl + ": the head of " + pr.pr_url + " moved to " + w.head + " during the CI watch; nothing merged" | CI head or state is not the approved one |
-| 251 | `buildFromRef` | ci | transient | t + "; nothing merged: " + pr.pr_url | CI checks still pending or unresolved at the watch deadline: the same watch later can resolve it |
-| 252 | `buildFromRef` | merge | safety | "green, merge blocked: update-branch failed (" + (u.error \|\| "no new head") + "): " + pr.pr_url | work-owner merge rule: a merge is Max's |
-| 253 | `buildFromRef` | merge | safety | "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url | work-owner merge rule: a merge is Max's |
-| 254 | `buildFromRef` | merge | safety | "green, merge blocked: " + (m.error \|\| m.blocked \|\| "not merged") + " (" + pr.pr_url + ")" | work-owner merge rule: a merge is Max's |
-| 255 | `buildFromRef` | ci | judgment | "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url | CI red caused by the diff after update-branch: no CI-fix round runs then |
-| 256 | `buildFromRef` | ci | judgment | "CI still red after " + MAX_CI_FIX + " CI-fix rounds: " + rep | CI red caused by the diff after the CI-fix rounds |
-| 257 | `buildFromRef` | ci | safety | "CI red, nothing merged: " + rep | CI head or state is not the approved one |
-| 258 | `buildFromRef` | merge | safety | "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " | work-owner merge rule: a merge is Max's |
-| 259 | `buildFromRef` | merge | safety | "update-branch: worktree HEAD " + h.fingerprint.head + " is not the fetched " + f.head | work-owner merge rule: a merge is Max's |
-| 260 | `buildFromRef` | ci | safety | ol + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 261 | `buildFromRef` | iac | safety | "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")" | IaC rule: an IaC change or an unshimmed IaC tool |
-| 262 | `buildFromRef` | ci | safety | label + ": " + pr.pr_url + " is not ready at the approved " + approvedSha + " (" + (r.error \|\| "is_draft " + | CI head or state is not the approved one |
-| 263 | `buildFromRef` | stats | safety | label + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 264 | `buildFromRef` | stats | safety | label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the b | PR body block or unattended disclosure check |
-| 265 | `buildFromRef` | stats | safety | label + bad | PR body block or unattended disclosure check |
-| 266 | `buildFromRef` | resume | safety | "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSh | run-state or resume trust |
-| 267 | `buildFromRef` | resume | safety | "run-state mismatch: pr_number at " + resume.last_gate + " (" + stateRef + ")" | run-state or resume trust |
-| 268 | `buildFromRef` | resume | safety | "resume at review refused: " + no | run-state or resume trust |
-| 269 | `buildFromRef` | shipFix.gate === review ? review : resume | safety | "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot st | a resumed run cannot start a coder round (run-state trust) |
-| 270 | `buildFromRef` | - | safety | "test writer short r" + n + " returned no result" | a write step returned no result; its attempt may have written |
-| 271 | `buildFromRef` | ownership | safety | "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ")  | a role touched a path it does not own (ownership rule) |
-| 272 | `buildFromRef` | ownership | safety | "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n  | a role touched a path it does not own (ownership rule) |
-| 273 | `buildFromRef` | - | safety | "test writer " + cid + " r" + n + " returned no result" | a write step returned no result; its attempt may have written |
-| 274 | `buildFromRef` | sg | safety | msg | per caller gate: ownership or hash (ownership rule) |
-| 275 | `buildFromRef` | sg | safety | msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " an | per caller gate: ownership or hash (ownership rule) |
-| 276 | `buildFromRef` | policy | safety | "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.no | policy file error |
-| 277 | `buildFromRef` | ownership | safety | "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round | a role touched a path it does not own (ownership rule) |
-| 278 | `buildFromRef` | ownership | safety | logPath(violationName(k)) + " in test round " + n | a role touched a path it does not own (ownership rule) |
-| 279 | `buildFromRef` | role | safety | "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must na | a test writer broke the augmentation contract (role contract) |
-| 280 | `buildFromRef` | rounds | judgment | "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + lis | the writers' tests still fail the policy's format hooks after the test rounds |
-| 281 | `buildFromRef` | ownership | safety | "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns" | a role touched a path it does not own (ownership rule) |
-| 282 | `buildFromRef` | - | safety | "test-judge returned no verdict" | relay contract: a required field is missing or malformed |
-| 283 | `buildFromRef` | - | safety | w | the test judge broke its routing contract after one scripted retry |
-| 284 | `buildFromRef` | rounds | judgment | "test rounds exhausted (" + maxTestRounds + ") without test-judge approval" | the test rounds are spent without test-judge approval |
-| 285 | `buildFromRef` | fingerprint | safety | "worktree changed between test approval and freeze" | the worktree changed under a step (fingerprint rule) |
-| 286 | `buildFromRef` | hash | safety | "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " | a hash, freeze or refs check (hash rule) |
-| 287 | `buildFromRef` | hash | safety | "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)" | a hash, freeze or refs check (hash rule) |
-| 288 | `buildFromRef` | hash | safety | "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded \|\| k.unavailable) ? keyNames | a hash, freeze or refs check (hash rule) |
-| 289 | `buildFromRef` | - | safety | "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_targe | a ref or head is not the expected one |
-| 290 | `buildFromRef` | updRound ? review : rounds | judgment | "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" + (updRound ? " in the code roun | the code rounds are spent without code-judge approval |
-| 291 | `buildFromRef` | - | safety | "agent " + rl + " returned no result" | a write step returned no result; its attempt may have written |
-| 292 | `buildFromRef` | ownership | safety | "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + ";  | a role touched a path it does not own (ownership rule) |
-| 293 | `buildFromRef` | hash | safety | "code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze t | a hash, freeze or refs check (hash rule) |
-| 294 | `buildFromRef` | coder.status !== ok && !coder.role_file ? role : contract | safety | "code round " + m + ": " + coderFile | the coder's result breaks its role contract |
-| 295 | `buildFromRef` | gates | judgment | "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its ne | the augmentation round's new tests fail on the approved tree |
-| 296 | `buildFromRef` | review | judgment | "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-p | the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge |
-| 297 | `buildFromRef` | - | safety | "code-judge returned no verdict" | relay contract: a required field is missing or malformed |
-| 298 | `buildFromRef` | updRound ? review : gates | judgment | "code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") +  | the code judge ruled surviving mutants target tests after the one round a run may take |
-| 299 | `buildFromRef` | gates | safety | "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file" | a gate result is missing or refused |
-| 300 | `buildFromRef` | commit | safety | "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed" | the commit or its tree is not the checked one |
-| 301 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree | the commit or its tree is not the checked one |
-| 302 | `buildFromRef` | - | safety | "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result \|\| null) + " and head " + | not clearly mechanical, judgment or transient (conservative default) |
-| 303 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree +  | the commit or its tree is not the checked one |
-| 304 | `buildFromRef` | commit | safety | "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the | the commit or its tree is not the checked one |
-| 305 | `reviewStep` | review | safety | "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")" | the review state does not match the pushed head, or a review role broke its contract |
-| 306 | `reviewStep` | - | safety | "infra:review-paths:v" + k + " returned no changed_paths" | relay contract: a required field is missing or malformed |
-| 307 | `reviewStep` | - | safety | "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or cha | relay digest or args mismatch: the copy may be altered |
-| 308 | `reviewStep` | review | safety | "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha | the review state does not match the pushed head, or a review role broke its contract |
-| 309 | `reviewStep` | review | safety | "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um. | the review state does not match the pushed head, or a review role broke its contract |
-| 310 | `replan` | - | safety | who + " verdict plan_wrong without a plan finding" | a judge broke its verdict contract |
-| 311 | `replan` | - | safety | "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit | a ref or head is not the expected one |
-| 312 | `replan` | - | safety | "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base | a ref or head is not the expected one |
-| 313 | `replan` | - | safety | "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead | a ref or head is not the expected one |
-| 314 | `dbDsn` | db | safety | "internal: no test database " + db + " in " + state.db.name | test database or DSN rule |
-| 315 | `dbDispatch` | db | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | test database or DSN rule |
-| 316 | `testDbStep` | db | safety | label + ": no test_db relay (the " + DB_DECL_FILE + " read)" | test database or DSN rule |
-| 317 | `testDbStep` | db | safety | label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments" | relay digest or args mismatch: the copy may be altered |
-| 318 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error | test database or DSN rule |
-| 319 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database" | test database or DSN rule |
-| 320 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp | test database or DSN rule |
-| 321 | `testDbStep` | db | safety | DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IM | test database or DSN rule |
-| 322 | `testDbStep` | db | safety | DB_DECL_FILE + " changed during the run" | test database or DSN rule |
-| 323 | `testDbStep` | db | safety | al + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 324 | `testDbStep` | db | safety | "internal: test database name " + JSON.stringify(name) + " refused" | test database or DSN rule |
-| 325 | `testDbStep` | db | safety | "infra:db-up" + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
-| 326 | `testDbStep` | db | safety | "infra:db-up: the program did not return one user per database" | test database or DSN rule |
-| 327 | `testDbStep` | db | safety | "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name | test database or DSN rule |
-| 328 | `testDbStep` | db | safety | "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port) | test database or DSN rule |
-| 329 | `testDbStep` | db | safety | "infra:db-up: no self-expiry recorded" | test database or DSN rule |
-| 330 | `probeMode` | (stop) | safety | "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)" | an argument check (run-state, plan-ref or checkpoint trust) |
-| 331 | `probeMode` | contract | safety | "probe: the role-read agent (" + label + ") " + rp | a role, program or agent identity or contract mismatch |
-| 332 | `main` | (stop) | safety | "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode)  | an argument check (run-state, plan-ref or checkpoint trust) |
-| 333 | `main` | (stop) | safety | "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 334 | `main` | (stop) | safety | "args.unattended must be true or absent, got " + JSON.stringify(input.unattended) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 335 | `main` | (stop) | safety | "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 336 | `main` | (stop) | safety | "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 337 | `main` | (stop) | safety | "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight) | an argument check (run-state, plan-ref or checkpoint trust) |
-| 338 | `main` | (stop) | safety | "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)" | an argument check (run-state, plan-ref or checkpoint trust) |
-| 339 | `main` | (stop) | safety | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust) |
-| 340 | `main` | (stop) | safety | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust) |
-| 341 | `main` | (stop) | safety | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust) |
-| 342 | `main` | (stop) | safety | "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON | an argument check (run-state, plan-ref or checkpoint trust) |
+| 195 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + ": commit prefix too long (" + subj.prefix.length + " characters; a subject is a | the sealed type(scope) prefix leaves no room for a summary under the subject cap (a long Jira key) |
+| 196 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan" | plan-ref trust: the sealed ref facts are refused |
+| 197 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan" | plan-ref trust: the sealed ref facts are refused |
+| 198 | `buildFromRef` | - | safety | "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then | repo or branch identity |
+| 199 | `buildFromRef` | - | safety | "infra:verify-plan returned no usable head" | relay contract: a required field is missing or malformed |
+| 200 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list" | relay contract: a required field is missing or malformed |
+| 201 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in th | relay digest or args mismatch: the copy may be altered |
+| 202 | `buildFromRef` | - | safety | "infra:verify-plan: " + OTHER_ARGS + " (" + JSON.stringify(v.args === undefined ? null : v.args) + ")" | relay digest or args mismatch: the copy may be altered |
+| 203 | `buildFromRef` | - | safety | "infra:verify-plan: the relayed plan hash" + NOT_DIGEST + ", arguments or a full blob id" | relay digest or args mismatch: the copy may be altered |
+| 204 | `buildFromRef` | - | safety | "infra:verify-plan: no replace_refs list" | relay contract: a required field is missing or malformed |
+| 205 | `buildFromRef` | refs | safety | "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as;  | refs/replace could change what a sealed object id reads as |
+| 206 | `buildFromRef` | - | safety | "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", a | plan-ref trust: the approved plan is not what the branch holds |
+| 207 | `buildFromRef` | - | safety | "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase | plan-ref trust: the approved plan is not what the branch holds |
+| 208 | `buildFromRef` | - | safety | "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc neve | plan-ref trust: the approved plan is not what the branch holds |
+| 209 | `buildFromRef` | - | safety | "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finis | plan-ref trust: the approved plan is not what the branch holds |
+| 210 | `buildFromRef` | - | safety | "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject) | plan-ref trust: the approved plan is not what the branch holds |
+| 211 | `buildFromRef` | resume | safety | "run-state read did not complete: the relayed state" + NOT_DIGEST + " (" + stateRef + ")" | relay digest or args mismatch: the copy may be altered |
+| 212 | `buildFromRef` | resume | safety | "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the write | run-state or resume trust |
+| 213 | `buildFromRef` | resume | safety | "approved but unresumable: branch has build commits without run-state; push manually or delete branch" | run-state or resume trust |
+| 214 | `buildFromRef` | resume | safety | "frozen resume refused: " + what + " (" + freezeRefName + "); clean or stash the worktree by hand and build wi | run-state or resume trust |
+| 215 | `buildFromRef` | - | safety | LEGACY_REF | version or legacy ref |
+| 216 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); " + | IaC rule: an IaC change or an unshimmed IaC tool |
+| 217 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteU | IaC rule: an IaC change or an unshimmed IaC tool |
+| 218 | `buildFromRef` | iac | safety | "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result" + NOT_DIG | relay digest or args mismatch: the copy may be altered |
+| 219 | `buildFromRef` | iac | safety | "IaC pre-push check stops: " + logPath(r.problems.join("; ")) + ". " + hints | IaC rule: an IaC change or an unshimmed IaC tool |
+| 220 | `buildFromRef` | iac-push | safety | "IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approv | IaC diffs never push automatically |
+| 221 | `buildFromRef` | scope | safety | "fleet internal files check did not complete: " + label + " returned no diff/commits lists" | a path outside the scope fence, or the plan doc in the diff (scope rule) |
+| 222 | `buildFromRef` | scope | safety | "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's dige | relay digest or args mismatch: the copy may be altered |
+| 223 | `buildFromRef` | scope | safety | "fleet internal files in PR diff: " + logPath(bad.join(", ")) | a path outside the scope fence, or the plan doc in the diff (scope rule) |
+| 224 | `buildFromRef` | scope | safety | "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships" | a path outside the scope fence, or the plan doc in the diff (scope rule) |
+| 225 | `buildFromRef` | push | safety | "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + ") | push access is not known or is refused |
+| 226 | `buildFromRef` | push | safety | "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)" | push access is not known or is refused |
+| 227 | `buildFromRef` | role | safety | "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch o | the pr-opener's PR is not the expected one (identity) |
+| 228 | `buildFromRef` | role | safety | "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number | the pr-opener's PR is not the expected one (identity) |
+| 229 | `buildFromRef` | role | judgment | w | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
+| 230 | `buildFromRef` | - | judgment | w | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
+| 231 | `buildFromRef` | role | safety | "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + first.pr_url + " (#" + first.pr_numb | the pr-opener's PR is not the expected one (identity) |
+| 232 | `buildFromRef` | role | judgment | w2 | the pr-opener set a wrong title or left out gates_not_run after one scripted retry: a human edits the PR |
+| 233 | `buildFromRef` | role | judgment | stillClaims(tl + ":counts", left, r.pr_url) | the PR body still states test counts after one scripted rewrite: a human edits the body |
+| 234 | `buildFromRef` | - | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | a step reported failed or needs_human; cause unknown |
+| 235 | `buildFromRef` | - | safety | label + ": the relayed head and state object do not match the program's digest" | relay digest or args mismatch: the copy may be altered |
+| 236 | `buildFromRef` | - | safety | label + ": the run-state landed on " + r.head + ", not " + approvedSha | run-state landed on another head (run-state trust) |
+| 237 | `buildFromRef` | - | safety | label + " returned no usable state_sha" | relay contract: a required field is missing or malformed |
+| 238 | `buildFromRef` | role | judgment | stillClaims("infra:pr-tests:resume", own, pr.pr_url) | the PR body still states test counts after one scripted rewrite: a human edits the body |
+| 239 | `buildFromRef` | - | safety | pushLabel + ": the relayed push result" + NOT_DIGEST + " or arguments (push_result " + JSON.stringify(push.pus | relay digest or args mismatch: the copy may be altered |
+| 240 | `buildFromRef` | - | safety | pushLabel + ": the relayed hook_rejected result is not the program's (exit_code " + JSON.stringify(push.exit_c | relay digest or args mismatch: the copy may be altered |
+| 241 | `buildFromRef` | - | safety | pushLabel + ": push_result " + JSON.stringify(push.push_result \|\| null) + " after " + push.attempts + " atte | push did not land the approved commit |
+| 242 | `buildFromRef` | - | safety | "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha | repo or branch identity |
+| 243 | `buildFromRef` | review | safety | "review: no PR to review (pr-opener returned no pr_url/pr_number)" | the review state does not match the pushed head, or a review role broke its contract |
+| 244 | `buildFromRef` | review | judgment | "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge | a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand |
+| 245 | `buildFromRef` | review | judgment | "review v" + reviews + ": PR body finding still flagged after one body update: " + bodyF.map((f) => (f.id \|\| | a PR body finding is still flagged after one body update: a human edits the body |
+| 246 | `buildFromRef` | review | judgment | "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id \|\| "-")).join(", ") | the re-review after update-branch requests changes: no coder round runs on the forge's merge |
+| 247 | `buildFromRef` | review | judgment | "review v" + reviews + ": PR title finding: the workflow builds the PR title and the commit subject from the p | a blocking review finding on the PR title or commit subject the workflow builds from the tldr: re-plan or a human edits both |
+| 248 | `buildFromRef` | review | judgment | "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id \|\| "-") + " " + (f.f | the review rounds are spent: a human fixes or re-plans |
+| 249 | `buildFromRef` | stopGate | safety | where + ": " + noPushText(remoteSlug) | push access is not known or is refused |
+| 250 | `buildFromRef` | merge | safety | "orchestrator PR: needs Max (" + pr.pr_url + "; CI " + ci.verdict + (ci.checks.length ? ": " + ci.checks.map(( | work-owner merge rule: a merge is Max's |
+| 251 | `buildFromRef` | ci | safety | wl + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 252 | `buildFromRef` | ci | safety | wl + ": the head of " + pr.pr_url + " moved to " + w.head + " during the CI watch; nothing merged" | CI head or state is not the approved one |
+| 253 | `buildFromRef` | ci | transient | t + "; nothing merged: " + pr.pr_url | CI checks still pending or unresolved at the watch deadline: the same watch later can resolve it |
+| 254 | `buildFromRef` | merge | safety | "green, merge blocked: update-branch failed (" + (u.error \|\| "no new head") + "): " + pr.pr_url | work-owner merge rule: a merge is Max's |
+| 255 | `buildFromRef` | merge | safety | "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url | work-owner merge rule: a merge is Max's |
+| 256 | `buildFromRef` | merge | safety | "green, merge blocked: " + (m.error \|\| m.blocked \|\| "not merged") + " (" + pr.pr_url + ")" | work-owner merge rule: a merge is Max's |
+| 257 | `buildFromRef` | ci | judgment | "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url | CI red caused by the diff after update-branch: no CI-fix round runs then |
+| 258 | `buildFromRef` | ci | judgment | "CI still red after " + MAX_CI_FIX + " CI-fix rounds: " + rep | CI red caused by the diff after the CI-fix rounds |
+| 259 | `buildFromRef` | ci | safety | "CI red, nothing merged: " + rep | CI head or state is not the approved one |
+| 260 | `buildFromRef` | merge | safety | "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " | work-owner merge rule: a merge is Max's |
+| 261 | `buildFromRef` | merge | safety | "update-branch: worktree HEAD " + h.fingerprint.head + " is not the fetched " + f.head | work-owner merge rule: a merge is Max's |
+| 262 | `buildFromRef` | ci | safety | ol + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 263 | `buildFromRef` | iac | safety | "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")" | IaC rule: an IaC change or an unshimmed IaC tool |
+| 264 | `buildFromRef` | ci | safety | label + ": " + pr.pr_url + " is not ready at the approved " + approvedSha + " (" + (r.error \|\| "is_draft " + | CI head or state is not the approved one |
+| 265 | `buildFromRef` | stats | safety | label + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 266 | `buildFromRef` | stats | safety | label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the b | PR body block or unattended disclosure check |
+| 267 | `buildFromRef` | stats | safety | label + bad | PR body block or unattended disclosure check |
+| 268 | `buildFromRef` | resume | safety | "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSh | run-state or resume trust |
+| 269 | `buildFromRef` | resume | safety | "run-state mismatch: pr_number at " + resume.last_gate + " (" + stateRef + ")" | run-state or resume trust |
+| 270 | `buildFromRef` | resume | safety | "resume at review refused: " + no | run-state or resume trust |
+| 271 | `buildFromRef` | shipFix.gate === review ? review : resume | safety | "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot st | a resumed run cannot start a coder round (run-state trust) |
+| 272 | `buildFromRef` | - | safety | "test writer short r" + n + " returned no result" | a write step returned no result; its attempt may have written |
+| 273 | `buildFromRef` | ownership | safety | "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ")  | a role touched a path it does not own (ownership rule) |
+| 274 | `buildFromRef` | ownership | safety | "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n  | a role touched a path it does not own (ownership rule) |
+| 275 | `buildFromRef` | - | safety | "test writer " + cid + " r" + n + " returned no result" | a write step returned no result; its attempt may have written |
+| 276 | `buildFromRef` | sg | safety | msg | per caller gate: ownership or hash (ownership rule) |
+| 277 | `buildFromRef` | sg | safety | msg + (ok ? "; writers' output saved as " + ref + ", worktree reset to " + fp.head : "; save to " + ref + " an | per caller gate: ownership or hash (ownership rule) |
+| 278 | `buildFromRef` | policy | safety | "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.no | policy file error |
+| 279 | `buildFromRef` | ownership | safety | "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round | a role touched a path it does not own (ownership rule) |
+| 280 | `buildFromRef` | ownership | safety | logPath(violationName(k)) + " in test round " + n | a role touched a path it does not own (ownership rule) |
+| 281 | `buildFromRef` | role | safety | "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must na | a test writer broke the augmentation contract (role contract) |
+| 282 | `buildFromRef` | rounds | judgment | "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + lis | the writers' tests still fail the policy's format hooks after the test rounds |
+| 283 | `buildFromRef` | ownership | safety | "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns" | a role touched a path it does not own (ownership rule) |
+| 284 | `buildFromRef` | - | safety | "test-judge returned no verdict" | relay contract: a required field is missing or malformed |
+| 285 | `buildFromRef` | - | safety | w | the test judge broke its routing contract after one scripted retry |
+| 286 | `buildFromRef` | rounds | judgment | "test rounds exhausted (" + maxTestRounds + ") without test-judge approval" | the test rounds are spent without test-judge approval |
+| 287 | `buildFromRef` | fingerprint | safety | "worktree changed between test approval and freeze" | the worktree changed under a step (fingerprint rule) |
+| 288 | `buildFromRef` | hash | safety | "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " | a hash, freeze or refs check (hash rule) |
+| 289 | `buildFromRef` | hash | safety | "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)" | a hash, freeze or refs check (hash rule) |
+| 290 | `buildFromRef` | hash | safety | "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded \|\| k.unavailable) ? keyNames | a hash, freeze or refs check (hash rule) |
+| 291 | `buildFromRef` | - | safety | "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_targe | a ref or head is not the expected one |
+| 292 | `buildFromRef` | updRound ? review : rounds | judgment | "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" + (updRound ? " in the code roun | the code rounds are spent without code-judge approval |
+| 293 | `buildFromRef` | - | safety | "agent " + rl + " returned no result" | a write step returned no result; its attempt may have written |
+| 294 | `buildFromRef` | ownership | safety | "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + ";  | a role touched a path it does not own (ownership rule) |
+| 295 | `buildFromRef` | hash | safety | "code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze t | a hash, freeze or refs check (hash rule) |
+| 296 | `buildFromRef` | coder.status !== ok && !coder.role_file ? role : contract | safety | "code round " + m + ": " + coderFile | the coder's result breaks its role contract |
+| 297 | `buildFromRef` | gates | judgment | "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its ne | the augmentation round's new tests fail on the approved tree |
+| 298 | `buildFromRef` | review | judgment | "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-p | the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge |
+| 299 | `buildFromRef` | - | safety | "code-judge returned no verdict" | relay contract: a required field is missing or malformed |
+| 300 | `buildFromRef` | updRound ? review : gates | judgment | "code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") +  | the code judge ruled surviving mutants target tests after the one round a run may take |
+| 301 | `buildFromRef` | gates | safety | "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file" | a gate result is missing or refused |
+| 302 | `buildFromRef` | commit | safety | "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed" | the commit or its tree is not the checked one |
+| 303 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree | the commit or its tree is not the checked one |
+| 304 | `buildFromRef` | - | safety | "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result \|\| null) + " and head " + | not clearly mechanical, judgment or transient (conservative default) |
+| 305 | `buildFromRef` | commit | safety | "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree +  | the commit or its tree is not the checked one |
+| 306 | `buildFromRef` | commit | safety | "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the | the commit or its tree is not the checked one |
+| 307 | `reviewStep` | review | safety | "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")" | the review state does not match the pushed head, or a review role broke its contract |
+| 308 | `reviewStep` | - | safety | "infra:review-paths:v" + k + " returned no changed_paths" | relay contract: a required field is missing or malformed |
+| 309 | `reviewStep` | - | safety | "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or cha | relay digest or args mismatch: the copy may be altered |
+| 310 | `reviewStep` | review | safety | "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha | the review state does not match the pushed head, or a review role broke its contract |
+| 311 | `reviewStep` | review | safety | "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um. | the review state does not match the pushed head, or a review role broke its contract |
+| 312 | `replan` | - | safety | who + " verdict plan_wrong without a plan finding" | a judge broke its verdict contract |
+| 313 | `replan` | - | safety | "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit | a ref or head is not the expected one |
+| 314 | `replan` | - | safety | "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base | a ref or head is not the expected one |
+| 315 | `replan` | - | safety | "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead | a ref or head is not the expected one |
+| 316 | `dbDsn` | db | safety | "internal: no test database " + db + " in " + state.db.name | test database or DSN rule |
+| 317 | `dbDispatch` | db | safety | label + " returned " + r.status + ": " + (r.reason \|\| "no reason") | test database or DSN rule |
+| 318 | `testDbStep` | db | safety | label + ": no test_db relay (the " + DB_DECL_FILE + " read)" | test database or DSN rule |
+| 319 | `testDbStep` | db | safety | label + ": the relayed " + DB_DECL_FILE + " read" + NOT_DIGEST + " or arguments" | relay digest or args mismatch: the copy may be altered |
+| 320 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error | test database or DSN rule |
+| 321 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database" | test database or DSN rule |
+| 322 | `testDbStep` | db | safety | DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp | test database or DSN rule |
+| 323 | `testDbStep` | db | safety | DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IM | test database or DSN rule |
+| 324 | `testDbStep` | db | safety | DB_DECL_FILE + " changed during the run" | test database or DSN rule |
+| 325 | `testDbStep` | db | safety | al + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 326 | `testDbStep` | db | safety | "internal: test database name " + JSON.stringify(name) + " refused" | test database or DSN rule |
+| 327 | `testDbStep` | db | safety | "infra:db-up" + RELAY_MISMATCH | relay digest or args mismatch: the copy may be altered |
+| 328 | `testDbStep` | db | safety | "infra:db-up: the program did not return one user per database" | test database or DSN rule |
+| 329 | `testDbStep` | db | safety | "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name | test database or DSN rule |
+| 330 | `testDbStep` | db | safety | "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port) | test database or DSN rule |
+| 331 | `testDbStep` | db | safety | "infra:db-up: no self-expiry recorded" | test database or DSN rule |
+| 332 | `probeMode` | (stop) | safety | "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)" | an argument check (run-state, plan-ref or checkpoint trust) |
+| 333 | `probeMode` | contract | safety | "probe: the role-read agent (" + label + ") " + rp | a role, program or agent identity or contract mismatch |
+| 334 | `main` | (stop) | safety | "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode)  | an argument check (run-state, plan-ref or checkpoint trust) |
+| 335 | `main` | (stop) | safety | "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 336 | `main` | (stop) | safety | "args.unattended must be true or absent, got " + JSON.stringify(input.unattended) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 337 | `main` | (stop) | safety | "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 338 | `main` | (stop) | safety | "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 339 | `main` | (stop) | safety | "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight) | an argument check (run-state, plan-ref or checkpoint trust) |
+| 340 | `main` | (stop) | safety | "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)" | an argument check (run-state, plan-ref or checkpoint trust) |
+| 341 | `main` | (stop) | safety | "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /bu | an argument check (run-state, plan-ref or checkpoint trust) |
+| 342 | `main` | (stop) | safety | "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JS | an argument check (run-state, plan-ref or checkpoint trust) |
+| 343 | `main` | (stop) | safety | "args.checkpoint must be the {run, sha256} a plan stop returned, and only in plan mode; got " + JSON.stringify | an argument check (run-state, plan-ref or checkpoint trust) |
+| 344 | `main` | (stop) | safety | "args.rerun_of must be the run_nonce of the stopped run that recover.args names (not this run's); got " + JSON | an argument check (run-state, plan-ref or checkpoint trust) |
 
 ## Stops that return without halt
 
