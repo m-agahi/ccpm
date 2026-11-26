@@ -1467,8 +1467,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.11/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.11/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.12/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.12/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
@@ -1855,6 +1855,14 @@ What is left (accepted residuals):
   control (above); a source that hashes its AST or `__code__` rather than its bytes still passes the
   placebo. The code judge's step 9 lists the tamper signatures as advisory findings (`os._exit`,
   the `coverage` API, `sys.settrace`, a module that hashes its own `__file__`, `atexit` exit codes).
+  Since 8.9.12 (yaadgaar `#120`) it also lists coverage-tool changes in the whole diff: the
+  `uv.lock` entry for coverage, `[tool.uv.sources]` or a uv index setting, a `coverage` console
+  script or entry point, an added `coverage` module, package or `.pth`, a `sitecustomize` or
+  `usercustomize` file, any `*.pth`, and a `.venv` directory or `pyvenv.cfg` in the change. With no evidence that
+  it changes a verdict, a signature goes in the judge's `memory_notes` with the path and the hunk
+  header. It is not a routed finding, so it does not stop the run or reach the PR body. The scope
+  fence (step 7) and the frozen-input check (step 1) still make an unplanned change of this kind a
+  `code` finding. No script checks the signatures.
 - The git common dir is bound read-only for the held-out and coverage copies, so the repo's
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No

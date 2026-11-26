@@ -1,5 +1,43 @@
 # Changelog
 
+## [8.9.12] - 2026-11-26
+
+ccpmcwf 8.9.12 (yaadgaar `#120`): the code judge flags coverage-tool tamper signatures in a diff
+(advisory).
+
+### Changed
+
+- `#120` (ADR-1427: the coverage gate is honest-coder-only; on the uv tier the judged tree's
+  uv.lock and pyproject decide which coverage runs): the code judge's step 9 "Dodges" lists
+  coverage-tool tamper signatures in the whole change (`git diff <plan_commit> <code_tree>`, tests
+  included): a hunk in the `uv.lock` package entry named `coverage`; a hunk that adds or changes
+  `[tool.uv.sources]`, a `tool.uv.index` table, `index-url`, `extra-index-url` or another uv index
+  setting; a `coverage` console script or entry point (`[project.scripts]`,
+  `[project.entry-points]`); an added path named `coverage` (module, package or `.pth`), a
+  `sitecustomize` or `usercustomize` file, any `*.pth`, a `.venv` directory or a `pyvenv.cfg`
+  (each in the `--name-only` path list).
+- The code-judge result has no severity or category field (those are pr-review fields), and any
+  `routed_findings` entry blocks `approve`. So the 8.3.4 evidence rule now covers both lists: a
+  signature is a `code` finding only with evidence that it changes a test, coverage or mutation
+  verdict. Without it, the signature goes in `memory_notes` as `tamper signature (advisory): <path>
+<the hunk's @@ header, or "added path"> — <the signature>`, with no "(observed at …)" tag, so the
+  skill shows it and does not offer to store it. The 8.3.4 text did not say where a signature
+  without evidence goes; this gives both lists that destination.
+- The flags never relax check 1 (frozen inputs) or check 7 (scope fence): an added uv source,
+  `.pth` or `sitecustomize` outside `allowed_additions` stays a `code` finding. The advisory note
+  matters mostly for a plan-allowed change, for example a coverage bump.
+- Role-file change only: no script gate and no engine regex over the diff. `judged()` drops only
+  `[pr_body_claim]` review findings and never reads `memory_notes`. The `fleet-code-judge`
+  ROLE_SHA256 moves (`b5d6ddda…` to `89195574…`). The v5010 prompt-snapshot pins do not move (the
+  role sha and the version are masked).
+- Tests: `v8912_tamper_signatures` pins the signature list and the advisory rule in step 9 (a text
+  test: the change has no harness behaviour). Version pins move to 8.9.12.
+
+### Not changed
+
+- A `memory_notes` entry does not reach the PR body; only `gates_not_run` does. Putting the flag
+  on the PR needs an engine change and is left for later.
+
 ## [8.9.11] - 2026-11-26
 
 ccpmcwf 8.9.11 (yaadgaar `#125`, `#127`): the gate census relay gets one retry for a relay
