@@ -93,6 +93,7 @@ const SAMPLES = [
   "infra:ci-rerun",
   "infra:ci-logs:w1",
   "infra:pr-view:resume",
+  "infra:pr-body:route:v1",
   "infra:pr-fetch:u1",
   "infra:fleet-cleanup",
   "infra:orch-scan",

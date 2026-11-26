@@ -1,5 +1,50 @@
 # Changelog
 
+## [8.9.15] - 2026-11-26
+
+ccpmcwf 8.9.15 (yaadgaar `#131` and `#130`, Max's ruling: facts plus a pre-review check): the
+PR-body review route needs a program-checked fact, and the pr-opener's body is checked before the
+review.
+
+### Fixed
+
+- A code defect that the reviewer labelled `pr_body_claim` or `pr_body_format` (no file) went to
+  the pr-opener, never to the coder, and could ship unfixed. Now such a finding takes the body route
+  only with a program fact that ties it to the body:
+
+  - (b) its `body_quote` (12 to 300 characters, whitespace runs collapsed, no case folding) is in
+    the current body, outside heading lines and the workflow's test and stats blocks;
+  - for `pr_body_format` also (a) its quote is a heading the body lacks (the body convention's
+    required sections or the template's headings), or (c) a required check that reads the body
+    (a workflow path or check name that names pr-body) fails at the PR head. A pending check is no
+    fact, and nothing waits.
+
+  With no fact the finding goes to the coder, tagged `[<category>: no PR-body fact]`, so the code
+  judge's `[pr_body_claim]` guard never drops it. The next review gets it as a prior finding of
+  category `other`, so it is judged against the code, not the body.
+
+- A body finding that the next review does not flag again counts as resolved only when the program
+  finds its facts gone (the heading present, the quote gone, the check passing; pending only while
+  the CI step watches the checks). Else the run stops for a human (judgment class, gate review),
+  also on an approve. There is no second body update.
+
+### Added
+
+- `pr_state.py body <gh> <owner/repo> <pr> <sha> <spec_b64>`: a read-only mode (run as the judge)
+  that reads the body, the template's headings, and the named checks of the PR at `<sha>`.
+- `pr-review` findings carry a required `body_quote` (string or null); the role text says when to
+  use a body category and what to quote.
+- `#130`: before the first review of a PR step, the pr-opener's body is checked against the
+  template headings (read on the default branch, never at the PR head), the required sections and
+  `min_chars`. A miss gets one pr-opener rewrite; a
+  second miss goes on as before (the test-block program and the review see it). The repo's own body
+  checker (`body_convention.checker`) is remote, unsealed code and never runs: rules that only the
+  checker knows (for example a `## Breaking?` line that must open with yes or no) are not checked
+  before the review.
+- Tests: the body-route fixtures of 6.3.3 to 8.9.9 (v633, v710, v730, v898, v899) now give their
+  body finding a `body_quote` that the harness's body read finds, because the route needs a fact;
+  their assertions are unchanged.
+
 ## [8.9.14] - 2026-11-26
 
 ccpmcwf 8.9.14 (yaadgaar `#119`, Max's ruling: option (b)): an explicit runtime-doc rule makes the

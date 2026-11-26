@@ -161,6 +161,8 @@ const JREASON = [
   [/stillClaims/, "the PR body still states test counts after one scripted rewrite: a human edits the body"],
   [/a finding targets the plan after update-branch/, "a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand"],
   [/PR body finding still flagged/, "a PR body finding is still flagged after one body update: a human edits the body"],
+  // 8.9.15 (yaadgaar #131)
+  [/count as resolved after the body update/, "the review counts a PR body finding resolved but the program finds its fact still holds after the one body update: a human edits the body"],
   // 8.9.10 (#129)
   [/PR title finding: /, "a blocking review finding on the PR title or commit subject the workflow builds from the tldr: re-plan or a human edits both"],
   [/re-review after update-branch/, "the re-review after update-branch requests changes: no coder round runs on the forge's merge"],
@@ -303,7 +305,7 @@ export function render(source) {
   for (const r of rows) for (const c of r.names.split(" / ")) count[c] = (count[c] || 0) + 1;
   const counts = ["safety", "judgment", "transient", "mechanical", "per caller"].map((c) => c + " " + (count[c] || 0)).join(", ");
   return [
-    "# Stop classes of build-engine.js (ccpmcwf 8.9.14)",
+    "# Stop classes of build-engine.js (ccpmcwf 8.9.15)",
     "",
     "yaadgaar #108 step 5, ADR-1397. Every stop site of `src/build-engine.js` names its stop class in",
     "script code, as the first argument of `halt`, `stop` or `planFindingsStop`. No LLM sets or",

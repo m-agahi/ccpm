@@ -1503,8 +1503,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
@@ -2630,6 +2630,35 @@ only: a `[pr_body_format]` finding reaches the code judge only when the workflow
 coder, so a `fix_code` on it stays `fix_code`. A prior body finding is judged against the current
 PR body. The halt text is "PR body finding still flagged after one body update". The PR title
 comes from the workflow, so a title finding is a nit.
+
+Since 8.9.15 (yaadgaar `#131`), a body-category finding takes the body route only with a program
+fact that ties it to the body, read by `pr_state.py body` (read only, run as the judge, no wait):
+
+- (b) the finding's `body_quote` (a required field of every pr-review finding, string or null; 12
+  to 300 characters after whitespace runs collapse to one space, no case folding) is in the
+  current body, outside heading lines and the workflow's test and stats blocks. 12 characters
+  rule out a single word or a short heading, which any finding could "quote".
+- `pr_body_format` only: (a) its quote is a heading the body lacks (the body convention's
+  required sections or the PR template's headings), or (c) a required check that reads the body
+  fails at the PR head. A check reads the body when its sealed workflow path or check name names
+  pr-body (the rule `pr_convention.py` uses for the body checker). A pending check is no fact.
+
+With no fact the finding goes to the coder as `[<category>: no PR-body fact]`, so the code-judge
+guard never drops it, and the next review gets it as a prior finding of category `other` (judged
+against the code, not the body). A body finding that the next review does not flag again counts
+as resolved only when the program finds its facts gone: the heading present, the quote gone, the
+check passing (pending only while the policy's CI watch is on: a merge needs green required
+checks, and a red one goes to the CI classifier). Else the run stops with `needs_human` (`stop_gate: review`, class judgment, the `J_PR`
+options), on an approve too; the stop names finding ids and fact kinds, never the quote. Known
+limit: the body describes the code, so a code defect mislabelled as a body claim can still quote
+the body's own sentence about that code; the confirmation then only proves the sentence changed.
+
+Since 8.9.15 (yaadgaar `#130`), the PR step checks the pr-opener's body before the review: the
+template headings (the template is read on the default branch, never at the PR head), the
+required sections and `min_chars`. A miss gets one pr-opener rewrite
+(`role:fleet-pr-opener:body`, with the missing headings in `retry_reason`); a second miss goes on
+as before. The repo's own body checker is remote code that the plan does not seal, so it never
+runs: a rule that only the checker knows is not checked before the review.
 
 Since 8.9.10 (yaadgaar `#129`), a finding about the PR title or the commit subject has category
 `pr_title`. The workflow builds both from the plan, and no role can change them, so a blocking

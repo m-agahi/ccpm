@@ -18,7 +18,7 @@ const BEHIND = (p) => {
   const a = inputsOf(p).args;
   return { status: "ok", reason: "b", mode: "merge", merged: false, auto_enabled: false, method: "squash", merge_sha: null, blocked: "behind", merge_state: "BEHIND", head: a[4], branch_deleted: null, error: null, args: a };
 };
-const R1 = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed", evidence: "npm test: 133 pass" };
+const R1 = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed", evidence: "npm test: 133 pass" };
 const R2 = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "the merge broke x", evidence: "e" };
 const TAGF = { target: "code", criterion: null, finding: "review R1 [pr_body_claim] PR body: body says 147 passed (evidence: npm test: 133 pass)" };
 const REV = (v, f) => ({ status: "ok", reason: "x", verdict: v, findings: f, touches_gate: false, checked: [] });

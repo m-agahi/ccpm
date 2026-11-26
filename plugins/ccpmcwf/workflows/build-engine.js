@@ -57,6 +57,7 @@ const INFRA_TIER = [
 ["infra:ci-rerun", "sonnet"],
 ["infra:ci-logs", "sonnet"],
 ["infra:pr-view", "sonnet"],
+["infra:pr-body", "sonnet"],
 ["infra:pr-fetch", "sonnet"],
 ["infra:fleet-cleanup", "sonnet"],
 ["infra:orch-scan", "sonnet"],
@@ -110,7 +111,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.14";
+const FLEET_VERSION="8.9.15";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -188,6 +189,8 @@ const MAX_REVIEWS=2;
 const MAX_UPDATE_REVIEWS=2;
 const MAX_BODY_FIXES=1;
 const BODY_TAG="[pr_body_claim]";
+const QUOTE_MIN=12;
+const QUOTE_MAX=300;
 const FINDING_SEVERITIES=["blocking","nit"];
 const FINDING_CATEGORIES=["correctness","security","fail_open","pr_body_claim","pr_body_format","pr_title","test_quality","obligation","other"];
 const GATE_PATH_RE=/(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
@@ -342,6 +345,7 @@ target:{type:"string",enum:["code","plan"]},
 required:["severity","summary"],
 },
 };
+const PR_REVIEW_FINDINGS={type:"array",items:Object.assign({},REVIEW_FINDINGS.items,{properties:Object.assign({body_quote:STR_OR_NULL},REVIEW_FINDINGS.items.properties),required:["severity","summary","body_quote"]})};
 const ROLE_FILE_PROP={type:["object","null"],properties:{name:STR,sha256:STR}};
 function withShared(schema){
 return Object.assign({},schema,{required:schema.required.concat(["shared_file"]),properties:Object.assign({},schema.properties,{shared_file:ROLE_FILE_PROP})});
@@ -530,7 +534,7 @@ bookkept:STRS,
 }),
 "pr-review":roleSchema({
 verdict:{type:"string",enum:VERDICTS["pr-review"]},
-findings:REVIEW_FINDINGS,
+findings:PR_REVIEW_FINDINGS,
 touches_gate:BOOL,
 checked:{type:"array",items:ANY_ITEM},
 }),
@@ -1563,7 +1567,7 @@ const PROGRAM_SHA256 = {
 "policy": "cc6e2915dfb969338e46d0dc114c870739727db275e513d63b2c0e71c49dae43",
 "pr_body_block": "4a7f9203cb9bfbcd87ade22a92ccf483ed303ec2b4d4395cb9e04662ee228bb0",
 "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
-"pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
+"pr_state": "8dd8834b34d8b494b42f7ec18a92331c340f52ad3fb7aebb66053903894b056d",
 "pr_test_block": "9f4047598d925a5d0fdfe19d465799aa1ae778165d94b6f3a688e22c908893ad",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
@@ -1595,12 +1599,12 @@ const ROLE_SHA256 = {
 "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-"fleet-pr-opener": "ed1c45ae5248914375b34dbb396885e56e4ce1b5d2c0f63d0178f74ea973545d",
+"fleet-pr-opener": "7d395b6a05d42a90358a12e5788ed9e41f908a660a37a3865509a829a45ad6b2",
 "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c0f127b29b246a6274c73a404d4aa484dbafde43c7b8bb385bfbaa7d7ac6c07c",
-"pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
+"pr-review": "b71da9560bc673164385e5d72a6e4a2bc074e6fe9c323c5dd5350141b1aecb8b",
 "scope-and-plan": "5e6ac229b3c7bb1ebbf870569e2fb7279818c3a1abec9f937994ae0bfcba1bf3"
 };
 // ROLE_SHA256_END
@@ -1686,7 +1690,7 @@ const PROGRAM_SLOTS=[
 [/^infra:policy(:plan)?$/,[[null,"policy"]]],
 [/^infra:pr-stats/,[[null,"pr_body_block"]]],
 [/^infra:pr-tests/,[[null,"pr_test_block"]]],
-[/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-fetch|fleet-cleanup)/,[[null,"pr_state"]]],
+[/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-body|pr-fetch|fleet-cleanup)/,[[null,"pr_state"]]],
 [/^infra:orch-scan/,[[null,"orch_scan"]]],
 [/^infra:ci-watch/,[[null,"ci_watch"]]],
 [/^infra:state:/,[[null,"state_write"]]],
@@ -1767,6 +1771,7 @@ const PROGRAM_KEYS={
 "pr_state:update":["mode","updated","head","base","overlap","error","args"],
 "pr_state:view":["mode","state","head","merge_sha","error","args"],
 "pr_state:logs":["mode","head","logs","error","args"],
+"pr_state:body":["mode","head","body_sha256","headers_missing","short","quotes","checks","template_read","error","args"],
 "pr_state:fetch":["mode","head","tree","error","args"],
 "pr_state:rerun":["mode","rerun","error","args"],
 "pr_state:cleanup":["mode","removed","deleted","error","args"],
@@ -1966,6 +1971,12 @@ base:STR_OR_NULL,
 tree:STR_OR_NULL,
 logs:{type:["array","null"],items:{type:"object",properties:{name:STR,url:STR_OR_NULL,run_id:STR_OR_NULL,excerpt:STR_OR_NULL,verified:BOOL}}},
 rerun:STRS_OR_NULL,
+body_sha256:STR_OR_NULL,
+headers_missing:STRS_OR_NULL,
+short:BOOL_OR_NULL,
+quotes:{type:["array","null"],items:BOOL},
+checks:{type:["array","null"],items:{type:"object",properties:{name:STR,bucket:STR}}},
+template_read:BOOL_OR_NULL,
 removed:BOOL_OR_NULL,
 deleted:BOOL_OR_NULL,
 error:STR_OR_NULL,
@@ -6616,7 +6627,7 @@ const own=ownClaims(r.claims,supplied);
 if(own.length<r.claims.length)gate(label+": ignored "+(r.claims.length-own.length)+" claim(s) found in workflow-supplied text");
 return own;
 }
-const PR_STATE_READS=["view","logs"];
+const PR_STATE_READS=["view","logs","body"];
 async function prState(label,args,what,stopGate){
 const prompt=INFRA_STEP+what+".\n"+inputsLine({args})+RUN_ONLY+progCmd("pr_state",args)+"\n"+PRINTS_ONE+printsKeys("pr_state:"+args[0])+COPY_DIGEST+'Return {status: "ok", reason, '+returnKeys("pr_state:"+args[0])+"}.";
 let r=await dispatch(label,prompt,{schema:INFRA_SCHEMA,agentType:PR_STATE_READS.indexOf(args[0])>=0?JUDGE_AGENT:INFRA_AGENT,phase:"PR"});
@@ -7145,7 +7156,78 @@ if(r.diff.concat(...r.commits.map((c)=>c.files)).some((x)=>normPath(x)===pp))hal
 gate(label+": no .fleet/ path and no plan doc in the PR diff or its commits");
 return r.diff;
 }
-async function openPr(label,extra){
+const bodyChecks=()=>[...new Set(rcOf(ref).filter((c)=>c&&typeof c.check==="string"&&/pr[-_ ]?body/i.test(String(c.workflow||"").split(":").pop()+" "+c.check)).map((c)=>c.check))].slice(0,20);
+function bodySpec(all,headers,quotes,checks){
+const bc=(all&&ref.plan_facts.conventions.body)||{};
+const rs=Array.isArray(bc.required_sections)?bc.required_sections.filter((h)=>typeof h==="string"&&h&&h.length<=200):[];
+return{
+headers:rs.concat(headers).slice(0,40),
+template:typeof bc.template==="string"?{repo:bc.template_repo||remoteSlug,path:bc.template,ref:null}:null,
+min_chars:Number.isInteger(bc.min_chars)?bc.min_chars:null,
+quotes:quotes.slice(0,10),
+checks,
+};
+}
+async function bodyFacts(label,spec,n){
+const x=await prState(label,["body",ghCmd("PR body facts","review"),remoteSlug,String(n),approvedSha,base64Of(JSON.stringify(spec))],"read the facts of the fleet's own PR body (read only)","review");
+const ok=x.error===null&&Array.isArray(x.headers_missing)&&Array.isArray(x.quotes)&&x.quotes.length===spec.quotes.length&&Array.isArray(x.checks)&&x.checks.length===spec.checks.length;
+if(!ok)gate(label+": no PR body facts ("+(x.error===null?"malformed result":x.error)+")");
+return ok?x:null;
+}
+const normQ=(q)=>(typeof q==="string"&&q.length<=QUOTE_MAX?q.replace(/\s+/g," ").trim():"");
+const isBodyCat=(f)=>!!f&&(f.category==="pr_body_claim"||f.category==="pr_body_format");
+async function routeFacts(cand,k){
+const quotes=[...new Set(cand.map((f)=>normQ(f.body_quote)).filter((q)=>q.length>=QUOTE_MIN))].slice(0,10);
+const checks=bodyChecks();
+const r=await bodyFacts("infra:pr-body:route:v"+k,bodySpec(true,[],quotes,checks),pr.pr_number);
+return cand.map((f)=>{
+const q=normQ(f.body_quote);
+const id=String(f.id||"-");
+const out=[];
+if(!r)return out;
+if(quotes.indexOf(q)>=0&&r.quotes[quotes.indexOf(q)]===true)out.push({id,kind:"quote",value:q});
+if(f.category==="pr_body_format"){
+if(q&&r.headers_missing.some((h)=>typeof h==="string"&&h.replace(/\s+/g," ").trim()===q))out.push({id,kind:"header",value:q});
+for(const c of r.checks)if(c&&c.bucket==="fail"&&checks.indexOf(c.name)>=0)out.push({id,kind:"check",value:c.name});
+}
+return out;
+});
+}
+async function confirmBody(rv,k){
+const again=rv.blocking.filter(isBodyCat).map((f)=>String(f.id||"-")).filter((id)=>id!=="-");
+const todo=(state.bodyCheck||[]).filter((x)=>again.indexOf(x.id)<0);
+if(!todo.length)return;
+const of=(kind)=>[...new Set(todo.filter((x)=>x.kind===kind).map((x)=>x.value))];
+const spec=bodySpec(false,of("header"),of("quote"),of("check"));
+const r=await bodyFacts("infra:pr-body:confirm:v"+k,spec,pr.pr_number);
+const watched=policy.caps.ci_watch===true;
+const holds=todo.filter((x)=>
+!r?true
+:x.kind==="header"?r.headers_missing.indexOf(x.value)>=0
+:x.kind==="quote"?r.quotes[spec.quotes.indexOf(x.value)]!==false
+:!r.checks.some((c)=>c&&c.name===x.value&&(c.bucket==="pass"||(c.bucket==="pending"&&watched))));
+if(holds.length)
+halt(J_PR,"needs_human","review v"+k+": PR body finding(s) "+[...new Set(holds.map((x)=>x.id))].join(", ")+" count as resolved after the body update, but the program "+(r?"finds the cited fact(s) still hold: "+holds.map((x)=>x.id+" "+x.kind+(x.kind==="quote"?"":" "+JSON.stringify(x.value))).join("; "):"could not read the body facts")+"; fix the body of "+pr.pr_url+" by hand","review");
+state.bodyCheck=(state.bodyCheck||[]).filter((x)=>todo.indexOf(x)<0);
+gate("review v"+k+": "+todo.length+" PR body fact(s) gone after the body update (program)");
+}
+async function preBody(label,r,opener,why){
+const spec=bodySpec(true,[],[],[]);
+if(!spec.headers.length&&!spec.template&&spec.min_chars===null)return r;
+const tl="infra:pr-body:open"+label.replace("role:fleet-pr-opener","");
+const miss=(x)=>(!x?"":x.headers_missing.map((h)=>JSON.stringify(h)).join(", ")+(x.short===true?(x.headers_missing.length?"; ":"")+"fewer than "+spec.min_chars+" characters":""));
+const m=miss(await bodyFacts(tl,spec,r.pr_number));
+if(!m)return r;
+gate(tl+": the PR body misses "+m+"; one pr-opener rewrite ("+label+":body)");
+const r2=await opener(label+":body",{pr_url:r.pr_url,pr_number:r.pr_number,retry_reason:"the PR body misses the repo's PR template or body rules: "+m+"; write each missing heading as its own line and keep every other section"});
+if(r2.pr_url!==r.pr_url||r2.pr_number!==r.pr_number)halt("s","needs_human","pr-opener retry named "+r2.pr_url+" (#"+r2.pr_number+"), not "+r.pr_url+" (#"+r.pr_number+"); check both PRs","role");
+const w2=why(r2);
+if(w2)halt(J_PR,"needs_human",w2,"role");
+const m2=miss(await bodyFacts(tl+":body",spec,r.pr_number));
+if(m2)gate(tl+":body: the PR body still misses "+m2+"; the review sees it");
+return Object.assign({},r2,{created:r.created});
+}
+async function openPr(label,extra,pre){
 let g=ghFor(remoteSlug);
 if(g&&!g.push&&!ghNoPush(remoteSlug)&&!reprobed){
 reprobed=true;
@@ -7214,6 +7296,7 @@ if(w&&r.title!==subj.main)halt(J_PR,"needs_human",w,"role");
 state.pr=r;
 gate("pr-opener: "+(r.created?"created ":"updated ")+r.pr_url);
 if(w)halt(J_PR,"needs_human",w);
+if(pre)r=state.pr=await preBody(label,r,opener,why);
 const tl="infra:pr-tests"+label.replace("role:fleet-pr-opener","");
 const tb=testsBlock(suiteResult,ref.plan_facts.test_cmd,state.scanWarn);
 const targs=[g.gh_cmd,remoteSlug,String(r.pr_number),base64Of(tb),testsHeaders(ref.plan_facts.conventions.body,state.unattended)];
@@ -7379,8 +7462,10 @@ if(state.bodyPending){
 state.bodyFixed=(state.bodyFixed||[]).concat(state.bodyPending);
 state.bodyFixes=(state.bodyFixes||0)+1;
 state.bodyPending=null;
+state.bodyCheck=(state.bodyCheck||[]).concat(state.bodyPendingFacts||[]);
+state.bodyPendingFacts=null;
 }
-pr=await openPr("role:fleet-pr-opener"+(prOpens>1?":p"+prOpens:""),state.bodyFixed?{body_findings:state.bodyFixed}:null);
+pr=await openPr("role:fleet-pr-opener"+(prOpens>1?":p"+prOpens:""),state.bodyFixed?{body_findings:state.bodyFixed}:null,true);
 if(upd)await statsStep();
 await saveState("pr_open","infra:state:pr_open:p"+prOpens);
 if(!upd)await statsStep("open"+(prOpens>1?":p"+prOpens:""));
@@ -7392,15 +7477,15 @@ if(upd)upd.reviews++;
 const rv=await reviewStep(reviews,{
 mainWt,lay,remoteSlug,pr,approvedSha,baseRef:diffBase(),criteria,obligations:planFacts.repo_obligations,hashedFiles,
 allowedAdditions:planFacts.allowed_additions,
-priorFindings:state.review&&Array.isArray(state.review.blocking)?state.review.blocking:[],
+priorFindings:(state.review&&Array.isArray(state.review.blocking)?state.review.blocking:[]).map((f)=>((state.bodyDemoted||[]).indexOf(String(f.id||"-"))>=0&&isBodyCat(f)?Object.assign({},f,{category:"other"}):f)),
 });
 state.review={verdict:rv.verdict,blocking:rv.blocking,nits:rv.nits,rounds:reviews,sweep:rv.sweep,model:rv.model};
+await confirmBody(rv,reviews);
+state.bodyDemoted=[];
 if(rv.blocking.length){
 const isBody=(f)=>f.category==="pr_body_claim"||(f.category==="pr_body_format"&&f.file==null);
 const isTitle=(f)=>f.category==="pr_title"&&f.file==null;
-const bodyF=rv.blocking.filter(isBody);
 const titleF=rv.blocking.filter(isTitle);
-const codeF=rv.blocking.filter((f)=>!isBody(f)&&!isTitle(f));
 const inUpd=upd||(state.update&&state.update.head===approvedSha);
 const planF=rv.blocking.filter((f)=>f.target==="plan");
 if(planF.length&&inUpd)
@@ -7410,6 +7495,14 @@ gate("review v"+reviews+": changes_requested ("+planF.length+" plan-target) -> r
 await statsStep("review:v"+reviews);
 return{gate:"review",plan:planF.map((f)=>({target:"plan",criterion:null,finding:reviewFindingText(f)}))};
 }
+const cand=rv.blocking.filter(isBody);
+const facts=cand.length?await routeFacts(cand,reviews):[];
+const bodyF=cand.filter((f,j)=>facts[j].length);
+const bfacts=[].concat(...facts);
+const noFact=cand.filter((f,j)=>!facts[j].length).map((f)=>Object.assign({},f,{category:f.category+": no PR-body fact"}));
+state.bodyDemoted=noFact.map((f)=>String(f.id||"-"));
+if(noFact.length)gate("review v"+reviews+": "+noFact.length+" PR body finding(s) with no program fact -> coder");
+const codeF=rv.blocking.filter((f)=>!isBody(f)&&!isTitle(f)).concat(noFact);
 if(bodyF.length&&(state.bodyFixes||0)>=MAX_BODY_FIXES)
 halt(J_PR,"needs_human","review v"+reviews+": PR body finding still flagged after one body update: "+bodyF.map((f)=>(f.id||"-")+" "+(f.file||"")+": "+f.summary).join("; "),"review");
 if(codeF.length&&inUpd){
@@ -7417,7 +7510,7 @@ const no=upd?await updRefusal():"the update record is from an earlier run";
 if(no)
 halt(J_BASE,"needs_human","re-review after update-branch requested changes: "+rv.blocking.map((f)=>String(f.id||"-")).join(", ")+" ("+rv.blocking.length+" blocking, "+rv.nits.length+(rv.nits.length===1?" nit":" nits")+"); findings are in the run result; no coder round: "+no+"; re-plan on the new base or fix by hand","review");
 upd.pr=rv.changed;
-if(bodyF.length)state.bodyPending=bodyF;
+if(bodyF.length)[state.bodyPending,state.bodyPendingFacts]=[bodyF,bfacts];
 gate("review u"+upd.reviews+": changes_requested ("+codeF.length+" blocking); R1-R5 pass -> code rounds on the update merge "+upd.head+" (within the code-round cap)");
 return{gate:"review",update:true,findings:codeF.map((f)=>({target:"code",criterion:null,finding:reviewFindingText(f)}))};
 }
@@ -7427,6 +7520,7 @@ if(!codeF.length){
 state.bodyFixes=(state.bodyFixes||0)+1;
 state.bodyReviews=(state.bodyReviews||0)+1;
 state.bodyFixed=(state.bodyFixed||[]).concat(bodyF);
+state.bodyCheck=(state.bodyCheck||[]).concat(bfacts);
 if(!inUpd)reviewNotes=rv.nits;
 pr=await openPr("role:fleet-pr-opener:body-v"+reviews,{body_findings:state.bodyFixed});
 await statsStep(upd?undefined:"body-v"+reviews);
@@ -7434,7 +7528,7 @@ gate("review v"+reviews+": changes_requested ("+bodyF.length+" PR body finding(s
 i--;
 continue;
 }
-if(bodyF.length)state.bodyPending=bodyF;
+if(bodyF.length)[state.bodyPending,state.bodyPendingFacts]=[bodyF,bfacts];
 if(reviews-(state.bodyReviews||0)>=MAX_REVIEWS)
 halt(J_FIX,
 "needs_human",

@@ -166,7 +166,7 @@ test("AC5 ex11: a claim inside the intent reason is ignored", async () => {
 });
 
 test("AC5 ex12: body_findings are not supplied strings: the body-v1 rewrite runs", async () => {
-  const s = withBodyFix(happy(), { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed", evidence: "npm test" });
+  const s = withBodyFix(happy(), { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed", evidence: "npm test" });
   s["infra:pr-tests:body-v1"] = tests(["147 passed"]);
   s["role:fleet-pr-opener:body-v1:counts"] = OPEN7;
   s["infra:pr-tests:body-v1:counts"] = tests([]);

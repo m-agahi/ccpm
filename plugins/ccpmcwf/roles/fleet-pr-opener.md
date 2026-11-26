@@ -27,7 +27,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `draft` (boolean): true only when the plan names a merge condition (`merge_after`) or the policy keeps PRs as drafts. Otherwise the PR opens ready for review.
 - `merge_after` (string or null): the condition or the PRs this PR waits for. When set, write it verbatim in the body as the line `Merge after: <merge_after>` (with a template: its most fitting section).
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
-- `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR. It can also name test counts outside the script-written test block: remove every test count from your text.
+- `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR. It can also name test counts outside the script-written test block: remove every test count from your text. It can also name headings of the repo's PR template or body rules that the body lacks, or a minimum length: add each heading as its own line and keep every other section.
 
 ## Run rules (non-interactive)
 

@@ -59,7 +59,7 @@ test("AC3 ex4: failed and errors null, criterion key absent", async () => {
 });
 
 test("AC3 ex5: on the mixed review path a tagged-only judge fix_code in round 2 becomes approve", async () => {
-  const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
+  const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
   const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
   const F = happy();
   const rs = F["hasher:pre-review:v1"];

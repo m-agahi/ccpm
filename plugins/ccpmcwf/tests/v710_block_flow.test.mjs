@@ -17,7 +17,7 @@ const DEFAULT_CAPS = { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, sta
 const polOut = (caps) => (p) => ({ status: "ok", reason: "read", profile: "personal", file: "/h/.config/fleet/policy.json", policy_sha256: "f".repeat(64), caps: Object.assign({}, DEFAULT_CAPS, caps), matched: "profile personal", error: null, args: inputsOf(p).args });
 const REV = (v, fs) => ({ status: "ok", reason: "x", verdict: v, findings: fs, touches_gate: false, checked: [] });
 const NIT = { id: "N1", severity: "nit", category: "style", file: "README.md", line: 1, summary: "typo", evidence: "q" };
-const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body overstates", evidence: "npm test" };
+const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, body_quote: "the change is fully verified", summary: "body overstates", evidence: "npm test" };
 const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
 const JUDGE = (suite) => ({ status: "ok", reason: "good", verdict: "approve", routed_findings: [], hash_check: { match: true, mismatched: [] }, suite_result: suite });
 

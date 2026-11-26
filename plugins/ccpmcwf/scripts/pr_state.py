@@ -80,12 +80,26 @@ except Exception:
 #     --write-tree <old> <base>` (a forge merge with no extra content); then a
 #     fast-forward to <new>. Prints {mode, head, tree, error, args, program,
 #     digest}.
+#   body <gh> <owner/repo> <pr> <sha> <spec_b64>: read only (8.9.15, yaadgaar
+#     #131, #130). The PR must be OPEN at <sha>. spec: {headers, template,
+#     min_chars, quotes, checks}. headers_missing: each header of <headers> and
+#     each heading line of the template ({repo, path, ref}, read by gh api;
+#     template_read false when it is not readable) that is no line of the body
+#     (both stripped). short: the stripped body has fewer than min_chars
+#     characters (null with no min_chars). quotes[i]: quote i, whitespace runs
+#     collapsed to one space, is at least 12 characters and occurs, with no case
+#     folding, in the body with the same collapse after the script-written test
+#     and stats blocks and every heading line are removed. checks: for each
+#     name, the bucket of the PR head's checks of that name (or "<workflow> /
+#     <name>"): fail if any fails, else pending, else pass, else missing.
+#     Prints {mode, head, body_sha256, headers_missing, short, quotes, checks,
+#     template_read, error, args, program, digest}.
 #   rerun <gh> <owner/repo> <run_ids_json>: `gh run rerun <id> --failed` each.
 #     Prints {mode, rerun, error, args, program, digest}.
 #   cleanup <repo> <worktree> <branch>: removes the fleet's own worktree
 #     (<repo>/.claude/worktrees/fleet-<key>/main) and local branch fleet/<key>.
 #     Prints {mode, removed, deleted, error, args, program, digest}.
-import hashlib, json, os, re, subprocess, sys, time
+import base64, hashlib, json, os, re, subprocess, sys, time
 def lift():
     # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
     for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
@@ -99,6 +113,8 @@ mode = args[0] if args else None
 GH_MODES = ('ready', 'merge', 'update', 'view', 'logs')
 if mode in GH_MODES:
     ok = len(args) == 5 and args[1] in ('gh', 'gh-personal') and SLUG.match(args[2]) and NUM.match(args[3]) and SHA.match(args[4])
+elif mode == 'body':
+    ok = len(args) == 6 and args[1] in ('gh', 'gh-personal') and SLUG.match(args[2]) and NUM.match(args[3]) and SHA.match(args[4]) and re.match(r'^[A-Za-z0-9+/=]{1,65536}$', args[5])
 elif mode == 'rerun':
     ok = len(args) == 4 and args[1] in ('gh', 'gh-personal') and SLUG.match(args[2]) and re.match(r'^\[("[1-9][0-9]{0,15}"(,"[1-9][0-9]{0,15}"){0,9})\]$', args[3])
 elif mode == 'fetch':
@@ -108,7 +124,7 @@ elif mode == 'cleanup':
 else:
     ok = False
 if not ok:
-    sys.exit('usage: pr_state.py ready|merge|update|view|logs <gh> <owner/repo> <pr> <sha> | fetch <worktree> <fleet/branch> <old> <new> <base> | rerun <gh> <owner/repo> <run_ids_json> | cleanup <repo> <worktree> <fleet/branch>')
+    sys.exit('usage: pr_state.py ready|merge|update|view|logs <gh> <owner/repo> <pr> <sha> | body <gh> <owner/repo> <pr> <sha> <spec_b64> | fetch <worktree> <fleet/branch> <old> <new> <base> | rerun <gh> <owner/repo> <run_ids_json> | cleanup <repo> <worktree> <fleet/branch>')
 # work repos never merge or update the branch, whatever the caller says
 WORK = ('quinyx', 'concrete-media')
 if mode in ('merge', 'update') and args[2].split('/')[0].lower() in WORK:
@@ -175,6 +191,7 @@ KEYS = {
     'update': ('updated', 'head', 'base', 'overlap'),
     'view': ('state', 'head', 'merge_sha'),
     'logs': ('head', 'logs'),
+    'body': ('head', 'body_sha256', 'headers_missing', 'short', 'quotes', 'checks', 'template_read'),
     'rerun': ('rerun',),
     'cleanup': ('removed', 'deleted'),
     'fetch': ('head', 'tree'),
@@ -324,6 +341,56 @@ try:
                 except (subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
                     ok, ex = False, None
             out['logs'].append({'name': str(c.get('name')), 'url': u, 'run_id': mm.group(1) if ok else None, 'excerpt': ex, 'verified': ok})
+    elif mode == 'body':
+        sha = args[4]
+        sp = json.loads(base64.b64decode(args[5], validate=True).decode('utf-8'))
+        strs = lambda v, n, m: isinstance(v, list) and len(v) <= n and all(isinstance(x, str) and 0 < len(x) <= m for x in v)
+        tp = sp.get('template') if isinstance(sp, dict) else None
+        mc = sp.get('min_chars') if isinstance(sp, dict) else None
+        if not isinstance(sp, dict) or not strs(sp.get('headers'), 40, 200) or not strs(sp.get('quotes'), 10, 300) or not strs(sp.get('checks'), 20, 200) or not (mc is None or (type(mc) is int and 0 <= mc <= 100000)):
+            raise Fail('bad body spec')
+        if tp is not None and not (isinstance(tp, dict) and isinstance(tp.get('repo'), str) and SLUG.match(tp['repo']) and isinstance(tp.get('path'), str) and re.match(r'^[A-Za-z0-9._/-]{1,255}$', tp['path']) and '..' not in tp['path'].split('/') and (tp.get('ref') is None or (isinstance(tp.get('ref'), str) and SHA.match(tp['ref'])))):
+            raise Fail('bad template in the body spec')
+        v = view('body,headRefOid,state')
+        out['head'] = v.get('headRefOid')
+        open_at(v, sha)
+        b = (v.get('body') if isinstance(v.get('body'), str) else '').replace('\r\n', '\n')
+        out['body_sha256'] = hashlib.sha256(b.encode('utf-8')).hexdigest()
+        HEAD = re.compile(r'^#{1,6}[ \t]+\S.*$', re.M)
+        heads = list(sp['headers'])
+        if tp is not None:
+            out['template_read'] = False
+            try:
+                d = json.loads(run('api', 'repos/' + tp['repo'] + '/contents/' + tp['path'] + ('?ref=' + tp['ref'] if tp.get('ref') else '')))
+                t = base64.b64decode(d.get('content') or '').decode('utf-8', 'replace').replace('\r\n', '\n')
+                heads += [h.strip() for h in HEAD.findall(t) if re.match(r'^#{1,6} [^\n`$]{1,80}$', h.strip())][:40]
+                out['template_read'] = True
+            except (Fail, ValueError, AttributeError):
+                pass
+        lines = set(x.strip() for x in b.split('\n'))
+        out['headers_missing'] = [h for i, h in enumerate(heads) if h.strip() not in lines and h not in heads[:i]]
+        out['short'] = None if mc is None else len(b.strip()) < mc
+        # the quote text: no script-written block, no heading line
+        t = re.sub(r'<!-- ccpm-fleet-tests -->.*?<!-- /ccpm-fleet-tests -->', '\n', b, flags=re.S)
+        t = re.sub(r'<details><summary>Built with (?:ccpm fleet|ccpmcwf).*?<!-- ccpm-fleet-stats -->', '\n', t, flags=re.S)
+        t = ' '.join(HEAD.sub('\n', t).split())
+        out['quotes'] = [len(' '.join(q.split())) >= 12 and ' '.join(q.split()) in t for q in sp['quotes']]
+        out['checks'] = []
+        if sp['checks']:
+            r = subprocess.run([gh, 'pr', 'checks', args[3], '-R', slug, '--json', 'name,bucket,workflow'], capture_output=True, timeout=120, preexec_fn=lift)
+            try:
+                cs = json.loads(r.stdout.decode('utf-8'))
+            except ValueError:
+                cs = None
+            if not isinstance(cs, list):
+                if 'no checks reported' not in r.stderr.decode('utf-8', 'replace').lower():
+                    raise Fail('gh pr checks: ' + r.stderr.decode('utf-8', 'replace').strip()[-300:])
+                cs = []
+            for n in sp['checks']:
+                bs = [c.get('bucket') for c in cs if isinstance(c, dict) and n in (c.get('name'), str(c.get('workflow')) + ' / ' + str(c.get('name')))]
+                out['checks'].append({'name': n, 'bucket': next((k for k in ('fail', 'pending', 'pass') if k in bs), 'missing')})
+            if view('headRefOid').get('headRefOid') != sha:
+                raise Fail('the PR head moved off ' + sha + ' during the checks read')
     elif mode == 'rerun':
         out['rerun'] = []
         for i in json.loads(args[3]):
