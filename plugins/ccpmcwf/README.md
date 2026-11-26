@@ -2533,10 +2533,12 @@ comes from the workflow, so a title finding is a nit.
 Since 8.9.10 (yaadgaar `#129`), a finding about the PR title or the commit subject has category
 `pr_title`. The workflow builds both from the plan, and no role can change them, so a blocking
 `pr_title` finding with no `file` never goes to the coder or the pr-opener. With no code or body
-finding left, the run stops with `needs_human` (`stop_gate: review`, class judgment): "PR title
-finding: the workflow builds the PR title and the commit subject from the plan; no role can change
-them". Every earlier halt and route of the review split runs first (the plan-target re-plan, the
-one-body-update cap, the update-branch stops). In a mixed review the code findings go to the coder
+finding left, the run stops with `needs_human` (`stop_gate: review`, class judgment, the `J_FIX`
+options): "PR title finding: the workflow builds the PR title and the commit subject from the plan
+tldr; no role can change them (re-plan for a new tldr, or fix both by hand)". A re-plan gives a
+new tldr and so a new subject; an edit of the PR title alone does not reach the pushed commit
+subject. The stop fires only when no plan, code or body finding is left, so it never preempts an
+existing halt or route (the plan-target re-plan, the one-body-update cap, the update-branch stops). In a mixed review the code findings go to the coder
 and the body findings to the pr-opener; the title finding stays in the run result, and the next
 review judges it again. A `pr_title` finding with any `file` is a code finding and goes to the
 coder (fails toward the coder). The code-judge guard is unchanged.

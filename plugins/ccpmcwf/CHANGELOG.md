@@ -30,10 +30,18 @@ for title findings, and a 1.5M default run budget.
   ends with one or `)`, holds no double space and at most 60 characters; the build-start check
   also caps the whole subject at `SUBJECT_MAX` (72).
 - The branch slug is unchanged (`slugify(brief.title)`): branch names keep their own charset.
+- A build that committed under 8.9.9 with a subject the new builder spells differently (a tldr
+  with punctuation) does not resume under 8.9.10: verify stops on "branch moved by a non-fleet
+  commit" (fails closed, as after #87 in 8.3.0). Re-plan, or finish the PR by hand.
+- The pr-opener role names the title charset the workflow checks (it said "no quote or shell
+  character", which `>`, `(`, `)` and `#` now break). The pr-review role adds the `pr_title`
+  category; a title finding stays a nit.
 - `#129`: new review finding category `pr_title` (the pr-review schema enum and role). A blocking
   `pr_title` finding with no `file` never goes to the coder or the pr-opener. With no code or body
-  finding left, the review stops with `needs_human` (`J_PR`, gate `review`, class judgment), after
-  every existing halt and route (plan-target re-plan, `MAX_BODY_FIXES`, the update-branch stops).
+  finding left, the review stops with `needs_human` (`J_FIX` options: fix by hand, or re-plan with
+  the findings, which gives a new tldr and subject; gate `review`, class judgment). It fires only
+  when no plan, code or body finding is left, so it never preempts an existing halt or route
+  (plan-target re-plan, `MAX_BODY_FIXES`, the update-branch stops).
   In a mixed review it stays out of the coder's findings; the next review judges it again. A
   `pr_title` finding with any `file` is a code finding (fails toward the coder). The code-judge
   guard stays on `[pr_body_claim]` only. Option (c) removes the cause; the halt replaces a coder
@@ -45,7 +53,8 @@ for title findings, and a 1.5M default run budget.
   replaces it. The budget tests spend per call scaled to stay over the new default.
 - Pins: the pr-review schema's category enum gains `pr_title`: the three plan/build
   prompt-snapshot pins move (probe unchanged); with that enum entry dropped every pin is 8.9.9's.
-  The pr-review role pin moves; with the role edit reverted every role and program pin is 8.9.9's.
+  The pr-review and fleet-pr-opener role pins move; with the two role edits reverted every role and
+  program pin is 8.9.9's.
   No script changed. docs/stop-classes.md gains the one new site (343 sites, judgment 29).
 
 ## [8.9.9] - 2026-11-26

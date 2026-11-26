@@ -162,7 +162,7 @@ const JREASON = [
   [/a finding targets the plan after update-branch/, "a review finding targets the plan on the forge's merge: re-plan on the new base or fix by hand"],
   [/PR body finding still flagged/, "a PR body finding is still flagged after one body update: a human edits the body"],
   // 8.9.10 (#129)
-  [/PR title finding: /, "a blocking review finding on the PR title or commit subject the workflow builds: a human edits both"],
+  [/PR title finding: /, "a blocking review finding on the PR title or commit subject the workflow builds from the tldr: re-plan or a human edits both"],
   [/re-review after update-branch/, "the re-review after update-branch requests changes: no coder round runs on the forge's merge"],
   [/requested changes again/, "the review rounds are spent: a human fixes or re-plans"],
   [/in a code round after update-branch/, "the code judge rejects after update-branch: no writer or re-plan runs on the forge's merge"],

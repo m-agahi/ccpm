@@ -131,7 +131,8 @@ test("8.9.10 #129 (R2 shape, blocking): a pr_title finding with no file stops fo
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
   assert.equal(out.result.stop_class, "judgment");
-  assert.match(out.result.reason, /review v1: PR title finding: the workflow builds the PR title and the commit subject from the plan; no role can change them: R2: /);
+  assert.match(out.result.reason, /review v1: PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them \(re-plan for a new tldr, or fix both by hand\): R2: /);
+  assert.ok(Array.isArray(out.result.options) && out.result.options.some((o) => /run plan again with the findings in the task text/.test(o)), JSON.stringify(out.result.options));
   for (const l of ["role:fleet-coder:r2", "role:fleet-code-judge:r2", "infra:commit:r2"]) assert.ok(!out.labels.includes(l), l);
   assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-pr-opener:body-v")));
   assert.ok(!out.result.gate_log.some((l) => /-> coder \(fix_code\)/.test(l)), out.result.gate_log.join("\n"));

@@ -1592,12 +1592,12 @@ const ROLE_SHA256 = {
 "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
-"fleet-pr-opener": "da31c5fed3d8059b605d75dbd07d3f9736bab762262daa7bfe2232020e351d73",
+"fleet-pr-opener": "ed1c45ae5248914375b34dbb396885e56e4ce1b5d2c0f63d0178f74ea973545d",
 "fleet-test-judge": "0ec5f354a6b7805ced6905c92d9fe38f31738dab5d7f704a94ccf75e1b3d3408",
 "fleet-test-writer": "7e613148a3a73a0e7ee057f48231be1d7b15c36b9045b30aaf5e523ef8eada99",
 "gate-change-nonweakening-sweep": "76ecc2b3ac29d56fd5da6806b8cdbeb4c87622c8c1094eb5b137a0a52d20cc3c",
 "plan-audit": "c69c8861b89a31ca1fcf5c1f36074790ea4cf694fa2105f2a2d76c846e22d1cc",
-"pr-review": "b39d3a4f335426ea5e06b0be04fe9d0043242f56bd354be608ea67f9346824e0",
+"pr-review": "2d47f1ea04b317e770f47ba4e5957ad9de6e4e1b029f586d3eb054bb80e4851a",
 "scope-and-plan": "25b7fa909849e62e00b6cba9f61806442dc9d5f5e451e12718fc06c394cd8249"
 };
 // ROLE_SHA256_END
@@ -7284,7 +7284,7 @@ gate("review u"+upd.reviews+": changes_requested ("+codeF.length+" blocking); R1
 return{gate:"review",update:true,findings:codeF.map((f)=>({target:"code",criterion:null,finding:reviewFindingText(f)}))};
 }
 if(!codeF.length&&!bodyF.length)
-halt(J_PR,"needs_human","review v"+reviews+": PR title finding: the workflow builds the PR title and the commit subject from the plan; no role can change them: "+titleF.map((f)=>(f.id||"-")+": "+f.summary).join("; "),"review");
+halt(J_FIX,"needs_human","review v"+reviews+": PR title finding: the workflow builds the PR title and the commit subject from the plan tldr; no role can change them (re-plan for a new tldr, or fix both by hand): "+titleF.map((f)=>(f.id||"-")+": "+f.summary).join("; "),"review");
 if(!codeF.length){
 state.bodyFixes=(state.bodyFixes||0)+1;
 state.bodyReviews=(state.bodyReviews||0)+1;
