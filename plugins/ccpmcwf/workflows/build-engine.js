@@ -110,7 +110,7 @@ const RELAY_RETRY_MODEL="sonnet";
 const RETRY_UP={haiku:"sonnet",sonnet:"opus",opus:"opus",fable:"fable"};
 const DISPATCH_RE=/DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS=["files","sections","git","symlinks","ignored"];
-const FLEET_VERSION="8.9.11";
+const FLEET_VERSION="8.9.12";
 const PLUGIN_NAME="ccpmcwf";
 const SCRIPTS_DIR_RE=new RegExp("^/[A-Za-z0-9._/-]+/"+PLUGIN_NAME+"/"+FLEET_VERSION.replace(/\./g,"\\.")+"/scripts$");
 const RELOAD_HINT=
@@ -1589,7 +1589,7 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "b5d6dddad50a7867978fa1e43f82357cf83329b3ae679c6d31b0a0fdec7a3db2",
+"fleet-code-judge": "891955749b5a32abfe677ac119c17a24cb71afac0ccb070145e33ac87962b8ac",
 "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
 "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
 "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
