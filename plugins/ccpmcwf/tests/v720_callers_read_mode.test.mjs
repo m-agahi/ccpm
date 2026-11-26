@@ -8,6 +8,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SCRIPTS_SRC, scratchRepo, sh, spawnSync } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 const py = (...a) => spawnSync("python3", ["-I", CALLERS, ...a], { encoding: "utf8" });
 function withRepo(files, syms, fn) {
@@ -20,7 +23,7 @@ function withRepo(files, syms, fn) {
     }
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const r = py("file", wt, "docs/plans/x.md", JSON.stringify(syms), "100", S);
+    const r = py("file", wt, "docs/plans/x.md", JSON.stringify(syms), "100", S, RD);
     assert.equal(r.status, 0, r.stderr);
     fn(JSON.parse(r.stdout).file);
   } finally {

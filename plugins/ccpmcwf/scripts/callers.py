@@ -107,8 +107,8 @@ def read_mode(argv):
     print(json.dumps(o, sort_keys=True, ensure_ascii=False))
     sys.exit(0)
 def file_args(argv):
-    if len(argv) != 6:
-        sys.exit('FLEET_CALLERS_FILE: file mode takes <worktree> <plan_path> <symbols json> <cap> <scratch_dir>')
+    if len(argv) != 7:
+        sys.exit('FLEET_CALLERS_FILE: file mode takes <worktree> <plan_path> <symbols json> <cap> <scratch_dir> <runtime docs json>')
     return list(argv[1:])
 def file_mode(text, out, syms, args):
     import tempfile
@@ -144,7 +144,9 @@ def file_mode(text, out, syms, args):
 if len(sys.argv) > 1 and sys.argv[1] == 'read': read_mode(sys.argv[2:])
 FILE_MODE = len(sys.argv) > 1 and sys.argv[1] == 'file'
 FILE_ARGS = file_args(sys.argv[1:]) if FILE_MODE else None
-if FILE_MODE: sys.argv[1:] = FILE_ARGS[:4]
+if FILE_MODE: sys.argv[1:] = FILE_ARGS[:4] + FILE_ARGS[5:]
+# 8.9.14 (yaadgaar #119): the runtime-doc globs are the last argument (the engine's default plus the repo's list)
+if len(sys.argv) != 6: sys.exit('FLEET_CALLERS_ARGS: takes <worktree> <plan_path> <symbols json> <cap> <runtime docs json>')
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
 occ = {}
@@ -180,11 +182,54 @@ for s in syms:
 DOC_RE = re.compile(r'.*\.(md|rst|adoc)', re.I)
 NOTE_RE = re.compile(r'(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?', re.I)
 LOCKS = ('Cargo.lock', 'uv.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Gemfile.lock', 'go.sum')
+# 8.9.14 (yaadgaar #119): a path a runtime-doc glob matches is code (a .md file code loads). The globs split on /:
+# ** is a whole segment (zero or more segments), * matches inside one segment, the rest is literal and case-sensitive.
+# The engine's runtimeDocsProblem, rdSeg and rdMatch are the same rules.
+RD_ENTRY_RE = re.compile(r'[A-Za-z0-9._+@*/-]{1,200}')
 def base(p):
     return p.rsplit('/', 1)[-1]
-def doc_or_lock(p):
+def rd_problem(rd):
+    if not isinstance(rd, list) or len(rd) > 64:
+        return 'runtime_docs must be a list of at most 64 globs'
+    for i, g in enumerate(rd):
+        segs = g.split('/') if isinstance(g, str) and RD_ENTRY_RE.fullmatch(g) else ['']
+        if any(x in ('', '.', '..') for x in segs):
+            return 'runtime_docs entry %d must be a relative path of segments [A-Za-z0-9._+@-] and *, with no leading or trailing /' % i
+        if any('**' in x and x != '**' for x in segs) or segs.count('**') > 4 or any(a == b == '**' for a, b in zip(segs, segs[1:])):
+            return 'runtime_docs entry %d: ** is a whole segment, at most 4 of them and never two in a row' % i
+    if len(set(rd)) != len(rd):
+        return 'runtime_docs lists an entry twice'
+    return None
+def rd_seg(g, s):
+    parts = g.split('*')
+    if len(parts) == 1:
+        return g == s
+    end = len(s) - len(parts[-1])
+    if end < len(parts[0]) or not s.startswith(parts[0]) or not s.endswith(parts[-1]):
+        return False
+    i = len(parts[0])
+    for m in parts[1:-1]:
+        j = s.find(m, i, end)
+        if j < 0:
+            return False
+        i = j + len(m)
+    return True
+def rd_match(ps, xs):
+    if not ps:
+        return not xs
+    if ps[0] == '**':
+        return any(rd_match(ps[1:], xs[k:]) for k in range(len(xs) + 1))
+    return bool(xs) and rd_seg(ps[0], xs[0]) and rd_match(ps[1:], xs[1:])
+def runtime_doc(p, rd):
+    return any(rd_match(g.split('/'), p.split('/')) for g in rd)
+def doc_or_lock(p, rd):
     b = base(p)
-    return bool(DOC_RE.fullmatch(b) or NOTE_RE.fullmatch(b)) or b in LOCKS
+    return not runtime_doc(p, rd) and (bool(DOC_RE.fullmatch(b) or NOTE_RE.fullmatch(b)) or b in LOCKS)
+try:
+    RD = json.loads(sys.argv[5])
+except ValueError:
+    RD = None
+if rd_problem(RD): sys.exit('FLEET_CALLERS_RUNTIME_DOCS: ' + rd_problem(RD))
 def grep(args):
     r = subprocess.run(G + ['grep', '-I', '--no-color'] + args, capture_output=True)
     if r.returncode not in (0, 1):
@@ -204,9 +249,9 @@ for s in syms:
         p = h.rsplit(':', 1)[0]
         if DOC_RE.fullmatch(base(p)) and (all_docs or base(p) in included):
             doctest.add(p)
-        elif doc_or_lock(p):
+        elif doc_or_lock(p, RD):
             auto[s].append(h)
-out = {'occurrences': occ, 'capped': sorted(capped), 'auto_dont_care': auto, 'doctest_md': sorted(doctest)}
+out = {'occurrences': occ, 'capped': sorted(capped), 'auto_dont_care': auto, 'doctest_md': sorted(doctest), 'args': sys.argv[1:6]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 text = json.dumps(out, sort_keys=True, ensure_ascii=False)

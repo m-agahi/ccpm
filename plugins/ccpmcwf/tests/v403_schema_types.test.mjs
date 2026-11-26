@@ -604,7 +604,16 @@ const READS = {
     "o.criterion string": SP + "changed_symbols[].occurrences[].criterion",
     "o.dont_care string": SP + "changed_symbols[].occurrences[].dont_care",
   },
-  docOrLockFile: { "b string-re": [PARSED_TOKEN, 2] },
+  // 8.9.14 (yaadgaar #119): the run's runtime-doc list, built and checked by runtimeDocsStep
+  docOrLockFile: { "b string-re": [PARSED_TOKEN, 2], "rd array": "parsed: the run's runtime-doc list (runtimeDocsStep)" },
+  // the repo's .fleet-runtime-docs.json globs at origin: these checks ARE the refusal of a wrong list
+  runtimeDocsProblem: {
+    "rd array": "parsed: the repo's runtime-doc file (runtime_docs docs)",
+    "g string": "parsed: the repo's runtime-doc file (runtime_docs docs[])",
+    "g string-re": "parsed: the repo's runtime-doc file (runtime_docs docs[])",
+  },
+  rdSeg: { "parts.length number-literal": PARSED_LOCAL },
+  runtimeDocsStep: { "t object": "infra:runtime_docs", "cfg array": "prog:runtime_docs:docs" },
   // 6.1.0 review: an npm:<name> entry of hookSurface's make_paths (the script maps a missing one to null)
   testCmdRuns: {
     "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
@@ -621,6 +630,8 @@ const READS = {
   },
   // 6.1.0: the grep's checks moved from callerCheck to callerGrep
   callerGrep: {
+    // 8.9.14 (yaadgaar #119): the run's runtime-doc list, built and checked by runtimeDocsStep
+    "rd array": "parsed: the run's runtime-doc list (runtimeDocsStep)",
     "occ object": "prog:callers:occurrences",
     "occ array": "!prog:callers:occurrences",
     "r.capped array": "prog:callers:capped",
@@ -1358,7 +1369,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.13\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.13\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.14\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.14\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

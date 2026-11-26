@@ -33,7 +33,7 @@ export const WORKFLOW = join(HERE, "..", "src", "build-engine.js");
 export const SCRIPTS = HERE;
 export const ROLES_DIR = join(HERE, "..", "roles");
 // the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity; 33 since 5.0.9: session_project; 34 since 6.0.0: ruleset_surface; 35: policy; 36: pr_convention; 37: pr_body_block; 38: pr_state; 39: orch_scan; 40: ci_watch; 41 since 7.1.0: pr_test_block; 42 since 7.3.0: fleet_branch; 45 in 7.3.0: scratch_copy, exclude_add, purge; 44 in 7.4.0: push replaces push_classify and push_probe; 45 since 8.0.0: gate_tools; 46: cover_diff; 47: held_out; 48: mutants; 49: sec_scan; 50 since 8.1.0: sandbox)
-export const PROGRAM_COUNT = 50;
+export const PROGRAM_COUNT = 51;
 // the number of shipped role prompts (5.0.0)
 // 11 since 6.0.0: fleet-ci-classifier; 12 since 8.0.0: fleet-held-out-runner
 export const ROLE_COUNT = 12;

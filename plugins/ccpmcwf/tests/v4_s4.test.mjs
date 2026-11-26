@@ -9,6 +9,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
 import {
   spawnSync,
   SOURCE,
@@ -196,7 +199,7 @@ function defsOf(names, over) {
 }
 
 test("4.0.0 S4: FENCED_FILES is fenced by exact path, case-insensitively (S5 fills it)", () => {
-  assert.match(SOURCE, /\nconst FENCED_FILES = \[".fleet-test-db.json"\];\n/);
+  assert.match(SOURCE, /\nconst FENCED_FILES = \[".fleet-test-db.json", ".fleet-runtime-docs.json"\];\n/);
   const names = ["normPath", "HOOK_PATH_RE", "FENCED_FILES", "fencePathProblem", "SECRET_SOURCE_EXT", "secretLikePath"];
   const empty = defsOf(names);
   assert.equal(empty.fencePathProblem("x.json"), null);
@@ -274,7 +277,9 @@ test("4.0.0 1989: a program auto list the script's own file list refuses halts (
 });
 
 test("4.0.0 1989: the JS and Python doc/lock classifiers agree", () => {
-  const js = defsOf(["DOC_FILE_RE", "NOTE_FILE_RE", "LOCK_FILES", "docOrLockFile"]).docOrLockFile;
+  // 8.9.14 (yaadgaar #119): the classifiers take the runtime-doc list; an empty list is the rule this test pins
+  const jd = defsOf(["DOC_FILE_RE", "NOTE_FILE_RE", "LOCK_FILES", "rdSeg", "rdMatch", "runtimeDoc", "docOrLockFile"]).docOrLockFile;
+  const js = (p) => jd(p, []);
   const names = [
     "README.md", "docs/a/b.RST", "x.adoc", "CHANGELOG", "CHANGELOG.md", "changelog.txt", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE-2.0",
     "LICENSE.txt", "Cargo.lock", "sub/uv.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock", "go.sum",
@@ -285,8 +290,8 @@ test("4.0.0 1989: the JS and Python doc/lock classifiers agree", () => {
   assert.deepEqual(want.slice(0, 18), Array(18).fill(true));
   assert.deepEqual(want.slice(18), Array(names.length - 18).fill(false));
   // 4.0.1: the Python side lives in scripts/callers.py
-  const py = PROGRAMS_TEXT.match(/\nDOC_RE =[\s\S]*?\ndef doc_or_lock\(p\):\n(?: {4}.*\n)+/)[0];
-  const r = spawnSync("python3", ["-I", "-c", "import re, json, sys\n" + py + "\nprint(json.dumps([doc_or_lock(p) for p in json.loads(sys.argv[1])]))", JSON.stringify(names)], { encoding: "utf8" });
+  const py = PROGRAMS_TEXT.match(/\nDOC_RE =[\s\S]*?\ndef doc_or_lock\(p, rd\):\n(?: {4}.*\n)+/)[0];
+  const r = spawnSync("python3", ["-I", "-c", "import re, json, sys\n" + py + "\nprint(json.dumps([doc_or_lock(p, []) for p in json.loads(sys.argv[1])]))", JSON.stringify(names)], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), want);
 });
@@ -309,7 +314,7 @@ function callersRepo(files) {
   git("init", "-q", ".");
   git("add", "-A");
   git("commit", "-qm", "x");
-  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "callers.py"), wt, "docs/plans/p.md", JSON.stringify(["foo"]), "100"], { env, encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "callers.py"), wt, "docs/plans/p.md", JSON.stringify(["foo"]), "100", RD], { env, encoding: "utf8" });
   rmSync(d, { recursive: true, force: true });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);

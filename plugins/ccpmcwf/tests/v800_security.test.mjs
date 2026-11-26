@@ -576,8 +576,8 @@ test("8.0.0 G7: a security tool that errors gets one retry, then needs_human at 
   assert.ok(out.labels.includes("infra:gates:r1:digest-retry"));
 });
 
-test("8.0.0 G7: the program checklist: PROGRAM_COUNT 49 (50 since 8.1.0), the slot, the keys, the output types, the judge's role", () => {
-  assert.equal(PROGRAM_COUNT, 50);
+test("8.0.0 G7: the program checklist: PROGRAM_COUNT 49 (50 since 8.1.0, 51 since 8.9.14), the slot, the keys, the output types, the judge's role", () => {
+  assert.equal(PROGRAM_COUNT, 51);
   assert.match(SOURCE, /\[\/\^infra:gates:\/, \[\["coverage", "cover_diff"\], \["mutation", "mutants"\], \["security_scan", "sec_scan"\]\]\]/);
   assert.deepEqual(K("sec_scan"), PROG_KEYS);
   assert.match(SOURCE, /\n  sec_scan: \{ status: STR, reason: STR_OR_NULL, findings: /);

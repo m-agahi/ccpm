@@ -144,10 +144,11 @@ const SCENARIOS = {
 // 8.9.8 (yaadgaar #124): + infra:pr-stats:open (the stats block after the first PR open) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with that call dropped every pin is 8.9.7's
 // 8.9.9 (yaadgaar #122): the pr-review schema's category enum gains pr_body_format (the pr-review and the pr-opener role shas move, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.8's
 // 8.9.10 (yaadgaar #129): the pr-review schema's category enum gains pr_title (the pr-review role sha moves, masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with that enum entry dropped every pin is 8.9.9's (the #123 subject builder gives the fixture tldr the same subject)
+// 8.9.14 (yaadgaar #119): infra:branch-scan and infra:verify-plan run runtime_docs.py after test_db_decl.py (their prompts list the command and return runtime_docs, the schema gains the runtime_docs slot), and every callers prompt passes the runtime-doc list as its last argument (callers prompts name args); same call counts: the three plan/build pins move, probe unchanged. Checked: with src/build-engine.js, roles/scope-and-plan.md and scripts/callers.py at 8.9.13 (the version and the tests of this commit kept) the three old pins come back.
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "0f80094cf027aab7a5cf1cb74b70537437bcb7427274628bc4d4205a5f280862" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "79f917a5a2e115b0d85da9c3c550f58bb3813d361d81aeb6ca5014eff615539c" },
-  "short path (one test writer)": { calls: 90, sha256: "fbb095626a9bbaaee5deb05dd64dc2769739f535cc6cadf61a5415b82ccf8868" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "63f11599012d13c80e180557541ba9a10347f7685e075b392a412604acfcba2f" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "91d184d9e15258d9256c6a8589b3549dd06fd93f0cfaa1c172cddc5036de5d63" },
+  "short path (one test writer)": { calls: 90, sha256: "1bf1c94dcb6cb31c525c811ff0d16bee5a212e953d64175b62cd6bbad30b82b4" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

@@ -503,8 +503,8 @@ test("8.0.0 G5: the code-judge schema has mutant_rulings [{id, target: tests|cod
   assert.ok(!/kill rate/i.test(SOURCE.replace(/\/\/.*$/gm, "")), "no kill-rate stop in the script");
 });
 
-test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48 (49 since G7, 50 since 8.1.0), the slot, the keys, the output types", () => {
-  assert.equal(PROGRAM_COUNT, 50);
+test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48 (49 since G7, 50 since 8.1.0, 51 since 8.9.14), the slot, the keys, the output types", () => {
+  assert.equal(PROGRAM_COUNT, 51);
   assert.match(SOURCE, /\[\/\^infra:gates:\/, \[\["coverage", "cover_diff"\], \["mutation", "mutants"\], /);
   assert.match(SOURCE, /"mutants": \["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"\]/);
   assert.match(SOURCE, /\n  mutants: \{ status: STR, reason: STR_OR_NULL, killed: INT, survived: /);

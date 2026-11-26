@@ -9,8 +9,11 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { SCRIPTS_SRC, scratchRepo, sh, spawnSync } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
-const fileRun = (...a) => spawnSync("python3", ["-I", CALLERS, "file", ...a], { encoding: "utf8" });
+const fileRun = (...a) => spawnSync("python3", ["-I", CALLERS, "file", ...a, ...(a.length === 5 ? [RD] : [])], { encoding: "utf8" });
 const EMPTY = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 
 function mainRepo(extra) {
@@ -46,7 +49,7 @@ test("7.2.0 AC2: file mode writes callers-<sha256>.json and prints the summary w
     });
     assert.deepEqual(o.capped, []);
     assert.deepEqual(o.doctest_md, []);
-    assert.deepEqual(o.args, [wt, "docs/plans/x.md", '["foo"]', "100", S]);
+    assert.deepEqual(o.args, [wt, "docs/plans/x.md", '["foo"]', "100", S, RD]);
     assert.ok(!("occurrences" in o));
     assert.match(o.digest, /^[0-9a-f]{64}$/);
     const m = /^(.*)\/callers\/callers-([0-9a-f]{64})\.json$/.exec(o.file);

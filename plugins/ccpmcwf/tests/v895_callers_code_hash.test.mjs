@@ -11,6 +11,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ARGS, HASHES, SCRIPTS_SRC, scratchRepo, sh, spawnSync, happy, run, runOne, call, inputsOf, callersDisk, callersHash } from "./harness.mjs";
 
+// 8.9.14 (yaadgaar #119): callers.py takes the runtime-doc list last (the engine's default here)
+const RD = '["roles/**/*.md"]';
+
 const CALLERS = join(SCRIPTS_SRC, "callers.py");
 const py = (...a) => spawnSync("python3", ["-I", CALLERS, ...a], { encoding: "utf8" });
 function withRepo(files, fn) {
@@ -35,7 +38,7 @@ const MAIN = { "src/a.py": "foo()\n\nfoo()\n", "README.md": "x\nfoo\n", "CHANGEL
 
 test("8.9.5 (#112): file mode prints the code hashes of the hits that are not auto; no path_count or paths_sha256", () => {
   withRepo(MAIN, (wt, S) => {
-    const r = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S);
+    const r = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S, RD);
     assert.equal(r.status, 0, r.stderr);
     const e = JSON.parse(r.stdout).symbols.foo;
     assert.deepEqual(e, {
@@ -52,7 +55,7 @@ test("8.9.5 (#112): file mode prints the code hashes of the hits that are not au
 
 test("8.9.5 (#112): a doc collected as a doctest is a code hit", () => {
   withRepo(Object.assign({ "pytest.ini": "[pytest]\naddopts = --doctest-glob=*.md\n" }, MAIN), (wt, S) => {
-    const r = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S);
+    const r = py("file", wt, "docs/plans/x.md", '["foo"]', "100", S, RD);
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.doctest_md, ["CHANGELOG.md", "README.md"]);
@@ -64,7 +67,7 @@ test("8.9.5 (#112): a doc collected as a doctest is a code hit", () => {
 
 test("8.9.5 (#112): read part paths lists code paths only; part auto is refused", () => {
   withRepo(MAIN, (wt, S) => {
-    const F = JSON.parse(py("file", wt, "docs/plans/x.md", '["foo"]', "100", S).stdout).file;
+    const F = JSON.parse(py("file", wt, "docs/plans/x.md", '["foo"]', "100", S, RD).stdout).file;
     const p = py("read", F, "paths", '["foo"]', "0");
     assert.equal(p.status, 0, p.stderr);
     assert.deepEqual(JSON.parse(p.stdout).hits, { foo: ["src/a.py"] });

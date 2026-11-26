@@ -1,5 +1,33 @@
 # Changelog
 
+## [8.9.14] - 2026-11-26
+
+ccpmcwf 8.9.14 (yaadgaar `#119`, Max's ruling: option (b)): an explicit runtime-doc rule makes the
+`.md` files that code loads count as code in the caller check and in R5.
+
+### Fixed
+
+- A `.md` file that code loads at runtime (for example a `roles/*.md` prompt file) was classed as
+  a doc. A caller hit there was auto `dont_care`, so a changed pin in it was never mapped or
+  checked, and since 8.9.5 R5 did not refuse an update merge when the base moved it.
+
+### Added
+
+- The runtime-doc rule: the default `roles/**/*.md` (anchored at the repo root) plus the globs of
+  an optional `.fleet-runtime-docs.json` (`{"version": 1, "runtime_docs": [...]}`). A path that a
+  glob matches is code in both ports: `callers.py` `doc_or_lock` and the engine's `docOrLockFile`
+  (the plan caller check, the auto re-check, the disk compare and R5).
+- `runtime_docs.py` (program 51) reads the file at `origin/<default branch>`, like
+  `test_db_decl.py`: in `infra:branch-scan` (plan) and `infra:verify-plan` (build). The coder's
+  tree is never read, and the file is fenced. A malformed file or glob stops for a human
+  (`stop_gate: "callers"`).
+- `callers.py` takes the whole list as its last argument and echoes its args in inline mode too;
+  the engine checks the args of both modes, so a relay that ran with a shorter list halts.
+- This repo's `.fleet-runtime-docs.json` lists `plugins/*/roles/**/*.md` (the default does not
+  match a roles dir below the root).
+- The plan_wrong re-plan of a build runs its caller check with the build's list; `callerGrep`
+  refuses a call with no list (a forgotten call site fails loudly).
+
 ## [8.9.13] - 2026-11-26
 
 ccpmcwf 8.9.13 (yaadgaar `#121`): in Rust, a doc comment or a multi-line signature on a new

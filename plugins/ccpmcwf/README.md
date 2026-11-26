@@ -278,6 +278,22 @@ update merge (`infra:callers:u1`) the comparison is by code path set, so a line 
 files, or any doc or lock path, needs no read. The disk path adds up to 18 plan-mode agents (36 with digest and args retries), so a heavy
 plan run can reach "agent cap 100 reached" and stop (fail closed).
 
+Runtime docs (8.9.14, yaadgaar `#119`): a `.md` file that code loads at runtime (a prompt or role
+file) is code, not a doc. Its hits are never auto `dont_care`, and R5 compares its path at the
+update merge. The rule is the default `roles/**/*.md` plus the globs of an optional
+`.fleet-runtime-docs.json`, for example `{"version": 1, "runtime_docs": ["plugins/*/roles/**/*.md"]}`.
+A glob splits on `/`: `**` is a whole segment (zero or more segments), `*` matches inside one
+segment, everything else is literal and case-sensitive. A glob is anchored at the repo root, so
+the default does not match `sub/roles/x.md`. The workflow reads the file at `origin/<default
+branch>` only (`runtime_docs.py`, in `infra:branch-scan` for the plan and in `infra:verify-plan`
+for the build, before any role of the run), never in a worktree, so a role cannot shrink the list.
+The file is fenced like `.fleet-test-db.json`. The workflow passes the whole list to `callers.py`
+as its last argument, and the program echoes it in `args` (inline and file mode), so the relay
+digest and the args check cover it. A malformed file, or a glob with `?`, `[`, `{`, `\`, a space, a
+leading or trailing `/`, an empty, `.` or `..` segment, or `**` inside a segment, stops the run
+with `stop_gate: "callers"` (safety, `needs_human`). With no file and no `roles/` dir at the repo
+root, no caller verdict changes (the inline relay is longer by its echoed args).
+
 Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
 approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop
 the run. A program (`infra:format-tests:r<n>`, `infra:format-code:r<n>`, the default agent: it
@@ -1482,8 +1498,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.13/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.13/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.14/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
