@@ -1436,8 +1436,9 @@ available; it never stops the run.
 **Census retry (8.9.11, yaadgaar `#125`).** The script retries a census relay mis-copy only. It
 never retries a census call that did not run.
 
-- A preflight `gate_tools` relay that is an object but fails its args or digest check is a
-  mis-copy. The script decides this from the relay's shape, never from the agent's reason text.
+- A preflight `gate_tools` relay that carries the program's own header (`program.name` is
+  `gate_tools`) and a 64-hex digest, but fails its args or digest check, is a mis-copy: the
+  program ran. The script decides this from the relay's shape, never from the agent's reason text.
   A mis-copy gets one fresh agent, `infra:gate-tools:preflight:relay-retry`. That agent runs only
   the census command, on the same args, one model tier above preflight (sonnet to opus,
   ADR-1364). Its gate line is a `warning:` line, so the stats block does not count it as a gate.
@@ -1445,7 +1446,8 @@ never retries a census call that did not run.
   usable (no result, a digest or args mismatch) is not used, and no third agent runs. The line is
   then `gate census unusable (no digest-checked gate_tools after one retry): no gate tool
 available; the preflight agent's reason: "<reason>"; the retry agent's reason: "<reason>"`.
-- A null or absent relay (or any other non-object) means the program did not run. The script runs
+- Any other relay (null, absent, a non-object, or an object with no `gate_tools` header or no
+  64-hex digest) means the program did not run. The script runs
   no retry (Max ruled: a fresh agent that sends the same command in other words would re-ask a
   safety classifier until it says yes). The line is `gate census unusable (no gate_tools relay:
 the program did not run; no retry): no gate tool available; the preflight agent's reason:

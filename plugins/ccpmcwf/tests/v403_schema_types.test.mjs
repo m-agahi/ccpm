@@ -401,7 +401,8 @@ const READS = {
     "r object": "parsed: the census retry's result; a non-object relays no census",
     // Max ruled: the retry decision reads the relay's shape (a script fact), never its reason text
     "g object": "preflight:gate_tools",
-    "g array": "!preflight:gate_tools",
+    "pg object": "preflight:gate_tools.program",
+    "g.digest string-re": "prog:gate_tools:digest",
   },
   agentReason: {
     "r object": "parsed: the preflight or census retry result; a non-object gives no reason",

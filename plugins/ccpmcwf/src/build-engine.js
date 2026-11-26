@@ -4591,15 +4591,17 @@ function agentReason(r) {
   const t = r && typeof r === "object" && typeof r.reason === "string" && r.reason ? r.reason : "no reason";
   return JSON.stringify(Array.from(t).map((c) => (/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(c) ? " " : c)).slice(0, 200).join(""));
 }
-// 8.9.11 (#125, Max ruled): only a relay mis-copy (an object relay that fails the args or digest check, a script fact)
-// gets one fresh agent that runs only the census command, one tier above preflight (ADR-1364). A null or non-object
-// relay (the program did not run, e.g. a permission denial) gets none: no re-asking a safety classifier. The retry
-// counts toward the agent cap, as the scripts_probe retry, but the cap skips it (advisory)
+// 8.9.11 (#125, Max ruled): only a relay mis-copy (the program's own header, name gate_tools, and a 64-hex digest: it
+// ran, as digestOnlyMiss; then the args or digest check fails) gets one fresh agent that runs only the census command,
+// one tier above preflight (ADR-1364). Any other relay (the program did not run, e.g. a permission denial) gets none:
+// no re-asking a safety classifier. The retry counts toward the agent cap, as the scripts_probe retry, but the cap
+// skips it (advisory)
 async function censusStep(pre, repo) {
   const g = pre.gate_tools;
   if (gateCensus(g, repo)) return;
   const own = "; the preflight agent's reason: " + agentReason(pre);
-  if (!g || typeof g !== "object" || Array.isArray(g))
+  const pg = g && typeof g === "object" ? g.program : null;
+  if (!pg || typeof pg !== "object" || pg.name !== "gate_tools" || !SHA256_RE.test(g.digest))
     return gate("gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool available" + own + "; if a permission denial blocked it, add the allow rule (README: Census retry)");
   const label = "infra:gate-tools:preflight:relay-retry";
   const up = RETRY_UP[infraModel("preflight")];

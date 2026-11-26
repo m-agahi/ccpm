@@ -15,8 +15,8 @@ mis-copy only, and the agent's reason shows in the gate line.
 
 ### Changed
 
-- A `gate_tools` relay that is an object but fails its args or digest check (a mis-copy, a
-  script fact) gets one fresh agent, `infra:gate-tools:preflight:relay-retry`, that runs only the
+- A `gate_tools` relay with the program's own header (`program.name` `gate_tools`) and a 64-hex
+  digest that fails its args or digest check (a mis-copy: the program ran, a script fact) gets one fresh agent, `infra:gate-tools:preflight:relay-retry`, that runs only the
   census command (same args, digest check) one tier above preflight (sonnet to opus, ADR-1364).
   Its gate line is a `warning:` line, so the stats block's gates count leaves it out. It counts
   toward the agent cap, as the scripts_probe retry does; the cap skips it and never stops the
@@ -24,8 +24,9 @@ mis-copy only, and the agent's reason shows in the gate line.
   runs. The line is then `gate census unusable (no digest-checked gate_tools after one retry): no
 gate tool available; the preflight agent's reason: "<reason>"; the retry agent's reason:
 "<reason>"`.
-- Review of c6b3c5b (Max ruled): a null, absent or non-object relay means the program did not
-  run, for example after a permission denial. It gets no retry: a fresh agent that sends the same
+- Review of c6b3c5b (Max ruled) and of 94efc77: any other relay (null, absent, a non-object, or
+  an object with no `gate_tools` header or no 64-hex digest) means the program did not run, for
+  example after a permission denial. It gets no retry: a fresh agent that sends the same
   command in other words would re-ask a safety classifier until it says yes. The line is
   `gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool
 available; the preflight agent's reason: "<reason>"; if a permission denial blocked it, add the

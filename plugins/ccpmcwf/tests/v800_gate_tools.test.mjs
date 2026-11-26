@@ -242,8 +242,8 @@ test("8.0.0 G1-4: a malformed or digest-failed census never stops the run and ma
     const out = await runOne(brokenCensus(fn), ARGS);
     assert.equal(out.result.status, base.result.status, what + ": " + out.result.reason);
     // 8.9.11 (#125, Max ruled): an object relay that fails a check (a mis-copy) gets one retry, one extra agent,
-    // right after preflight; a null or non-object relay (the program did not run) gets none
-    const ran = what !== "no relay" && what !== "a string";
+    // right after preflight; a relay with no gate_tools header or no 64-hex digest (the program did not run) gets none
+    const ran = what !== "no relay" && what !== "a string" && what !== "another program";
     const want = base.labels.slice();
     if (ran) want.splice(want.indexOf("preflight") + 1, 0, "infra:gate-tools:preflight:relay-retry");
     assert.deepEqual(out.labels, want, what + (ran ? ": one retry, one extra agent" : ": no retry"));

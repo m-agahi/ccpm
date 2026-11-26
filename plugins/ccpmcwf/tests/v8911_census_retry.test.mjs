@@ -52,6 +52,23 @@ test("8.9.11 #125 (Max's ruling): a null or absent first relay runs no retry; th
   }
 });
 
+test("8.9.11 #125 (review of 94efc77): an object relay with no program header or no 64-hex digest (no proof the program ran) runs no retry", async () => {
+  const shapes = {
+    "all null": () => ({ languages: null, matrix: null, container: null, args: null, program: null, digest: null }),
+    "another program": (g) => Object.assign(g, { program: { name: "path_check", sha256: "0".repeat(64) } }),
+    "no digest": (g) => Object.assign(g, { digest: null }),
+  };
+  for (const [what, fn] of Object.entries(shapes)) {
+    const out = await runOne(first(fn), ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", what + ": " + out.result.reason);
+    assert.equal(retries(out), 0, what + ": " + out.labels.join(", "));
+    const u = unusable(out);
+    assert.equal(u.length, 1, out.logs.join("\n"));
+    assert.ok(u[0].startsWith("gate census unusable (no gate_tools relay: the program did not run; no retry)"), what + ": " + u[0]);
+    assert.ok(u[0].endsWith(POINTER), what);
+  }
+});
+
 test("8.9.11 #125: a digest-mismatch first relay gets one retry on opus; a good retry gives a usable census; the retry line is a warning", async () => {
   for (const mode of [ARGS, PROBE]) {
     const out = await runOne(first(badDigest), mode);

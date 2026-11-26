@@ -4068,7 +4068,8 @@ async function censusStep(pre,repo){
 const g=pre.gate_tools;
 if(gateCensus(g,repo))return;
 const own="; the preflight agent's reason: "+agentReason(pre);
-if(!g||typeof g!=="object"||Array.isArray(g))
+const pg=g&&typeof g==="object"?g.program:null;
+if(!pg||typeof pg!=="object"||pg.name!=="gate_tools"||!SHA256_RE.test(g.digest))
 return gate("gate census unusable (no gate_tools relay: the program did not run; no retry): no gate tool available"+own+"; if a permission denial blocked it, add the allow rule (README: Census retry)");
 const label="infra:gate-tools:preflight:relay-retry";
 const up=RETRY_UP[infraModel("preflight")];
