@@ -141,10 +141,11 @@ const SCENARIOS = {
 // 8.9.3 (#117 d): + infra:state:ready (the run-state after ready, before the CI watch) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with the ready save dropped every pin is 8.9.2's
 // 8.9.5 (yaadgaar #112, review of #121): plan-audit's caller_check gains auto_unlisted (the doc and lock hit count per symbol checked by code hash; {} in these scenarios) and the plan-audit role sha moves (masked); same call counts: the three plan/build pins move, probe unchanged. Checked: with auto_unlisted dropped from caller_check every pin is 8.9.4's
 // 8.9.7 (yaadgaar #110): the infra:gates:r<n> prompt passes cover_diff.py a 7th arg, the census python coverage tier ("unsupported" here; mutants keeps 6), and the cover_diff program pin moves; same call counts: the three plan/build pins move, probe unchanged
+// 8.9.8 (yaadgaar #124): + infra:pr-stats:open (the stats block after the first PR open) in every build: one more call, the three plan/build pins move, probe unchanged. Checked: with that call dropped every pin is 8.9.7's
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "2e217f809dbf8b1d0398d4ed07d5386e4546778161e97718a45e2a77acf40637" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "519307ccdcdcc1255bb403ecf48d7058faa4f5c7352cf5c15ad5afb8417342de" },
-  "short path (one test writer)": { calls: 89, sha256: "be9cbe37922fca43494e6041ddda37c0061b2f9ee09f9b87e19dbc181106f9ff" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "72d8f034dc88cd1ee581a9feda9a1a3d760a91108163e657e7c5590071f38637" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "47e04e9ef8c581b9ca16a107050386fca717c5da4261444a2f5205fca1be3551" },
+  "short path (one test writer)": { calls: 90, sha256: "b4fb18a0804b8f730f9cded31e5c7c384b403711142b9b21dc0f5190cef3139e" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

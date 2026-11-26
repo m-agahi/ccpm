@@ -139,7 +139,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.7";
+const FLEET_VERSION = "8.9.8";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -8166,6 +8166,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         // 6.1.0 review N7: the pr-opener rewrote the body; the stats block goes back before any later stop
         if (upd) await statsStep();
         await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
+        // 8.9.8 (#124): the block from the first open on, after the milestone (a stats stop resumes at the review)
+        if (!upd) await statsStep("open" + (prOpens > 1 ? ":p" + prOpens : ""));
       } else if (step === "review") {
         if (!pr || !pr.pr_url || pr.pr_number == null) halt("s", "needs_human", "review: no PR to review (pr-opener returned no pr_url/pr_number)", "review");
         // 8.7.0 (#108 step 4): after the pr_open run-state; a re-run resumes at the review
@@ -8214,7 +8216,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             // 6.1.0: a review of the update merge never writes its text to the PR body
             if (!inUpd) reviewNotes = rv.nits;
             pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
-            if (upd) await statsStep();
+            await statsStep(upd ? undefined : "body-v" + reviews);
             gate("review v" + reviews + ": changes_requested (" + bodyF.length + " pr_body_claim) -> pr-opener body update");
             i--;
             continue;
@@ -8235,6 +8237,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         if (rv.nits.length && !upd) {
           reviewNotes = rv.nits;
           pr = await openPr("role:fleet-pr-opener:notes", state.bodyFixed ? { body_findings: state.bodyFixed } : null);
+          await statsStep("notes:v" + reviews);
         }
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
       } else if (step === "writeback") {
@@ -8620,15 +8623,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
   // 2044: the stats block in the PR body; any mismatch stops the run
   let statsRuns = 0;
+  let statsOff = false;
   async function statsStep(tag, again) {
     if (!pr || pr.pr_number == null) return gate("stats block skipped: no PR");
-    if (!policy.caps.stats) return gate("stats block off (policy stats false)" + (state.unattended ? "; warning: the " + UNATT_HEAD + " section is not checked in the real body" : ""));
+    // 8.9.8 (#124): said once per run, not at every PR step
+    if (!policy.caps.stats) return statsOff || ((statsOff = true), gate("stats block off (policy stats false)" + (state.unattended ? "; warning: the " + UNATT_HEAD + " section is not checked in the real body" : "")));
     const g = ghCmd("stats block", "stats");
     const rv = state.review;
     const tpl = statsBlock({
       criteria: criteria.length, tests: state.testsWritten || 0, testRounds: state.rounds.tests, code: state.rounds.code,
       audits: typeof ref.history.audits === "number" ? ref.history.audits : null, agents: history.agents + state.agents - opt.agentsBase, resumed: !!resume,
-      gates: state.gateLog.filter((x) => !/^(warning:|model used:|fallback:)/.test(x)).length,
+      // 8.9.8 (#124): a stats write is not a gate
+      gates: state.gateLog.filter((x) => !/^(warning:|model used:|fallback:|infra:pr-stats)/.test(x)).length,
       review: (rv ? rv.verdict : "not run") + " (sweep: " + (rv && rv.sweep ? rv.sweep.verdict : "not triggered") + ")",
       tokens: tokOn() ? TOK : null,
       ci: state.ci ? { verdict: state.ci.verdict, fixRounds: state.rounds.ci || 0, waitS: state.ciWaitS || 0 } : null,

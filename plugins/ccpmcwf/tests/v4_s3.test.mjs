@@ -551,9 +551,11 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
   // 8.0.1 (#76): + infra:run-lock (capped) and infra:run-lock:release (after the result)
   // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
-  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  // 8.9.8 (#124): + infra:pr-stats:open (the stats block after the first PR open, outside the cap)
+  assert.equal(out.build.calls.length, 68, out.build.labels.join(", "));
   // 8.9.3 (#117 d): + infra:state:ready
-  assert.equal(out.result.agents, 65);
+  // 8.9.8 (#124): + infra:pr-stats:open
+  assert.equal(out.result.agents, 66);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -578,7 +580,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.9.7");
+  assert.equal(p.fleet_version, "8.9.8");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/ccpmcwf/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -629,7 +631,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
     // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1)
     // 8.9.3 (#117 d): + infra:state:ready (a post-PR run-state writer, outside the cap)
-    assert.equal(b.calls.length, 67);
+    // 8.9.8 (#124): + infra:pr-stats:open (the stats block after the first PR open, outside the cap)
+    assert.equal(b.calls.length, 68);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
@@ -644,7 +647,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.9\.7/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install ccpmcwf 8\.9\.8/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });
