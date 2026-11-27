@@ -143,7 +143,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.15";
+const FLEET_VERSION = "8.9.16";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -1792,7 +1792,7 @@ const PROGRAM_SHA256 = {
   "sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
   "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
-  "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
+  "test_db_decl": "af76250f86363bf6b614ded8b9ec209fca64c908fe403048ef734d6029da1261",
   "tf_gate": "758589362151c24837a3dbd0c6b9161da2e07c4fb91b93e9b3a5508b2f8e815f",
   "verify_since": "49e9c91f4bfe302b9a7c5c88c20636518521515becfd2e4a709f5f3a8ad4b786"
 };

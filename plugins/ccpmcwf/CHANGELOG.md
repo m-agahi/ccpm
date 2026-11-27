@@ -1,5 +1,23 @@
 # Changelog
 
+## [8.9.16] - 2026-11-26
+
+ccpmcwf 8.9.16 (yaadgaar `#139`): `test_db_decl.py` fails closed when git cannot read
+`.fleet-test-db.json` at `origin/<default branch>`.
+
+### Fixed
+
+- `test_db_decl.py` took any non-zero exit of `git cat-file -t` as "no file", so a corrupt or
+  missing tree object, a missing blob or a repo error let the run go on with no test database.
+  It now reads the root tree with `git ls-tree -z --full-tree` (the shape `runtime_docs.py` has
+  had since 8.9.14). Only an empty listing means "no file". A failed listing gives the error
+  `git cannot list the tree of origin/<branch>`. A non-blob entry, or a mode other than 100644
+  or 100755 (a directory, a symlink), gives `.fleet-test-db.json is not a file`. A failed blob
+  read gives `git cannot read .fleet-test-db.json at origin/<branch>`. The keys, the caps, the
+  other error texts and the output shape are unchanged. The engine's `testDbStep` already stops
+  `needs_human` (gate `db`) on any `error`, so no engine code changed.
+- The `test_db_decl` program pin (`PROGRAM_SHA256`) moves with the file.
+
 ## [8.9.15] - 2026-11-26
 
 ccpmcwf 8.9.15 (yaadgaar `#131` and `#130`, Max's ruling: facts plus a pre-review check): the

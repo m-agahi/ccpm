@@ -1503,8 +1503,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.15/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.16/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.16/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.

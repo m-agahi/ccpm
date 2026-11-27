@@ -92,14 +92,22 @@ base = 'refs/remotes/origin/' + branch
 if subprocess.run(G + ['rev-parse', '--verify', '-q', base + '^{commit}'], capture_output=True).returncode != 0:
     out['error'] = 'origin/' + branch + ' not found'
     done()
-spec = base + ':.fleet-test-db.json'
-t = subprocess.run(G + ['cat-file', '-t', spec], capture_output=True)
-if t.returncode != 0:
+# 8.9.16 (yaadgaar #139): only an empty listing of the root tree means "no file"; any git failure is an error
+ls = subprocess.run(G + ['ls-tree', '-z', '--full-tree', base, '--', '.fleet-test-db.json'], capture_output=True)
+if ls.returncode != 0:
+    out['error'] = 'git cannot list the tree of origin/' + branch
     done()
-if t.stdout.strip() != b'blob':
+if not ls.stdout:
+    done()
+meta = ls.stdout.split(b'\t', 1)[0].split(b' ')
+if len(meta) != 3 or meta[1] != b'blob' or meta[0] not in (b'100644', b'100755'):
     out['error'] = '.fleet-test-db.json is not a file'
     done()
-raw = subprocess.run(G + ['cat-file', 'blob', spec], capture_output=True).stdout
+b = subprocess.run(G + ['cat-file', 'blob', meta[2].decode('ascii', 'replace')], capture_output=True)
+if b.returncode != 0:
+    out['error'] = 'git cannot read .fleet-test-db.json at origin/' + branch
+    done()
+raw = b.stdout
 if len(raw) > 4096:
     out['error'] = '.fleet-test-db.json is larger than 4096 bytes'
     done()
