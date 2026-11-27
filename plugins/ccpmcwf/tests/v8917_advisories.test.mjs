@@ -37,6 +37,23 @@ test("8.9.17 (#133): the judge's advisories reach the PR test block as program-r
   assert.deepEqual(out.result.advisories, ADV);
 });
 
+test("8.9.17 (#133): a path that holds a PR-body marker is rendered with ? for < and >, so every marker stays once", async () => {
+  const MARKS = ["<details><summary>Built with ccpmcwf", "<!-- ccpm-fleet-stats -->", "<!-- ccpm-fleet-tests -->", "<!-- /ccpm-fleet-tests -->"];
+  const paths = MARKS.map((k, i) => "m" + i + k.replace(/\//g, "") + ".pth");
+  const s = happy();
+  s["hasher:post-coder:r1"] = Object.assign({}, s["hasher:post-coder:r1"], { changed: CHANGED.concat(paths) });
+  s["role:fleet-code-judge:r1"] = Object.assign({}, s["role:fleet-code-judge:r1"], { advisories: paths.map((p) => ({ path: p, hunk: "added path", signature: "pth" })) });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const tb = blockOf(out, "infra:pr-tests");
+  const n = (k) => tb.split(k).length - 1;
+  assert.equal(n("<!-- ccpm-fleet-tests -->"), 1, tb);
+  assert.equal(n("<!-- /ccpm-fleet-tests -->"), 1, tb);
+  assert.equal(n("<details><summary>Built with ccpmcwf"), 0, tb);
+  assert.equal(n("<!-- ccpm-fleet-stats -->"), 0, tb);
+  for (const p of paths) assert.ok(tb.includes("- `" + p.replace(/[<>]/g, "?") + "` added path — pth\n"), p);
+});
+
 test("8.9.17 (#133): an empty list gives no section and no result key", async () => {
   const out = await run(withAdv([]), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -67,7 +84,9 @@ test("8.9.17 (#133): a signature outside the enum, a bad path or hunk, or over 2
     const s = withAdv(adv);
     const out = await run(s, ARGS);
     assert.ok(out.labels.includes("role:fleet-code-judge:r1:retry"), JSON.stringify(adv[0]) + ": " + out.labels.join(", "));
-    assert.notEqual(out.result.status, "ok", JSON.stringify(adv[0]));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(adv[0]));
+    assert.equal(out.result.stop_gate, "contract");
+    assert.equal(out.result.stop_class, "safety");
     assert.match(out.result.reason, /advisories entry \d+ |advisories 21 entries/, out.result.reason);
     assert.ok(!out.labels.some((l) => /^infra:pr-tests/.test(l)), out.labels.join(", "));
   }

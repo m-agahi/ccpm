@@ -24,7 +24,8 @@ and the PR shows them.
   approve (a review-fix round) replaces them. The script-written test block
   (`pr_test_block.py`) holds an "Advisory flags" section with one line per entry,
   `` `<path>` <@@ range or added path> — <id> ``, rendered by the engine (the text after the `@@`
-  range is never written). No entry, no section. The block is rewritten after every pr-opener
+  range is never written, and `<` and `>` in a path become `?`, so a coder-chosen file name cannot
+  form the test or stats block markers). No entry, no section. The block is rewritten after every pr-opener
   call, so a body that drops the section gets it back; a block the program does not find gets the
   existing one regeneration, then the `stats` stop.
 - The run-state keeps the list as `advisories` (absent when empty, and in a run-state before

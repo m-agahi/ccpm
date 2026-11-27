@@ -7468,8 +7468,9 @@ function testsBlock(suite, testCmd, warn) {
   const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
   if (toks[toks.length - 1] === "--") toks.pop();
   const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
-  // 8.9.17 (#133): the code judge's advisory tamper signatures, one line each (the hunk's range only)
-  const adv = (state.advisories || []).map((x) => "- `" + x.path + "` " + (x.hunk === "added path" ? x.hunk : HUNK_RE.exec(x.hunk)[0]) + " — " + x.signature + "\n");
+  // 8.9.17 (#133): the code judge's advisory tamper signatures, one line each (the hunk's range only); a path
+  // is the coder's text, so < and > become ? (no PR-body marker can form inside the block)
+  const adv = (state.advisories || []).map((x) => "- `" + x.path.replace(/[<>]/g, "?") + "` " + (x.hunk === "added path" ? x.hunk : HUNK_RE.exec(x.hunk)[0]) + " — " + x.signature + "\n");
   return TESTS_START + "\n**Tests (measured by ccpmcwf):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") +
     (adv.length ? "\n**Advisory flags** (code judge tamper signatures without verdict evidence; not findings):\n" + adv.join("") : "") + TESTS_END;
 }
