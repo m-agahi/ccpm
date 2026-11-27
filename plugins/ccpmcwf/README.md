@@ -1503,8 +1503,8 @@ and the retry runs the same command with the two script paths in single quotes. 
 marketplace and the version, and put a wildcard in the args only:
 
 ```
-Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.16/scripts/gate_tools.py)
-Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.16/scripts/gate_tools.py *)
+Bash(sha256sum -- /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.17/scripts/gate_tools.py)
+Bash(python3 -I /home/<user>/.claude/plugins/cache/maxagahi-marketplace/ccpmcwf/8.9.17/scripts/gate_tools.py *)
 ```
 
 - These rules go stale at every plugin update: change the version in both after each update.
@@ -1895,10 +1895,15 @@ What is left (accepted residuals):
   `uv.lock` entry for coverage, `[tool.uv.sources]` or a uv index setting, a `coverage` console
   script or entry point, an added `coverage` module, package or `.pth`, a `sitecustomize` or
   `usercustomize` file, any `*.pth`, and a `.venv` directory or `pyvenv.cfg` in the change. With no evidence that
-  it changes a verdict, a signature goes in the judge's `memory_notes` with the path and the hunk
-  header. It is not a routed finding, so it does not stop the run or reach the PR body. The scope
-  fence (step 7) and the frozen-input check (step 1) still make an unplanned change of this kind a
-  `code` finding. No script checks the signatures.
+  it changes a verdict, a signature is not a routed finding, so it does not stop the run. Since
+  8.9.17 (yaadgaar `#133`) it goes in the judge's required `advisories` field, one
+  `{path, hunk, signature}` entry per hit: `signature` is an id from a fixed enum, `hunk` an
+  `@@ -a,b +c,d @@` header or `added path`, at most 20 entries. A bad entry is contract drift (one
+  retry, then the stop). The workflow keeps the entries of the committed approve whose path is in
+  the change and writes them into the PR's script-written test block as "Advisory flags" lines
+  (`<path>` `<@@ range>` — `<id>`), with no free judge text. The scope fence (step 7) and the
+  frozen-input check (step 1) still make an unplanned change of this kind a `code` finding. No
+  script looks for the signatures in the diff.
 - The git common dir is bound read-only for the held-out and coverage copies, so the repo's
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No

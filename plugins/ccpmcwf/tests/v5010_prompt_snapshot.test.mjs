@@ -148,10 +148,11 @@ const SCENARIOS = {
 // 8.9.14 review of 3d945e5: the plan ref seals plan_facts.runtime_docs (the plan-ref chunks the commit-plan prompt carries hold it); same call counts: the three plan/build pins move, probe unchanged. Checked: with only that plan_facts line dropped from src the 3d945e5 pins come back.
 // 8.9.15 (yaadgaar #131, #130): the pr-review schema's findings require body_quote (string or null), and the pr_state relay schema (every pr_state step: infra:pr-ready here) gains the body mode's typed keys; the pr-review and pr-opener role shas, the pr_state program pin and the version move (masked); no infra:pr-body call runs here (no body convention, no body finding); same call counts: the three plan/build pins move, probe unchanged. Checked in a scratch copy: with only the body_quote schema reverted, or only the pr_state keys reverted, the pins still move; with both reverted every pin is 8.9.14's.
 // 8.9.15 review of d9ae4c6: the pr_state relay schema gains the body mode's checker key (B2); same call counts: the three plan/build pins move, probe unchanged. Checked in a scratch copy: with only that schema key reverted every pin is d9ae4c6's.
+// 8.9.17 (yaadgaar #133): the code-judge schema gains the required advisories array (items {path, hunk, signature}, signature an id enum) and the code-judge role sha moves (masked); same call counts: the three plan/build pins move, probe unchanged. Checked in a scratch copy: with only the advisories schema property and its REQUIRED_ON_OK entry reverted every pin is 8.9.16's.
 const PINS = {
-  "plan then build (confirm ask)": { calls: 91, sha256: "52575236caec248a4dce66039db3ba0dc73ecf13d5a2f8543545cc65ab40abdc" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "3f81482d153b55a654c93400b6e549db3435edbbb1b929fd53ec5236f77ec7e3" },
-  "short path (one test writer)": { calls: 90, sha256: "c735545c3bd5a85a0787305fde8cc4f4444f3330b34883b00e469c3b5c96ad32" },
+  "plan then build (confirm ask)": { calls: 91, sha256: "0d8950917f657ded9ced1acd6aec2d58061a067e8cadec8c9fd4f6a465ec9d63" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "0a56b1361cc0436d4debf76b2ac385b33cdd8a94a3571ee966e8d6e14aaf19fe" },
+  "short path (one test writer)": { calls: 90, sha256: "e16877a2a7b668bdf41cbe5cf35bd4f970d1b2de17b99ef4db112f8548db706d" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

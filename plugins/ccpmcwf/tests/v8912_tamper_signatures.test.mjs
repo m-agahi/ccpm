@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const role = readFileSync(join(HERE, "..", "roles", "fleet-code-judge.md"), "utf8");
-const step9 = /\n9\. \*\*Dodges\.\*\*[^\n]*/.exec(role)[0];
+// 8.9.17 (#133): step 9 has an indented continuation line (the advisories), read with it
+const step9 = /\n9\. \*\*Dodges\.\*\*[^\n]*(?:\n {3}[^\n]*)*/.exec(role)[0];
 
 test("8.9.12 (#120): step 9 names every coverage-tool tamper signature", () => {
   for (const k of [
@@ -39,10 +40,14 @@ test("8.9.12 (#120): step 9 names every coverage-tool tamper signature", () => {
   assert.ok(step9.includes("in the whole change (`git diff <plan_commit> <code_tree>`, tests included)"));
 });
 
-test("8.9.12 (#120): the signatures are advisory: memory_notes with the hunk, never routed without evidence", () => {
+// 8.9.17 (#133): changed on purpose: the destination moved from a memory_notes line to the
+// advisories schema field (one {path, hunk, signature} entry per hit, an id from a fixed enum),
+// so the PR shows the flags; the evidence rule and the "never routed" rule are unchanged
+test("8.9.12 (#120): the signatures are advisory: advisories with the hunk, never routed without evidence", () => {
   assert.ok(step9.includes("Each is a `code` finding only with evidence that it changes a test, coverage or mutation verdict."), "the 8.3.4 evidence rule stays");
-  assert.ok(step9.includes("The same evidence rule applies. A signature of either list without that evidence goes in `memory_notes`, never in `routed_findings`"));
-  assert.ok(step9.includes("`tamper signature (advisory): <path> <the hunk's @@ header, or \"added path\"> — <the signature>`"), "the note points at the hunk");
-  assert.ok(step9.includes("with no \"(observed at …)\" tag"), "the note is not offered as a memory");
+  assert.ok(step9.includes("The same evidence rule applies."));
+  assert.ok(step9.includes("A signature of either list without that evidence goes in `advisories`, never in `routed_findings` or `memory_notes`"));
+  assert.ok(step9.includes("`hunk` is the hunk's `@@ -a,b +c,d @@` header (the workflow drops any text after it), or `added path`"), "the entry points at the hunk");
+  assert.ok(!step9.includes("tamper signature (advisory):"), "no memory_notes line any more");
   assert.ok(step9.includes("These flags never relax checks 1 and 7"), "the scope fence and the frozen inputs stay defects");
 });

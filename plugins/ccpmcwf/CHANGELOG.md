@@ -1,5 +1,39 @@
 # Changelog
 
+## [8.9.17] - 2026-11-27
+
+ccpmcwf 8.9.17 (yaadgaar `#133`): the code judge's advisory tamper signatures are a schema field,
+and the PR shows them.
+
+### Changed
+
+- Step 9 ("Dodges") of the code-judge role sends a tamper signature without verdict evidence (the
+  8.3.4 and 8.9.12 lists) to a new required field, `advisories: [{path, hunk, signature}]` (`[]`
+  when none), not to a `memory_notes` line. `signature` is one id of a fixed enum (`os_exit`,
+  `coverage_api`, `settrace`, `setprofile`, `monitoring`, `self_hash`, `atexit_status`,
+  `coverage_lock`, `uv_sources`, `uv_index`, `coverage_entry_point`, `coverage_path`,
+  `sitecustomize`, `usercustomize`, `pth`, `venv`, `pyvenv_cfg`). The evidence rule and checks 1
+  and 7 are unchanged: with evidence, a signature is still a `code` finding.
+- The engine checks each entry in script code: at most 20; `path` repo-relative, at most 255
+  characters, no `..`, no control, format or bidi character and no backtick; `hunk` an
+  `@@ -a,b +c,d @@` header or `added path`, at most 120 characters; `signature` in the enum. A bad
+  entry is contract drift: the judge gets one retry, then the run stops (the existing contract
+  stop; no new halt site). An entry whose path is not in the change (the same changed-path list as
+  the obligations gate) is dropped, with a gate line.
+- The advisories of the committed approve go to the PR step as a script fact; a later committed
+  approve (a review-fix round) replaces them. The script-written test block
+  (`pr_test_block.py`) holds an "Advisory flags" section with one line per entry,
+  `` `<path>` <@@ range or added path> — <id> ``, rendered by the engine (the text after the `@@`
+  range is never written, and `<` and `>` in a path become `?`, so a coder-chosen file name cannot
+  form the test or stats block markers). No entry, no section. The block is rewritten after every pr-opener
+  call, so a body that drops the section gets it back; a block the program does not find gets the
+  existing one regeneration, then the `stats` stop.
+- The run-state keeps the list as `advisories` (absent when empty, and in a run-state before
+  8.9.17); a resume restores it, and a present but bad or empty list is a run-state mismatch. The
+  run result carries the list when it is not empty.
+- These are judge facts about the diff with enum ids, not review findings: review findings still
+  never go into the PR body, and no routing reads this text.
+
 ## [8.9.16] - 2026-11-26
 
 ccpmcwf 8.9.16 (yaadgaar `#139`): `test_db_decl.py` fails closed when git cannot read
