@@ -190,6 +190,15 @@ const READS = {
     "n integer": "parsed: a suite_result count, checked as an integer >= 0 here",
     "testCmd.env object": PARSED_REF,
   },
+  // 8.9.17 (#133): the code judge's advisories (also a resumed run-state's copy, checked the same way)
+  advisoriesBad: {
+    "a array": CJ + "advisories",
+    "x object": CJ + "advisories[]",
+    "x array": "!" + CJ + "advisories[]",
+    "x.path string": CJ + "advisories[].path",
+    "x.hunk string": CJ + "advisories[].hunk",
+    "x.hunk string-re": CJ + "advisories[].hunk",
+  },
   suppliedTexts: { "o object": "parsed: a review note or intent deviation, filtered to its string fields here", "x string": ["parsed: the strings the workflow supplies to the pr-opener, filtered here", 2] },
   prTestsStep: { "x string": "prog:pr_test_block:claims[]", "r.claims array": "prog:pr_test_block:claims", "r.claims_truncated boolean": "prog:pr_test_block:claims_truncated", "r.edited boolean": "prog:pr_test_block:edited" },
   STRICT: { "p.enum array": "parsed: a schema property, not an agent result" },
@@ -1401,7 +1410,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.16\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.16\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.17\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.9\.17\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

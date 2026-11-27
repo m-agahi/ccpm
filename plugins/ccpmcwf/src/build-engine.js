@@ -143,7 +143,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.9.16";
+const FLEET_VERSION = "8.9.17";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -156,7 +156,7 @@ const REQUIRED_ON_OK = {
   "fleet-test-writer": ["criterion_id", "tests", "files"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
   "fleet-coder": ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
-  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
+  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check", "advisories"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated", "title"],
   "fleet-intent-judge": ["verdict", "deviations", "coverage", "classification"],
   "pr-review": ["verdict", "findings", "touches_gate", "checked"],
@@ -337,6 +337,24 @@ const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIP
 const GATE_STATUS = ["ran", "partial", "not_run"];
 const GATES3 = ["coverage", "mutation", "security_scan"];
 const MUTANT_TARGETS = ["tests", "code", "equivalent"];
+// 8.9.17 (#133): the code judge's advisory tamper signature ids (step 9 of its role), at most 20 entries
+const ADVISORY_IDS = "os_exit coverage_api settrace setprofile monitoring self_hash atexit_status coverage_lock uv_sources uv_index coverage_entry_point coverage_path sitecustomize usercustomize pth venv pyvenv_cfg".split(" ");
+const HUNK_RE = /^@@ -\d{1,9}(?:,\d{1,9})? \+\d{1,9}(?:,\d{1,9})? @@/;
+// null, or why the list is refused: a repo-relative path with no control, format or bidi character and no backtick,
+// an "@@ -a,b +c,d @@" header (the text after it is never rendered) or "added path", and an id of the enum
+function advisoriesBad(a) {
+  if (!Array.isArray(a)) return "not an array";
+  if (a.length > 20) return a.length + " entries (at most 20)";
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const why = !x || typeof x !== "object" || Array.isArray(x) ? "not an object"
+      : typeof x.path !== "string" || !x.path || x.path.length > 255 || x.path[0] === "/" || normPath(x.path) !== x.path || x.path.split("/").indexOf("..") >= 0 || /[\x00-\x1f\x60\x7f-\x9f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/.test(x.path) ? "path"
+      : typeof x.hunk !== "string" || x.hunk.length > 120 || (x.hunk !== "added path" && !HUNK_RE.test(x.hunk)) ? "hunk"
+      : ADVISORY_IDS.indexOf(x.signature) < 0 ? "signature" : null;
+    if (why) return "entry " + i + " " + why;
+  }
+  return null;
+}
 // 8.0.0 (G1, ADR-1315): the security-scan image, pinned by its index digest (G7: skopeo inspect of :latest,
 // 2026-11-18; revision e3c3ec2, audit-lab 6.0.1: semgrep 1.175.0, gitleaks 8.30.1). A new digest is a fleet release.
 const AUDIT_IMAGE = "docker.io/openfantasy/audit-lab@sha256:cc0d88ecfa9c70ab81be01331f05ca822db0f197d212de63c571add7aaceb66b";
@@ -594,6 +612,12 @@ const SCHEMAS = {
     obligations_check: {
       type: "array",
       items: { type: "object", properties: { id: STR, met: BOOL, evidence: STR, check_exit: INT_OR_NULL }, required: ["id", "met"] },
+    },
+    // 8.9.17 (#133): the step 9 tamper signatures without verdict evidence ([] when none); the PR test block shows them
+    advisories: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "object", properties: { path: STR, hunk: STR, signature: { type: "string", enum: ADVISORY_IDS } }, required: ["path", "hunk", "signature"] },
     },
     // 8.0.0 (G2, ADR-1316): the gate finding lines the judge accepts, each with its reason (a blank one exempts nothing)
     exemptions: {
@@ -1805,7 +1829,7 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "891955749b5a32abfe677ac119c17a24cb71afac0ccb070145e33ac87962b8ac",
+  "fleet-code-judge": "65395337c2fc82903ea1ff15920b55ffaefe21b656b97755c33b8623c3653bd4",
   "fleet-coder": "261e3695ca23b6341a3af07a3789b587e195cdb3403393f6c0221248768af2f3",
   "fleet-held-out-runner": "ad20c17b87e8fc9842c4f4e0ae355c1e84cd4c475409288a18000a1317f0da69",
   "fleet-intent-judge": "8359606da781c47ef9e21866c4a5cc7e833857ea68d6f15d71220638dcea65ca",
@@ -3835,6 +3859,8 @@ const state = {
   branch: null,
   pr: null,
   gatesNotRun: null,
+  // 8.9.17 (#133): the shipped approve's advisory tamper signatures
+  advisories: null,
   // 8.0.0 (G1): {<gate>: {status, reason, findings, round}} from runGate; the census, or null (no gate tool available)
   gates: {},
   gateTools: null,
@@ -4198,6 +4224,9 @@ function driftOf(role, r) {
   }
   if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
     return { msg: "contract drift: " + role + " verdict " + r.verdict, detail: "verdict " + r.verdict };
+  // 8.9.17 (#133): the entries, not only the array (refused: one retry, then the contract stop)
+  const ab = role === "fleet-code-judge" ? advisoriesBad(r.advisories) : null;
+  if (ab) return { msg: "contract drift: " + role + " advisories " + ab, detail: "advisories " + ab };
   return null;
 }
 // 7.4.0 (#18): buildKeys, the role's own build dirs, emptied before the retry
@@ -4454,6 +4483,7 @@ function finish(status, reason) {
     rounds: { tests: state.rounds.tests, code: state.rounds.code },
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
+    ...(state.advisories && state.advisories.length ? { advisories: state.advisories } : {}),
     stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
     stop_class: status === "ok" || status === "awaiting_confirmation" ? null : state.stopClass || "safety",
     review: state.review,
@@ -7438,7 +7468,10 @@ function testsBlock(suite, testCmd, warn) {
   const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
   if (toks[toks.length - 1] === "--") toks.pop();
   const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
-  return TESTS_START + "\n**Tests (measured by ccpmcwf):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") + TESTS_END;
+  // 8.9.17 (#133): the code judge's advisory tamper signatures, one line each (the hunk's range only)
+  const adv = (state.advisories || []).map((x) => "- `" + x.path + "` " + (x.hunk === "added path" ? x.hunk : HUNK_RE.exec(x.hunk)[0]) + " — " + x.signature + "\n");
+  return TESTS_START + "\n**Tests (measured by ccpmcwf):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") +
+    (adv.length ? "\n**Advisory flags** (code judge tamper signatures without verdict evidence; not findings):\n" + adv.join("") : "") + TESTS_END;
 }
 // the headers the body must keep (the body convention's, and the unattended section's)
 function testsHeaders(bc, unattended) {
@@ -7972,6 +8005,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (bd !== undefined && (!Number.isInteger(bd) || bd < 0 || bd > (Array.isArray(ad) ? ad.length : 0))) mis("body_decided");
       // 8.9.15 review of d9ae4c6 (B1): all of the body-route keys or none (none before 8.9.15)
       const bk = BODY_KEYS.filter(([k]) => st[k] !== undefined);
+      // 8.9.17 (#133): one key, absent or a non-empty list the code judge's check accepts
+      if (st.advisories !== undefined && (advisoriesBad(st.advisories) || !st.advisories.length)) mis("advisories");
       if (bk.length && (bk.length !== BODY_KEYS.length || BODY_KEYS.some(([k]) => bodyKeyBad(k, st[k])))) mis("body route state");
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
@@ -8369,6 +8404,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           rounds: state.rounds,
           suite_result: suiteResult,
           gates_not_run: state.gatesNotRun,
+          // 8.9.17 (#133): absent when none (and in a run-state before 8.9.17)
+          ...(state.advisories && state.advisories.length ? { advisories: state.advisories } : {}),
           // 8.0.0 (G5 step 0)
           held_out_seen: !!(state.gates.held_out || {}).seen,
           // 8.0.0 car F (A-H1)
@@ -9067,6 +9104,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     shipDigest = resume.maps_digest;
     suiteResult = resume.suite_result || null;
     state.gatesNotRun = resume.gates_not_run || null;
+    state.advisories = resume.advisories || null;
     if (resume.held_out_seen === true) state.gates.held_out = { status: "not_run", reason: null, findings: [], round: 0, seen: true };
     for (const [g, n] of Object.entries(Object(resume.gates_seen))) if (GATES3.includes(g) && n === (n & 7)) state.gates[g] = { status: "not_run", reason: null, findings: [], round: 0, seen: n };
     state.review = resume.review || null;
@@ -9935,6 +9973,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       shipDigest = mapsDigest(jc.state.hashes);
       suiteResult = cj.suite_result || null;
       state.gatesNotRun = gatesNotRun(cj.gates_not_run).concat(rulesetGaps(buildRs));
+      // 8.9.17 (#133): the advisories of this committed approve (a later one replaces them); a path the change lacks is dropped
+      const chg = new Set((obChanged || []).map((p) => normPath(String(p))));
+      state.advisories = cj.advisories.filter((x) => chg.has(x.path) || void gate("code-judge r" + m + ": advisory " + x.signature + " on " + logPath(x.path) + " dropped: the change has no such path"));
       if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
         gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
       gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")" + (prParent ? " on the open PR's head " + prParent : ""));
@@ -10189,7 +10230,7 @@ async function replan(ctx) {
     if (p.relaxed.length) state.relaxed = p.relaxed;
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
-    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, gates: {}, review: null });
+    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, advisories: null, gates: {}, review: null });
     return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full, prHead });
   }
   return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
